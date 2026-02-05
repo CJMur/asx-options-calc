@@ -9,272 +9,253 @@ from datetime import datetime, timedelta
 # --- 1. CONFIGURATION & STYLING ---
 st.set_page_config(layout="wide", page_title="ASX Options Manager")
 
-# Custom CSS to replicate the "TradeFloor" Dark Blue Header and clean look
+# Custom CSS for a "Pro" Financial Look
 st.markdown("""
 <style>
-    /* Main Header Bar */
+    /* Remove default top padding */
+    .block-container { padding-top: 1rem; }
+    
+    /* TradeFloor-style Navy Header */
     .main-header {
-        background-color: #0e1b32; /* Dark Blue */
-        padding: 15px;
+        background-color: #0e1b32;
+        padding: 1rem 2rem;
         color: white;
-        border-radius: 5px;
-        margin-bottom: 20px;
+        border-radius: 8px;
         display: flex;
         justify_content: space-between;
         align_items: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    .nav-link { margin-right: 20px; font-weight: bold; color: #a0c4ff; }
-    .metric-box {
-        background-color: #f8f9fa;
-        border-left: 5px solid #0e1b32;
-        padding: 10px;
-        margin: 5px 0;
+    
+    /* Card Styling for Sections */
+    .stCard {
+        background-color: #ffffff;
+        padding: 1.5rem;
+        border-radius: 8px;
+        border: 1px solid #e0e0e0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        margin-bottom: 1rem;
     }
-    /* Button Styling to match screenshot pills */
-    div.stButton > button {
-        width: 100%;
-        border-radius: 20px;
-        font-size: 12px;
+
+    /* Metrics Styling */
+    div[data-testid="stMetricValue"] {
+        font-size: 1.2rem;
+        color: #0e1b32;
     }
-    /* Compact tables */
-    .dataframe { font-size: 12px; }
+    
+    /* Table Headers */
+    thead tr th:first-child { display:none }
+    tbody th { display:none }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. SESSION STATE MANAGEMENT ---
-# We store the "Strategy" (list of legs) in memory so it doesn't vanish on reload
-if 'legs' not in st.session_state:
-    st.session_state.legs = [] 
-if 'ticker' not in st.session_state:
-    st.session_state.ticker = "BHP.AX"
-if 'spot_price' not in st.session_state:
-    st.session_state.spot_price = 45.00
-if 'vol_modifier' not in st.session_state:
-    st.session_state.vol_modifier = 0.0 # 0% change default
+# --- 2. SESSION STATE ---
+if 'legs' not in st.session_state: st.session_state.legs = [] 
+if 'ticker' not in st.session_state: st.session_state.ticker = "BHP.AX"
+if 'spot_price' not in st.session_state: st.session_state.spot_price = 45.00
+if 'vol_modifier' not in st.session_state: st.session_state.vol_modifier = 0.0
 
-# --- 3. HELPER FUNCTIONS (THE MATH ENGINE) ---
-
+# --- 3. MATH ENGINE ---
 def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct):
-    """Calculates Black-Scholes price safely."""
     try:
-        if time_days <= 0: time_days = 0.001 # Avoid division by zero
-        c = mibian.BS([spot, strike, rate_pct, time_days], volatility=vol_pct)
+        t = max(0.001, time_days)
+        c = mibian.BS([spot, strike, rate_pct, t], volatility=vol_pct)
         return c.callPrice if kind == 'Call' else c.putPrice
-    except:
-        return 0.0
+    except: return 0.0
 
 def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct):
     try:
-        if time_days <= 0: time_days = 0.001
-        c = mibian.BS([spot, strike, rate_pct, time_days], volatility=vol_pct)
+        t = max(0.001, time_days)
+        c = mibian.BS([spot, strike, rate_pct, t], volatility=vol_pct)
         g = c.call if kind == 'Call' else c.put
         return {'delta': g.delta, 'gamma': g.gamma, 'theta': g.theta, 'vega': g.vega}
-    except:
-        return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
+    except: return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
 
-# --- 4. UI: HEADER BAR ---
+# --- 4. HEADER UI ---
 st.markdown(f"""
 <div class="main-header">
-    <div>
-        <span style="font-size: 20px; font-weight: bold;">TradersCircle</span>
-        <span style="margin-left: 30px;">PORTFOLIO</span>
-        <span style="margin-left: 20px;">PERFORMANCE</span>
+    <div style="font-size: 24px; font-weight: 600; letter-spacing: 1px;">
+        TradersCircle <span style="font-weight: 300; opacity: 0.8;">| PORTFOLIO</span>
     </div>
-    <div>
-        <span style="background-color: #2c3e50; padding: 5px 15px; border-radius: 15px;">
-            🔥 Price Override: ${st.session_state.spot_price:.2f}
-        </span>
+    <div style="background: rgba(255,255,255,0.1); padding: 5px 15px; border-radius: 20px; font-size: 14px;">
+        ● Live Price: <b>${st.session_state.spot_price:.2f}</b>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 5. STRATEGY BUILDER SECTION ---
-
-col_search, col_act = st.columns([3, 1])
-
-with col_search:
-    new_ticker = st.text_input("Enter Position (Code or Search)...", value=st.session_state.ticker)
+# --- 5. STRATEGY INPUTS (The "Trade Ticket") ---
+with st.container():
+    st.markdown("### 🛠 Strategy Builder")
+    
+    # Top Row: Search & Spot
+    c_search, c_spot = st.columns([3, 1])
+    new_ticker = c_search.text_input("Underlying Asset", value=st.session_state.ticker, label_visibility="collapsed", placeholder="Search Ticker (e.g. CBA.AX)")
+    
+    # Auto-fetch price logic
     if new_ticker != st.session_state.ticker:
-        # Fetch new price if ticker changes
         st.session_state.ticker = new_ticker
         try:
             tick = yf.Ticker(new_ticker)
             hist = tick.history(period="1d")
             if not hist.empty:
                 st.session_state.spot_price = float(hist['Close'].iloc[-1])
-        except:
-            pass
+        except: pass
 
-# Add Leg Form (Hidden in an expander to keep UI clean, or inline)
-with st.expander("➕ Configure New Leg", expanded=True):
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    qty = c1.number_input("Qty", value=1, step=1)
-    l_type = c2.selectbox("Type", ["Call", "Put", "Stock"])
-    action = c3.selectbox("Side", ["Buy", "Sell"])
-    strike = c4.number_input("Strike", value=round(st.session_state.spot_price, 0))
-    expiry_days = c5.number_input("Days to Exp", value=45)
-    vol = c6.number_input("Implied Vol (%)", value=20.0)
-    
-    if st.button("Create Position"):
-        # Calculate Initial Theo
-        theo = get_bs_price(l_type, st.session_state.spot_price, strike, expiry_days, vol, 4.0)
+    # Input Bar (Horizontal Layout like screenshot)
+    with st.form("add_leg_form", clear_on_submit=False):
+        c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 1.5, 1.5, 2, 2, 2, 1])
+        qty = c1.number_input("Qty", min_value=1, value=1)
+        action = c2.selectbox("Action", ["Buy", "Sell"])
+        l_type = c3.selectbox("Type", ["Call", "Put"])
+        strike = c4.number_input("Strike ($)", value=round(st.session_state.spot_price, 0))
+        expiry = c5.number_input("Days to Exp", value=45)
+        vol = c6.number_input("Vol (%)", value=20.0)
         
-        new_leg = {
-            "Quantity": qty * (1 if action == "Buy" else -1),
-            "Security": st.session_state.ticker,
-            "Type": l_type,
-            "Strike": strike,
-            "Expiry": expiry_days,
-            "Vol": vol,
-            "Entry Price": theo, # Assuming we enter at current theo
-            "Side": action
-        }
-        st.session_state.legs.append(new_leg)
-        st.rerun()
+        submitted = c7.form_submit_button("➕ Add", type="primary")
+        
+        if submitted:
+            theo = get_bs_price(l_type, st.session_state.spot_price, strike, expiry, vol, 4.0)
+            st.session_state.legs.append({
+                "Qty": qty * (1 if action == "Buy" else -1),
+                "Type": l_type,
+                "Strike": strike,
+                "Expiry": expiry,
+                "Vol": vol,
+                "Entry": theo
+            })
+            st.rerun()
 
-# --- 6. STRATEGY TABLE (REPLICATING SCREENSHOT) ---
+# --- 6. POSITION TABLE ---
 if st.session_state.legs:
-    st.subheader(f"Strategy: {len(st.session_state.legs)} Legs")
+    st.markdown("### 📋 Active Legs")
     
-    # Process Data for Table
-    table_data = []
-    total_delta = 0
-    total_margin = 0
+    # Calculate Live Values for Table
+    table_rows = []
+    portfolio_delta = 0
     
-    for leg in st.session_state.legs:
-        # Recalculate live Greeks
+    for i, leg in enumerate(st.session_state.legs):
+        # Calculate Greeks
         greeks = get_greeks(leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
-        theo = get_bs_price(leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
         
-        net_delta = greeks['delta'] * leg['Quantity'] * 100 # Standard contract size 100
-        total_delta += net_delta
+        # Position Delta
+        pos_delta = greeks['delta'] * leg['Qty'] * 100
+        portfolio_delta += pos_delta
         
-        row = {
-            "Qty": leg['Quantity'],
-            "Security": leg['Security'],
-            "Strike": leg['Strike'],
-            "Expiry (Days)": leg['Expiry'],
+        table_rows.append({
+            "Side": "LONG" if leg['Qty'] > 0 else "SHORT",
+            "Qty": abs(leg['Qty']),
             "Type": leg['Type'],
-            "Theo": f"{theo:.3f}",
-            "Delta": f"{greeks['delta']:.3f}",
-            "Net Delta": f"{net_delta:.1f}",
-            "Entry": f"{leg['Entry Price']:.3f}"
-        }
-        table_data.append(row)
-
-    # Display Table
-    df_legs = pd.DataFrame(table_data)
-    st.dataframe(df_legs, use_container_width=True, hide_index=True)
+            "Strike": leg['Strike'],
+            "Expiry": f"{leg['Expiry']} Days",
+            "Entry Price": leg['Entry'],
+            "Live Delta": f"{greeks['delta']:.3f}",
+            "Net Delta": f"{pos_delta:.1f}"
+        })
     
-    # Totals Row (Manual imitation)
-    t1, t2, t3 = st.columns(3)
-    t1.metric("Net Portfolio Delta", f"{total_delta:.2f}")
-    t2.metric("Est. Margin Impact", "$0.00") # Placeholder for SPAN logic
-    if st.button("Clear Strategy", type="primary"):
+    # Render Table
+    df = pd.DataFrame(table_rows)
+    st.dataframe(
+        df, 
+        use_container_width=True,
+        column_config={
+            "Entry Price": st.column_config.NumberColumn(format="$%.2f"),
+            "Strike": st.column_config.NumberColumn(format="$%.2f"),
+        },
+        hide_index=True
+    )
+    
+    # Portfolio Summary Footer
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Net Delta", f"{portfolio_delta:.2f}")
+    if st.button("Clear All Legs"):
         st.session_state.legs = []
         st.rerun()
 
-else:
-    st.info("No active legs. Add a position above to begin.")
-
-
-# --- 7. PAYOFF MATRIX & ANALYSIS SECTION ---
-st.markdown("---")
-st.subheader("📊 Payoff Matrix & Scenarios")
-
-col_controls, col_viz = st.columns([1, 2])
-
-# --- CONTROLS (Left Side) ---
-with col_controls:
-    st.markdown("#### Volatility Modifier")
-    # Using columns for the pill buttons
-    v1, v2, v3, v4 = st.columns(4)
-    if v1.button("+5%"): st.session_state.vol_modifier += 5
-    if v2.button("+10%"): st.session_state.vol_modifier += 10
-    if v3.button("-5%"): st.session_state.vol_modifier -= 5
-    if v4.button("-10%"): st.session_state.vol_modifier -= 10
+# --- 7. ANALYSIS ENGINE ---
+if st.session_state.legs:
+    st.markdown("---")
+    st.markdown("### 📈 Scenario Analysis")
     
-    st.markdown(f"**Current Adjustment: {st.session_state.vol_modifier}%**")
+    left_panel, right_panel = st.columns([1, 3])
     
-    st.markdown("#### Time Increment")
-    time_slide = st.slider("Days Forward", 0, 90, 0)
-    
-    st.markdown("#### Price Range")
-    price_range_pct = st.slider("Range +/- %", 5, 50, 20)
+    with left_panel:
+        st.info("Market Shocks")
+        st.session_state.vol_modifier = st.slider("Volatility Shock", -50, 50, 0, format="%d%%")
+        time_slide = st.slider("Time Jump (Days)", 0, 90, 0)
+        range_pct = st.slider("Price Range", 5, 40, 15, format="+/-%d%%")
 
-# --- VISUALIZATION (Right Side) ---
-with col_viz:
-    if st.session_state.legs:
-        # 1. Generate Price Range
-        lower = st.session_state.spot_price * (1 - (price_range_pct/100))
-        upper = st.session_state.spot_price * (1 + (price_range_pct/100))
-        prices = np.linspace(lower, upper, 40)
+    with right_panel:
+        # Chart Logic
+        center = st.session_state.spot_price
+        prices = np.linspace(center * (1 - range_pct/100), center * (1 + range_pct/100), 50)
         
-        # 2. Calculate P&L Curves (Current vs Time Forward)
-        fig = go.Figure()
-        
-        # Curve 1: T+0 (Today)
-        pnl_today = []
+        pnl_now = []
         pnl_future = []
         
         for p in prices:
-            # Scenario A: Today
-            val_today = 0
-            val_future = 0
-            
+            val_now = 0
+            val_fut = 0
             for leg in st.session_state.legs:
                 # Modifiers
-                mod_vol = leg['Vol'] + st.session_state.vol_modifier
+                sim_vol = leg['Vol'] + st.session_state.vol_modifier
                 
-                # Valuation Today
-                px_now = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], mod_vol, 4.0)
-                val_today += (px_now - leg['Entry Price']) * leg['Quantity'] * 100
+                # T+0 Value
+                px_0 = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], sim_vol, 4.0)
+                val_now += (px_0 - leg['Entry']) * leg['Qty'] * 100
                 
-                # Valuation at T+Slide
-                t_future = max(0, leg['Expiry'] - time_slide)
-                px_fut = get_bs_price(leg['Type'], p, leg['Strike'], t_future, mod_vol, 4.0)
-                val_future += (px_fut - leg['Entry Price']) * leg['Quantity'] * 100
+                # T+Future Value
+                t_fut = max(0, leg['Expiry'] - time_slide)
+                px_f = get_bs_price(leg['Type'], p, leg['Strike'], t_fut, sim_vol, 4.0)
+                val_fut += (px_f - leg['Entry']) * leg['Qty'] * 100
             
-            pnl_today.append(val_today)
-            pnl_future.append(val_future)
-
-        # Add Traces
-        fig.add_trace(go.Scatter(x=prices, y=pnl_today, mode='lines', name='T+0 (Today)', line=dict(color='blue')))
+            pnl_now.append(val_now)
+            pnl_future.append(val_fut)
+            
+        # Plotly Chart
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=prices, y=pnl_now, name="Today (T+0)", line=dict(color='#00C805', width=3)))
         if time_slide > 0:
-            fig.add_trace(go.Scatter(x=prices, y=pnl_future, mode='lines', name=f'T+{time_slide} Days', line=dict(color='orange', dash='dash')))
-        
-        # Zero Line & Spot Line
-        fig.add_hline(y=0, line_color="white", opacity=0.3)
-        fig.add_vline(x=st.session_state.spot_price, line_color="gray", line_dash="dot", annotation_text="Spot")
+            fig.add_trace(go.Scatter(x=prices, y=pnl_future, name=f"Future (T+{time_slide})", line=dict(color='#FF4B4B', dash='dash')))
+            
+        fig.add_vline(x=center, line_dash="dot", line_color="gray", annotation_text="Spot")
+        fig.add_hline(y=0, line_color="white", opacity=0.2)
         
         fig.update_layout(
-            title="Payoff by Price & Time",
-            xaxis_title="Stock Price",
-            yaxis_title="P&L ($)",
             template="plotly_dark",
-            height=500,
-            hovermode="x unified"
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            height=400,
+            margin=dict(t=30, b=20, l=20, r=20),
+            xaxis_title="Underlying Price",
+            yaxis_title="Profit / Loss ($)"
         )
         st.plotly_chart(fig, use_container_width=True)
-        
-        # --- THE MATRIX (Bottom Dataframe) ---
-        # Generate a small grid of P&L for specific Dates vs Prices
-        st.markdown("#### Data Matrix")
-        matrix_dates = [0, 15, 30, 45] # Days forward
-        matrix_prices = np.linspace(st.session_state.spot_price*0.9, st.session_state.spot_price*1.1, 7)
-        
-        matrix_data = []
-        for mp in matrix_prices:
-            row = {"Price": f"${mp:.2f}"}
-            for d in matrix_dates:
-                val = 0
-                for leg in st.session_state.legs:
-                    t_rem = max(0, leg['Expiry'] - d)
-                    px = get_bs_price(leg['Type'], mp, leg['Strike'], t_rem, leg['Vol'] + st.session_state.vol_modifier, 4.0)
-                    val += (px - leg['Entry Price']) * leg['Quantity'] * 100
-                row[f"T+{d}"] = val
-            matrix_data.append(row)
-            
-        df_matrix = pd.DataFrame(matrix_data).set_index("Price")
-        # Style grid with color
-        st.dataframe(df_matrix.style.background_gradient(cmap="RdYlGn", axis=None).format("${:.0f}"), use_container_width=True)
+
+    # --- 8. DATA MATRIX (The Error Fix) ---
+    st.markdown("#### 🔢 Payoff Matrix")
+    
+    # Calculate Grid
+    grid_prices = np.linspace(center * 0.95, center * 1.05, 7)
+    grid_dates = [0, 15, 30]
+    
+    matrix_data = []
+    for p in grid_prices:
+        row = {"Price": p}  # Keep as float for now
+        for d in grid_dates:
+            val = 0
+            for leg in st.session_state.legs:
+                t = max(0, leg['Expiry'] - d)
+                px = get_bs_price(leg['Type'], p, leg['Strike'], t, leg['Vol'] + st.session_state.vol_modifier, 4.0)
+                val += (px - leg['Entry']) * leg['Qty'] * 100
+            row[f"T+{d}"] = val
+        matrix_data.append(row)
+    
+    df_mx = pd.DataFrame(matrix_data).set_index("Price")
+    
+    # Apply Styling (Requires matplotlib in requirements.txt)
+    st.dataframe(
+        df_mx.style.background_gradient(cmap="RdYlGn", axis=None)
+             .format("${:,.0f}"),
+        use_container_width=True
+    )
