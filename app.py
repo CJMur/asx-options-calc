@@ -205,60 +205,141 @@ if st.session_state.legs:
         st.session_state.legs = []
         st.rerun()
 
-    # --- 7. CHARTS ---
-    st.markdown("### 📉 Payoff Scenarios")
+  # --- 7. TRADEFLOOR REPLICA SCENARIOS ---
+    st.markdown("---")
     
-    col_chart, col_mx = st.columns([2, 1])
-    
-    with col_chart:
-        # P&L Chart
+    # Custom CSS for the "Pills" look
+    st.markdown("""
+    <style>
+        .pill-button {
+            border: 1px solid #ddd;
+            border-radius: 20px;
+            padding: 5px 15px;
+            margin: 2px;
+            font-size: 12px;
+            background-color: white;
+            color: #333;
+            cursor: pointer;
+            text-align: center;
+        }
+        .pill-button:hover { background-color: #f0f0f0; }
+        .pill-active { background-color: #e6fffa; border-color: #00b894; color: #00b894; font-weight: bold; }
+        .pill-neg { color: #d63031; border-color: #fab1a0; background-color: #fff5f5; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.subheader("📊 Payoff Matrix & Scenarios")
+
+    # 1. CONTROL PANEL (Matching Screenshot Layout)
+    col_left, col_mid, col_right = st.columns([1, 2, 1])
+
+    with col_left:
+        st.markdown("**Price Increment**")
+        # We use a row of columns to simulate the "Pills"
+        p1, p2, p3, p4 = st.columns(4)
+        if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.05
+        
+        # Simple Logic to show which is active (Visual only for this MVP)
+        if p1.button("1%", key="p1"): st.session_state.range_pct = 0.01
+        if p2.button("2%", key="p2"): st.session_state.range_pct = 0.02
+        if p3.button("5%", key="p3"): st.session_state.range_pct = 0.05
+        if p4.button("10%", key="p4"): st.session_state.range_pct = 0.10
+        st.caption(f"Current Range: +/- {st.session_state.range_pct*100:.0f}%")
+
+    with col_mid:
+        st.markdown("**Time Increment (Days)**")
+        # The Slider from the screenshot
+        time_step = st.slider("Days Forward", 0, 90, 15, label_visibility="collapsed")
+
+    with col_right:
+        st.markdown("**Volatility Modifier**")
+        if 'vol_mod' not in st.session_state: st.session_state.vol_mod = 0.0
+        
+        # Volatility Pills
+        v1, v2, v3, v4 = st.columns(4)
+        if v1.button("+5%", key="v1"): st.session_state.vol_mod += 5
+        if v2.button("-5%", key="v2"): st.session_state.vol_mod -= 5
+        if v3.button("Reset", key="v3"): st.session_state.vol_mod = 0
+        st.caption(f"Adjustment: {st.session_state.vol_mod:+.0f}%")
+
+    # 2. THE VISUALS
+    c_chart, c_data = st.columns([2, 1])
+
+    with c_chart:
+        # Re-calc Chart Data
         center = st.session_state.spot_price
-        prices = np.linspace(center*0.85, center*1.15, 50)
-        pnl = []
+        pct = st.session_state.range_pct
+        prices = np.linspace(center * (1-pct), center * (1+pct), 100)
+        
+        pnl_now = []
+        pnl_fut = []
         
         for p in prices:
-            val = 0
+            v_now = 0
+            v_fut = 0
             for leg in st.session_state.legs:
-                curr = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
-                val += (curr - leg['Entry']) * leg['Qty'] * 100
-            pnl.append(val)
-            
+                # Vol Shock
+                sim_vol = leg['Vol'] + st.session_state.vol_mod
+                
+                # T+0
+                px_0 = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], sim_vol, 4.0)
+                v_now += (px_0 - leg['Entry']) * leg['Qty'] * 100
+                
+                # T+Future
+                t_fut = max(0, leg['Expiry'] - time_step)
+                px_f = get_bs_price(leg['Type'], p, leg['Strike'], t_fut, sim_vol, 4.0)
+                v_fut += (px_f - leg['Entry']) * leg['Qty'] * 100
+                
+            pnl_now.append(v_now)
+            pnl_fut.append(v_fut)
+
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=prices, y=pnl, fill='tozeroy', line=dict(color='#2ecc71', width=2), name="P&L"))
-        fig.add_vline(x=center, line_dash="dash", line_color="white", annotation_text="Spot")
-        fig.add_hline(y=0, line_color="gray", opacity=0.5)
+        # Today Line (Solid Blue)
+        fig.add_trace(go.Scatter(x=prices, y=pnl_now, name="Today", line=dict(color='#2980b9', width=3)))
+        # Future Line (Dotted Orange or similar)
+        if time_step > 0:
+            fig.add_trace(go.Scatter(x=prices, y=pnl_fut, name=f"T+{time_step}", line=dict(color='#e67e22', dash='dash', width=2)))
+            
+        fig.add_vline(x=center, line_dash="dot", line_color="gray", annotation_text="Spot")
+        fig.add_hline(y=0, line_color="black", opacity=0.3)
         
         fig.update_layout(
-            template="plotly_dark", 
-            height=400, 
-            title="Profit/Loss at Expiry",
+            template="plotly_white", # Switch to white background like TradeFloor
+            height=400,
+            margin=dict(t=20, b=20, l=40, r=20),
             hovermode="x unified",
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)'
+            xaxis_title="Price",
+            yaxis_title="P&L ($)"
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    with col_mx:
-        st.markdown("**Payoff Matrix**")
-        # Simplified Matrix
-        mx_rows = []
-        # 5 price points
-        test_pts = np.linspace(center*0.9, center*1.1, 5)
+    with c_data:
+        # THE MATRIX (Matching the right side of screenshot)
+        st.markdown(f"**Data Matrix (Vol {st.session_state.vol_mod:+.0f}%)**")
         
-        for p in test_pts:
-            val = 0
-            for leg in st.session_state.legs:
-                curr = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
-                val += (curr - leg['Entry']) * leg['Qty'] * 100
-            mx_rows.append({"Spot": f"${p:.2f}", "P&L": val})
+        # Rows: Prices (+/- steps based on range)
+        # Cols: Dates (Today, +Step, +Step*2)
+        
+        m_prices = np.linspace(center*(1-pct), center*(1+pct), 8)
+        m_dates = [0, time_step, time_step*2]
+        
+        matrix_rows = []
+        for p in m_prices:
+            row = {"Price": f"${p:.2f}"}
+            for d in m_dates:
+                val = 0
+                for leg in st.session_state.legs:
+                    t = max(0, leg['Expiry'] - d)
+                    px = get_bs_price(leg['Type'], p, leg['Strike'], t, leg['Vol']+st.session_state.vol_mod, 4.0)
+                    val += (px - leg['Entry']) * leg['Qty'] * 100
+                row[f"T+{d}"] = val # Keep numeric for coloring
+            matrix_rows.append(row)
             
-        df_mx = pd.DataFrame(mx_rows)
-        # Gradient Coloring
+        df_mx = pd.DataFrame(matrix_rows).set_index("Price")
+        
+        # Color Gradient (Green/Red)
         st.dataframe(
-            df_mx.style.background_gradient(subset=["P&L"], cmap="RdYlGn").format({"P&L": "${:.2f}"}),
+            df_mx.style.background_gradient(cmap="RdYlGn", axis=None).format("${:,.0f}"),
             use_container_width=True,
-            hide_index=True
+            height=400
         )
-
-else:
-    st.info("👆 Use the **Manual Entry** tab above to add your first position.")
