@@ -10,21 +10,48 @@ from datetime import datetime, timedelta
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
+# --- CSS STYLING ---
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; }
+    
+    /* HEADER FIX: Use Grid to prevent overlapping */
     .main-header {
-        background-color: #0e1b32; padding: 1.5rem 2rem; color: white;
-        border-radius: 8px; display: flex; justify_content: space-between; align_items: center;
-        margin-bottom: 2rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        background-color: #0e1b32; 
+        padding: 1rem 1.5rem; 
+        color: white;
+        border-radius: 8px; 
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 2rem; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
+    .header-title { font-size: 22px; font-weight: 700; white-space: nowrap; }
+    .header-info { text-align: right; }
+    
+    /* STATUS BADGE */
     .status-badge {
-        font-size: 12px; background-color: #f1f5f9; color: #475569; 
-        padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1;
-        cursor: help; white-space: nowrap;
+        font-size: 11px; background-color: #f1f5f9; color: #475569; 
+        padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e1;
+        display: inline-block; margin-top: 4px;
     }
-    .status-error { color: #dc2626; background-color: #fef2f2; border-color: #fecaca; }
     .status-success { color: #16a34a; background-color: #f0fdf4; border-color: #bbf7d0; }
+    
+    /* DARK GREEN BUTTON FOR 'LOAD CHAIN' */
+    div[data-testid="stButton"] > button {
+        background-color: #15803d !important; /* Dark Green */
+        color: white !important;
+        border: none;
+    }
+    div[data-testid="stButton"] > button:hover {
+        background-color: #166534 !important; /* Darker Green on Hover */
+        color: white !important;
+    }
+    
+    /* Remove standard table borders for cleaner look */
+    .stDataFrame { border: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -37,24 +64,21 @@ if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
 if 'data_source' not in st.session_state: st.session_state.data_source = "None"
+if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 20.0
 
 # --- 3. DATA ENGINE ---
-
 @st.cache_data(ttl=600)
 def load_sheet(raw_url):
     try:
-        # Convert to export link
         if "/edit" in raw_url:
             base = raw_url.split("/edit")[0]
             csv_url = f"{base}/export?format=csv&gid=0"
         else:
             csv_url = raw_url
 
-        # READ SPECIFIC COLUMNS: Code(C), Ticker(D), Type(E), Expiry(F), Strike(G)
         df = pd.read_csv(csv_url, usecols=[2, 3, 4, 5, 6], on_bad_lines='skip', dtype=str)
         df.columns = ['Code', 'Ticker', 'Type', 'Expiry', 'Strike']
         
-        # Clean
         df['Ticker'] = df['Ticker'].str.upper().str.strip()
         df['Type'] = df['Type'].str.upper().str.strip().replace({'C': 'Call', 'P': 'Put'})
         df['Strike'] = pd.to_numeric(df['Strike'].str.replace(',', '').str.replace('$', ''), errors='coerce')
@@ -72,11 +96,7 @@ if st.session_state.ref_data is None:
 
 def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     try:
-        t = max(0.001, time_days/365.0)
-        # mibian uses days if < 1? No, it uses annual fractions usually. 
-        # Actually mibian BS takes [Underlying, Strike, InterestRate, Days]
-        # and returns volatility OR takes volatility and returns price.
-        # Let's use standard mibian behavior: BS([Spot, Strike, Rate, Days], Volatility)
+        t = max(0.001, time_days/365.0) # Annualized
         c = mibian.BS([spot, strike, rate_pct, time_days], volatility=vol_pct)
         return c.callPrice if kind == 'Call' else c.putPrice
     except: return 0.0
@@ -88,12 +108,9 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
         return {'delta': g.delta, 'gamma': g.gamma, 'theta': g.theta, 'vega': g.vega}
     except: return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
 
-# --- 4. DATA FETCHING ---
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
     sym = f"{clean}.AX"
-    
-    # 1. Get Price from Yahoo
     spot = 0.0
     try:
         tk = yf.Ticker(sym)
@@ -102,160 +119,104 @@ def fetch_data(t):
             spot = float(hist['Close'].iloc[-1])
         else:
             return "ERROR", 0.0, None
-            
-        # 2. Try Yahoo Options
-        if tk.options:
-            return "YAHOO", spot, tk
-        else:
-            # 3. Fallback to Sheet
-            # We don't return an object, just the signal to use sheet
-            return "SHEET", spot, None
-            
+        
+        if tk.options: return "YAHOO", spot, tk
+        else: return "SHEET", spot, None
     except: return "ERROR", 0.0, None
 
-# --- 5. UI HEADER ---
+# --- 4. HEADER ---
 status_parts = st.session_state.sheet_msg.split("|")
 status_cls = "status-success" if status_parts[0] == "success" else "status-error"
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
 
 st.markdown(f"""
 <div class="main-header">
-    <div style="font-size: 22px; font-weight: 700;">TradersCircle <span style="font-weight: 300; opacity: 0.7;">| PRO</span></div>
-    <div style="text-align: right;">
-        <div style="font-size: 12px; opacity: 0.8;">{st.session_state.ticker}</div>
-        <div style="font-size: 24px; font-weight: 700; color: #4ade80;">${st.session_state.spot_price:.2f}</div>
-        <span class="status-badge {status_cls}">{status_txt}</span>
+    <div class="header-title">
+        TradersCircle <span style="font-weight: 300; opacity: 0.7;">| PRO</span>
+    </div>
+    <div class="header-info">
+        <div style="font-size: 14px; opacity: 0.9;">{st.session_state.ticker}</div>
+        <div style="font-size: 28px; font-weight: 700; color: #4ade80;">${st.session_state.spot_price:.2f}</div>
+        <div class="status-badge {status_cls}">{status_txt}</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 6. SEARCH ---
-c1, c2 = st.columns([3, 1])
-query = c1.text_input("Ticker", st.session_state.ticker, label_visibility="collapsed")
+# --- 5. CONTROLS ---
+c_search, c_vol, c_btn = st.columns([2, 1, 1])
+with c_search:
+    query = st.text_input("Ticker", st.session_state.ticker, label_visibility="collapsed")
+with c_vol:
+    # IV SLIDER
+    st.session_state.vol_manual = st.slider("Implied Volatility %", 10.0, 100.0, st.session_state.vol_manual, 5.0, label_visibility="collapsed")
 
-if c2.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
+if c_btn.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
     st.session_state.ticker = query.upper()
     with st.spinner("Analyzing Market..."):
         source, px, obj = fetch_data(st.session_state.ticker)
         st.session_state.spot_price = px
         st.session_state.chain_obj = obj
         st.session_state.data_source = source
-        
-        # Reload sheet to ensure freshness
         data, msg = load_sheet(RAW_SHEET_URL)
         st.session_state.ref_data = data
         st.session_state.sheet_msg = msg
-        
-        if source == "ERROR":
-            st.error("Ticker not found.")
         st.rerun()
 
-# --- 7. CHAIN DISPLAY ---
-
-# Prepare Data for Table
+# --- 6. CHAIN DISPLAY ---
 df_view = pd.DataFrame()
-current_exp = None
 is_sheet_mode = False
+current_exp = None
 
-# PATH A: YAHOO DATA (Live)
-if st.session_state.data_source == "YAHOO" and st.session_state.chain_obj:
-    try:
-        tk = st.session_state.chain_obj
-        exps = tk.options
-        current_exp = st.selectbox("Expiry", exps)
-        
-        chain = tk.option_chain(current_exp)
-        df = pd.merge(chain.calls, chain.puts, on="strike", how="outer", suffixes=("_c", "_p")).fillna(0)
-        
-        # Build View
-        df_view['STRIKE'] = df['strike']
-        df_view['C_Last'] = df['lastPrice_c']
-        df_view['C_Vol'] = df['impliedVolatility_c']
-        df_view['P_Last'] = df['lastPrice_p']
-        df_view['P_Vol'] = df['impliedVolatility_p']
-        
-        # Code Lookup Needed
-        is_sheet_mode = False
-        
-    except:
-        st.session_state.data_source = "SHEET" # Fallback if yahoo crashes mid-stream
-
-# PATH B: SHEET DATA (Fallback)
 if st.session_state.data_source == "SHEET":
-    st.warning("⚠️ Live options data unavailable. Showing **Theoretical Pricing** derived from your Sheet.")
-    
-    # Filter Sheet Data
+    # st.info(f"Using Sheet Mode (IV: {st.session_state.vol_manual}%)")
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     subset = ref[ref['Ticker'] == tkr]
     
     if not subset.empty:
-        # Get Expiries
         valid_exps = sorted(subset['Expiry'].unique())
-        # Convert to string for selectbox
         exp_map = {d.strftime("%Y-%m-%d"): d for d in valid_exps}
         current_exp = st.selectbox("Expiry", list(exp_map.keys()))
-        
-        # Filter for Expiry
         target_dt = exp_map[current_exp]
-        day_chain = subset[subset['Expiry'] == target_dt]
         
-        # Separate Calls/Puts
+        day_chain = subset[subset['Expiry'] == target_dt]
         calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')['Code']
         puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')['Code']
         
-        # Merge
         all_strikes = sorted(list(set(calls.index) | set(puts.index)))
         df_view = pd.DataFrame({'STRIKE': all_strikes})
-        
-        # Map Codes
         df_view['C_Code'] = df_view['STRIKE'].map(calls)
         df_view['P_Code'] = df_view['STRIKE'].map(puts)
         
-        # Calculate Theo Prices
+        # PRICING
         days = (target_dt - datetime.now()).days
         spot = st.session_state.spot_price
+        vol = st.session_state.vol_manual
         
-        # Vectorized or Loop calculation
-        # Simple loop for safety
-        c_prices, p_prices = [], []
-        for s in df_view['STRIKE']:
-            c_prices.append(get_bs_price('Call', spot, s, days, 20.0)) # Default 20% Vol
-            p_prices.append(get_bs_price('Put', spot, s, days, 20.0))
+        c_prices = [get_bs_price('Call', spot, s, days, vol) for s in df_view['STRIKE']]
+        p_prices = [get_bs_price('Put', spot, s, days, vol) for s in df_view['STRIKE']]
             
         df_view['C_Last'] = c_prices
         df_view['P_Last'] = p_prices
-        df_view['C_Vol'] = 0.20 # Dummy
-        df_view['P_Vol'] = 0.20 # Dummy
-        
         is_sheet_mode = True
-    else:
-        st.error(f"No options found in sheet for {tkr}")
 
 # RENDER TABLE
 if not df_view.empty and current_exp:
-    # Filter Near Money
     center = st.session_state.spot_price
     if center > 0:
         df_view = df_view[(df_view['STRIKE'] > center*0.8) & (df_view['STRIKE'] < center*1.2)]
     
     st.markdown(f"**Chain: {current_exp}**")
-    
-    # Configure Columns
     cols = {
-        "C_Last": st.column_config.NumberColumn("Call $", format="$%.2f"),
+        "C_Last": st.column_config.NumberColumn("Call", format="$%.2f"),
         "STRIKE": st.column_config.NumberColumn("Strike", format="%.2f"),
-        "P_Last": st.column_config.NumberColumn("Put $", format="$%.2f"),
-        "C_Vol": None, "P_Vol": None, "C_Code": None, "P_Code": None
+        "P_Last": st.column_config.NumberColumn("Put", format="$%.2f"),
+        "C_Code": None, "P_Code": None
     }
     
     selection = st.dataframe(
-        df_view,
-        column_config=cols,
-        hide_index=True,
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row"
+        df_view, column_config=cols, hide_index=True, use_container_width=True,
+        on_select="rerun", selection_mode="single-row"
     )
     
     if selection.selection['rows']:
@@ -265,80 +226,67 @@ if not df_view.empty and current_exp:
         days = (d_obj - datetime.now()).days
         
         st.info(f"Selected: **${row['STRIKE']} Strike**")
-        
-        def add(side, kind, px, iv, code_hint=None):
-            if iv < 0.01: iv = 0.20
-            
-            # Code Logic
-            if is_sheet_mode:
-                final_code = code_hint
-            else:
-                # Yahoo Mode -> Lookup
-                # We need to re-implement lookup for Yahoo mode
-                # But for now let's rely on Sheet mode being the primary Fix
-                final_code = "LOOKUP_NEEDED"
-            
+        def add(side, kind, px, code_hint):
             st.session_state.legs.append({
                 "Qty": 1 if side=="Buy" else -1, "Type": kind, 
-                "Strike": row['STRIKE'], "Expiry": days, "Vol": iv*100, 
-                "Entry": px, "Code": final_code
+                "Strike": row['STRIKE'], "Expiry": days, 
+                "Vol": st.session_state.vol_manual, 
+                "Entry": px, "Code": code_hint
             })
             
-        # Get Codes from row if in sheet mode
         c_code = row.get('C_Code', 'ENTER_CODE')
         p_code = row.get('P_Code', 'ENTER_CODE')
-        
         b1, b2, b3, b4 = st.columns(4)
-        if b1.button("Buy Call"): add("Buy", "Call", row['C_Last'], row['C_Vol'], c_code)
-        if b2.button("Sell Call"): add("Sell", "Call", row['C_Last'], row['C_Vol'], c_code)
-        if b3.button("Buy Put"): add("Buy", "Put", row['P_Last'], row['P_Vol'], p_code)
-        if b4.button("Sell Put"): add("Sell", "Put", row['P_Last'], row['P_Vol'], p_code)
+        if b1.button("Buy Call"): add("Buy", "Call", row['C_Last'], c_code)
+        if b2.button("Sell Call"): add("Sell", "Call", row['C_Last'], c_code)
+        if b3.button("Buy Put"): add("Buy", "Put", row['P_Last'], p_code)
+        if b4.button("Sell Put"): add("Sell", "Put", row['P_Last'], p_code)
 
-# --- 8. MANUAL FALLBACK ---
-if df_view.empty:
-    with st.expander("🛠 Manual Leg Builder", expanded=True):
-        with st.form("manual"):
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            code = c1.text_input("Code", "BHPS49")
-            qty = c2.number_input("Qty", 1)
-            kind = c3.selectbox("Type", ["Call", "Put"])
-            strk = c4.number_input("Strike", value=round(st.session_state.spot_price, 2))
-            days = c5.number_input("Days", 45)
-            vol = c6.number_input("Vol%", 20.0)
-            if st.form_submit_button("Add Manually"):
-                px = get_bs_price(kind, st.session_state.spot_price, strk, days, vol, 4.0)
-                st.session_state.legs.append({
-                    "Qty": qty, "Type": kind, "Strike": strk, 
-                    "Expiry": days, "Vol": vol, "Entry": px, "Code": code
-                })
-                st.rerun()
-
-# --- 9. PORTFOLIO & CHARTS ---
+# --- 7. PORTFOLIO & TICKETS ---
 if st.session_state.legs:
     st.markdown("---")
-    st.subheader("📋 Active Portfolio")
     
-    df_port = pd.DataFrame(st.session_state.legs)
-    edited = st.data_editor(
-        df_port,
-        column_config={
-            "Code": st.column_config.TextColumn("ASX Code", width="medium"),
-            "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
-            "Vol": st.column_config.NumberColumn("Vol %", format="%.1f%%"),
-            "Strike": st.column_config.NumberColumn("Strike", format="%.2f"),
-        },
-        use_container_width=True, num_rows="dynamic", key="editor"
-    )
-    st.session_state.legs = edited.to_dict('records')
-    
-    # Delta
-    tot_delta = 0
+    # A. TRADE TICKET (COPY PASTE)
+    ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
+    ticket_text += "-"*40 + "\n"
     for leg in st.session_state.legs:
-        g = get_greeks(leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
-        tot_delta += g['delta'] * leg['Qty'] * 100
-    st.metric("Net Delta", f"{tot_delta:.1f}")
+        direction = "Buy" if leg['Qty'] > 0 else "Sell"
+        qty = abs(leg['Qty'])
+        ticket_text += f"{direction} {qty}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.2f}\n"
     
-    # Chart
+    c_tick, c_port = st.columns([1, 2])
+    with c_tick:
+        st.caption("Trade Ticket (Copy)")
+        st.code(ticket_text, language="text")
+        if st.button("Clear Portfolio"):
+            st.session_state.legs = []
+            st.rerun()
+
+    # B. COLORED PORTFOLIO DISPLAY
+    with c_port:
+        st.caption("Active Legs")
+        df_port = pd.DataFrame(st.session_state.legs)
+        
+        # Color Logic Function
+        def highlight_type(val):
+            color = '#dcfce7' if val == 'Call' else '#fee2e2' # Green vs Red light
+            return f'background-color: {color}; color: black; font-weight: bold;'
+
+        # Clean display DF
+        disp_port = df_port[['Qty', 'Code', 'Type', 'Strike', 'Entry']].copy()
+        
+        # Apply Style
+        styled_port = disp_port.style.applymap(highlight_type, subset=['Type'])
+        styled_port = styled_port.format({"Entry": "${:.2f}", "Strike": "{:.2f}"})
+        
+        st.dataframe(styled_port, use_container_width=True, hide_index=True)
+
+    # C. EDIT EXPANDER (Hidden by default to keep UI clean)
+    with st.expander("Edit Quantities"):
+        edited = st.data_editor(df_port, key="editor", num_rows="dynamic")
+        st.session_state.legs = edited.to_dict('records')
+
+    # D. CHARTS
     st.markdown("---")
     c_ctrl, c_view = st.columns([1, 3])
     with c_ctrl:
@@ -354,10 +302,10 @@ if st.session_state.legs:
         for p in prices:
             v0, vF = 0, 0
             for leg in st.session_state.legs:
-                px = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
+                px = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
                 v0 += (px - leg['Entry']) * leg['Qty'] * 100
                 tf = max(0, leg['Expiry'] - ts)
-                pxf = get_bs_price(leg['Type'], p, leg['Strike'], tf, leg['Vol'], 4.0)
+                pxf = get_bs_price(leg['Type'], p, leg['Strike'], tf, leg['Vol'])
                 vF += (pxf - leg['Entry']) * leg['Qty'] * 100
             p0.append(v0)
             pF.append(vF)
