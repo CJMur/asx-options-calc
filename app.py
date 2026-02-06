@@ -39,13 +39,19 @@ st.markdown("""
     .status-success { color: #16a34a; background-color: #f0fdf4; border-color: #bbf7d0; }
     .status-error { color: #dc2626; background-color: #fef2f2; border-color: #fecaca; }
     
-    /* BUTTONS */
+    /* LOAD CHAIN BUTTON (Dark Green) */
     div[data-testid="stButton"] > button {
-        background-color: #ef4444 !important; 
+        background-color: #15803d !important; 
         color: white !important;
         border: none;
         font-weight: 600;
     }
+    
+    /* CLEAR PORTFOLIO BUTTON (Neutral Slate - Overrides Green above via specificity if needed, 
+       but Streamlit classes are tricky. We'll rely on the order or specific styling below) */
+       
+    /* SLIDER OVERRIDE (Attempt to neutralize Streamlit Red) */
+    div[data-baseweb="slider"] div { background-color: #0e1b32 !important; }
     
     /* TABLE TWEAKS */
     .stDataFrame { border: none !important; }
@@ -191,7 +197,6 @@ if st.session_state.data_source == "SHEET":
         df_view['C_Code'] = df_view['STRIKE'].map(calls)
         df_view['P_Code'] = df_view['STRIKE'].map(puts)
         
-        # PRICING
         days = (target_dt - datetime.now()).days
         spot = st.session_state.spot_price
         vol = st.session_state.vol_manual
@@ -249,7 +254,6 @@ if not df_view.empty and current_exp:
         st.info(f"Selected: **${row['STRIKE']} Strike**")
         
         def add(side, kind, px, code_hint):
-            # IMPORTANT: We add a 'Remove' key initialized to False
             st.session_state.legs.append({
                 "Qty": 1 if side=="Buy" else -1, "Type": kind, 
                 "Strike": row['STRIKE'], "Expiry": days, 
@@ -267,67 +271,67 @@ if not df_view.empty and current_exp:
         if b3.button("Buy Put"): add("Buy", "Put", row['P_Price'], p_c)
         if b4.button("Sell Put"): add("Sell", "Put", row['P_Price'], p_c)
 
-# --- 7. PORTFOLIO & PAYOFF MATRIX ---
+# --- 7. PORTFOLIO ---
 if st.session_state.legs:
     st.markdown("---")
     
-    # A. TRADE TICKET
-    ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
-    for leg in st.session_state.legs:
-        direction = "Buy" if leg['Qty'] > 0 else "Sell"
-        qty = abs(leg['Qty'])
-        ticket_text += f"{direction} {qty}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.3f}\n"
-    
     c_tick, c_port = st.columns([1, 2])
+    
+    # A. TRADE TICKET
     with c_tick:
+        ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
+        for leg in st.session_state.legs:
+            direction = "Buy" if leg['Qty'] > 0 else "Sell"
+            qty = abs(leg['Qty'])
+            ticket_text += f"{direction} {qty}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.3f}\n"
+        
         st.caption("Trade Ticket (Copy)")
         st.code(ticket_text, language="text")
-        if st.button("Clear Portfolio"):
+        
+        # NEUTRAL CLEAR BUTTON
+        if st.button("Clear Portfolio", key="clr_btn"):
             st.session_state.legs = []
             st.rerun()
 
-    # B. INTERACTIVE PORTFOLIO (WITH REMOVE)
-    with c_port:
-        st.caption("Active Legs (Edit Qty or Check 'Remove' to delete)")
-        
-        # Prepare Data for Editor
-        df_port = pd.DataFrame(st.session_state.legs)
-        
-        # Ensure 'Remove' column exists if old state
-        if 'Remove' not in df_port.columns:
-            df_port['Remove'] = False
+        # Inject Neutral Style for Clear Button using ID hack
+        st.markdown("""
+        <style>
+        div.stButton > button:first-child { 
+             /* This targets the 'Clear' button specifically if it's rendered here, 
+                but Streamlit CSS is global. 
+                We use inline style overriding for the Load Chain earlier. */
+        }
+        </style>
+        """, unsafe_allow_html=True)
 
-        # Configure columns for the editor
+    # B. INTERACTIVE PORTFOLIO
+    with c_port:
+        st.caption("Active Legs (Edit Qty or Check 'Remove')")
+        
+        df_port = pd.DataFrame(st.session_state.legs)
+        if 'Remove' not in df_port.columns: df_port['Remove'] = False
+
         column_config = {
-            "Remove": st.column_config.CheckboxColumn("Remove?", help="Check to delete leg", default=False),
+            "Remove": st.column_config.CheckboxColumn("Remove?", default=False),
             "Code": st.column_config.TextColumn("ASX Code", width="medium"),
             "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
             "Vol": st.column_config.NumberColumn("Vol %", format="%.1f%%"),
             "Strike": st.column_config.NumberColumn("Strike", format="%.2f"),
         }
 
-        # Render the Editor
         edited_df = st.data_editor(
             df_port,
             column_config=column_config,
             use_container_width=True,
-            num_rows="dynamic", # Allows adding/deleting rows natively too
+            num_rows="dynamic",
             key="portfolio_editor"
         )
 
-        # LOGIC: Check if anything was removed via the Checkbox
         if edited_df['Remove'].any():
-            # Filter out the rows marked for removal
             remaining_legs = edited_df[~edited_df['Remove']].drop(columns=['Remove']).to_dict('records')
-            
-            # Update session state
             st.session_state.legs = remaining_legs
             st.rerun()
         else:
-            # Sync changes (Qty, Price edits) back to session state
-            # Drop the 'Remove' column before saving back to state to keep it clean, 
-            # or keep it false. Let's drop it to match original structure.
-            # Actually, keeping it makes the next render easier.
             st.session_state.legs = edited_df.to_dict('records')
 
     # --- C. PAYOFF MATRIX ---
@@ -349,7 +353,6 @@ if st.session_state.legs:
     dates = [0, time_step, time_step*2, time_step*3, time_step*4]
     
     matrix_data = []
-    
     for p in prices:
         row = {"Price": p}
         for d in dates:
@@ -377,3 +380,48 @@ if st.session_state.legs:
         use_container_width=True,
         height=450
     )
+
+    # --- D. PAYOFF DIAGRAM (Restored & Bottom) ---
+    st.markdown("### 📈 Payoff Diagram")
+    
+    # Re-calculate points for smooth chart
+    chart_prices = np.linspace(spot * (1 - range_pct*1.5), spot * (1 + range_pct*1.5), 100)
+    pnl_today = []
+    pnl_expiry = []
+    
+    for p in chart_prices:
+        val_t0 = 0
+        val_tF = 0
+        for leg in st.session_state.legs:
+            # T+0 PnL
+            # Use current vol for T+0
+            sim_vol = leg['Vol'] 
+            rem_days = leg['Expiry'] # Days remaining today
+            price_t0 = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, sim_vol)
+            val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * 100
+            
+            # Expiry PnL (T_Final)
+            # Intrinsic value at expiry
+            if leg['Type'] == 'Call':
+                price_tf = max(0, p - leg['Strike'])
+            else:
+                price_tf = max(0, leg['Strike'] - p)
+            val_tF += (price_tf - leg['Entry']) * leg['Qty'] * 100
+            
+        pnl_today.append(val_t0)
+        pnl_expiry.append(val_tF)
+        
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=chart_prices, y=pnl_today, name="Today (T+0)", line=dict(color='#0e1b32', width=3)))
+    fig.add_trace(go.Scatter(x=chart_prices, y=pnl_expiry, name="At Expiry", line=dict(color='#15803d', dash='dash')))
+    fig.add_vline(x=spot, line_dash="dot", line_color="grey", annotation_text="Spot")
+    
+    fig.update_layout(
+        height=400, 
+        template="plotly_white", 
+        margin=dict(t=20, b=20, l=40, r=20),
+        xaxis_title="Stock Price",
+        yaxis_title="Profit / Loss ($)",
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig, use_container_width=True)
