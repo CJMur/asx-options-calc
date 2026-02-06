@@ -15,7 +15,7 @@ st.markdown("""
 <style>
     .block-container { padding-top: 1rem; }
     
-    /* HEADER FIX: Use Grid to prevent overlapping */
+    /* HEADER */
     .main-header {
         background-color: #0e1b32; 
         padding: 1rem 1.5rem; 
@@ -39,18 +39,14 @@ st.markdown("""
     }
     .status-success { color: #16a34a; background-color: #f0fdf4; border-color: #bbf7d0; }
     
-    /* DARK GREEN BUTTON FOR 'LOAD CHAIN' */
+    /* BUTTONS */
     div[data-testid="stButton"] > button {
-        background-color: #15803d !important; /* Dark Green */
+        background-color: #15803d !important; 
         color: white !important;
         border: none;
     }
-    div[data-testid="stButton"] > button:hover {
-        background-color: #166534 !important; /* Darker Green on Hover */
-        color: white !important;
-    }
     
-    /* Remove standard table borders for cleaner look */
+    /* TABLE TWEAKS */
     .stDataFrame { border: none !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -96,7 +92,7 @@ if st.session_state.ref_data is None:
 
 def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     try:
-        t = max(0.001, time_days/365.0) # Annualized
+        t = max(0.001, time_days/365.0)
         c = mibian.BS([spot, strike, rate_pct, time_days], volatility=vol_pct)
         return c.callPrice if kind == 'Call' else c.putPrice
     except: return 0.0
@@ -147,7 +143,6 @@ c_search, c_vol, c_btn = st.columns([2, 1, 1])
 with c_search:
     query = st.text_input("Ticker", st.session_state.ticker, label_visibility="collapsed")
 with c_vol:
-    # IV SLIDER
     st.session_state.vol_manual = st.slider("Implied Volatility %", 10.0, 100.0, st.session_state.vol_manual, 5.0, label_visibility="collapsed")
 
 if c_btn.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
@@ -162,13 +157,11 @@ if c_btn.button("Load Chain", type="primary", use_container_width=True) or (quer
         st.session_state.sheet_msg = msg
         st.rerun()
 
-# --- 6. CHAIN DISPLAY ---
+# --- 6. ADVANCED CHAIN DISPLAY ---
 df_view = pd.DataFrame()
-is_sheet_mode = False
 current_exp = None
 
 if st.session_state.data_source == "SHEET":
-    # st.info(f"Using Sheet Mode (IV: {st.session_state.vol_manual}%)")
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     subset = ref[ref['Ticker'] == tkr]
@@ -188,44 +181,102 @@ if st.session_state.data_source == "SHEET":
         df_view['C_Code'] = df_view['STRIKE'].map(calls)
         df_view['P_Code'] = df_view['STRIKE'].map(puts)
         
-        # PRICING
+        # PRICING & GREEKS
         days = (target_dt - datetime.now()).days
         spot = st.session_state.spot_price
         vol = st.session_state.vol_manual
         
-        c_prices = [get_bs_price('Call', spot, s, days, vol) for s in df_view['STRIKE']]
-        p_prices = [get_bs_price('Put', spot, s, days, vol) for s in df_view['STRIKE']]
+        # Calculate Columns
+        c_px, c_delta, p_px, p_delta = [], [], [], []
+        
+        for s in df_view['STRIKE']:
+            # Call Side
+            c_px.append(get_bs_price('Call', spot, s, days, vol))
+            c_delta.append(get_greeks('Call', spot, s, days, vol)['delta'])
+            # Put Side
+            p_px.append(get_bs_price('Put', spot, s, days, vol))
+            p_delta.append(get_greeks('Put', spot, s, days, vol)['delta'])
             
-        df_view['C_Last'] = c_prices
-        df_view['P_Last'] = p_prices
-        is_sheet_mode = True
+        df_view['C_Price'] = c_px
+        df_view['C_Delta'] = c_delta
+        df_view['C_Vol'] = vol
+        
+        df_view['P_Price'] = p_px
+        df_view['P_Delta'] = p_delta
+        df_view['P_Vol'] = vol
 
-# RENDER TABLE
+# RENDER ADVANCED TABLE
 if not df_view.empty and current_exp:
     center = st.session_state.spot_price
+    # Filter range
     if center > 0:
         df_view = df_view[(df_view['STRIKE'] > center*0.8) & (df_view['STRIKE'] < center*1.2)]
     
     st.markdown(f"**Chain: {current_exp}**")
-    cols = {
-        "C_Last": st.column_config.NumberColumn("Call", format="$%.2f"),
-        "STRIKE": st.column_config.NumberColumn("Strike", format="%.2f"),
-        "P_Last": st.column_config.NumberColumn("Put", format="$%.2f"),
-        "C_Code": None, "P_Code": None
-    }
+    
+    # Define Column Order matching screenshot:
+    # C_Code, C_Price, C_Vol, C_Delta | STRIKE | P_Price, P_Vol, P_Delta, P_Code
+    
+    # Stylized Dataframe
+    # We want to highlight ITM rows. 
+    # ITM Call: Strike < Spot (Background Green)
+    # ITM Put: Strike > Spot (Background Green)
+    
+    def highlight_itm(row):
+        styles = [''] * len(row)
+        s = row['STRIKE']
+        spot = st.session_state.spot_price
+        
+        # Call ITM (Left Side)
+        if s < spot:
+            styles[0] = 'background-color: #dcfce7' # C_Code
+            styles[1] = 'background-color: #dcfce7' # C_Price
+            styles[2] = 'background-color: #dcfce7' # C_Vol
+            styles[3] = 'background-color: #dcfce7' # C_Delta
+            
+        # Put ITM (Right Side)
+        if s > spot:
+            styles[5] = 'background-color: #dcfce7' # P_Price
+            styles[6] = 'background-color: #dcfce7' # P_Vol
+            styles[7] = 'background-color: #dcfce7' # P_Delta
+            styles[8] = 'background-color: #dcfce7' # P_Code
+            
+        return styles
+
+    # Prepare display frame
+    disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
+    
+    # Display using Streamlit Dataframe with formatting
+    # Note: Streamlit doesn't support row-based conditional formatting perfectly yet in `st.dataframe`, 
+    # so we use `st.data_editor` disabled or `st.dataframe` with `column_config` for formatting numbers.
     
     selection = st.dataframe(
-        df_view, column_config=cols, hide_index=True, use_container_width=True,
-        on_select="rerun", selection_mode="single-row"
+        disp,
+        column_config={
+            "C_Code": st.column_config.TextColumn("Call Code"),
+            "C_Price": st.column_config.NumberColumn("Theo Price", format="%.3f"),
+            "C_Vol": st.column_config.NumberColumn("Vol %", format="%.1f"),
+            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
+            "STRIKE": st.column_config.NumberColumn("Strike", format="%.2f"), # Bold handled by UI typically
+            "P_Price": st.column_config.NumberColumn("Theo Price", format="%.3f"),
+            "P_Vol": st.column_config.NumberColumn("Vol %", format="%.1f"),
+            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
+            "P_Code": st.column_config.TextColumn("Put Code"),
+        },
+        hide_index=True,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row"
     )
     
     if selection.selection['rows']:
         idx = selection.selection['rows'][0]
-        row = df_view.iloc[idx]
+        row = disp.iloc[idx]
         d_obj = datetime.strptime(current_exp, "%Y-%m-%d")
         days = (d_obj - datetime.now()).days
         
         st.info(f"Selected: **${row['STRIKE']} Strike**")
+        
         def add(side, kind, px, code_hint):
             st.session_state.legs.append({
                 "Qty": 1 if side=="Buy" else -1, "Type": kind, 
@@ -234,25 +285,27 @@ if not df_view.empty and current_exp:
                 "Entry": px, "Code": code_hint
             })
             
-        c_code = row.get('C_Code', 'ENTER_CODE')
-        p_code = row.get('P_Code', 'ENTER_CODE')
+        # Helper to safely get codes (handle NaN)
+        c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
+        p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
+        
         b1, b2, b3, b4 = st.columns(4)
-        if b1.button("Buy Call"): add("Buy", "Call", row['C_Last'], c_code)
-        if b2.button("Sell Call"): add("Sell", "Call", row['C_Last'], c_code)
-        if b3.button("Buy Put"): add("Buy", "Put", row['P_Last'], p_code)
-        if b4.button("Sell Put"): add("Sell", "Put", row['P_Last'], p_code)
+        if b1.button("Buy Call"): add("Buy", "Call", row['C_Price'], c_c)
+        if b2.button("Sell Call"): add("Sell", "Call", row['C_Price'], c_c)
+        if b3.button("Buy Put"): add("Buy", "Put", row['P_Price'], p_c)
+        if b4.button("Sell Put"): add("Sell", "Put", row['P_Price'], p_c)
 
 # --- 7. PORTFOLIO & TICKETS ---
 if st.session_state.legs:
     st.markdown("---")
     
-    # A. TRADE TICKET (COPY PASTE)
+    # A. TRADE TICKET
     ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
     ticket_text += "-"*40 + "\n"
     for leg in st.session_state.legs:
         direction = "Buy" if leg['Qty'] > 0 else "Sell"
         qty = abs(leg['Qty'])
-        ticket_text += f"{direction} {qty}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.2f}\n"
+        ticket_text += f"{direction} {qty}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.3f}\n"
     
     c_tick, c_port = st.columns([1, 2])
     with c_tick:
@@ -262,31 +315,22 @@ if st.session_state.legs:
             st.session_state.legs = []
             st.rerun()
 
-    # B. COLORED PORTFOLIO DISPLAY
+    # B. COLORED PORTFOLIO
     with c_port:
         st.caption("Active Legs")
         df_port = pd.DataFrame(st.session_state.legs)
         
-        # Color Logic Function
         def highlight_type(val):
-            color = '#dcfce7' if val == 'Call' else '#fee2e2' # Green vs Red light
+            color = '#dcfce7' if val == 'Call' else '#fee2e2'
             return f'background-color: {color}; color: black; font-weight: bold;'
 
-        # Clean display DF
-        disp_port = df_port[['Qty', 'Code', 'Type', 'Strike', 'Entry']].copy()
-        
-        # Apply Style
-        styled_port = disp_port.style.applymap(highlight_type, subset=['Type'])
-        styled_port = styled_port.format({"Entry": "${:.2f}", "Strike": "{:.2f}"})
-        
-        st.dataframe(styled_port, use_container_width=True, hide_index=True)
+        if not df_port.empty:
+            disp_port = df_port[['Qty', 'Code', 'Type', 'Strike', 'Entry']].copy()
+            styled_port = disp_port.style.applymap(highlight_type, subset=['Type'])
+            styled_port = styled_port.format({"Entry": "${:.3f}", "Strike": "{:.2f}"})
+            st.dataframe(styled_port, use_container_width=True, hide_index=True)
 
-    # C. EDIT EXPANDER (Hidden by default to keep UI clean)
-    with st.expander("Edit Quantities"):
-        edited = st.data_editor(df_port, key="editor", num_rows="dynamic")
-        st.session_state.legs = edited.to_dict('records')
-
-    # D. CHARTS
+    # C. CHARTS
     st.markdown("---")
     c_ctrl, c_view = st.columns([1, 3])
     with c_ctrl:
