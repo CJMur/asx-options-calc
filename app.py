@@ -4,7 +4,6 @@ import numpy as np
 import plotly.graph_objects as go
 import yfinance as yf
 from datetime import datetime, timedelta
-from scipy.stats import norm # Standard Math Library
 import math
 
 # --- 1. CONFIGURATION ---
@@ -76,15 +75,12 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- 4. MANUAL MATH ENGINE (NO MIBIAN) ---
+# --- 4. PURE PYTHON MATH ENGINE (No Dependencies) ---
+def norm_cdf(x):
+    """Standard Normal CDF using Error Function (No Scipy needed)"""
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
 def black_scholes(S, K, T, r, sigma, option_type='Call'):
-    """
-    S: Spot Price
-    K: Strike Price
-    T: Time to Expiry (in years)
-    r: Risk-free rate (decimal, e.g. 0.04)
-    sigma: Volatility (decimal, e.g. 0.20)
-    """
     try:
         if T <= 0:
             return max(0, S - K) if option_type == 'Call' else max(0, K - S)
@@ -93,9 +89,9 @@ def black_scholes(S, K, T, r, sigma, option_type='Call'):
         d2 = d1 - sigma * math.sqrt(T)
         
         if option_type == 'Call':
-            price = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+            price = S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
         else:
-            price = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+            price = K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
         return price
     except:
         return 0.0
@@ -105,15 +101,15 @@ def calculate_delta(S, K, T, r, sigma, option_type='Call'):
         if T <= 0: return 0.0
         d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
         if option_type == 'Call':
-            return norm.cdf(d1)
+            return norm_cdf(d1)
         else:
-            return norm.cdf(d1) - 1
+            return norm_cdf(d1) - 1
     except:
         return 0.0
 
-# Wrappers to match old structure
+# Wrappers
 def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
-    T = max(0.001, time_days / 365.0) # Convert days to years
+    T = max(0.001, time_days / 365.0)
     v = vol_pct / 100.0
     r = rate_pct / 100.0
     return black_scholes(float(spot), float(strike), T, r, v, kind)
@@ -336,9 +332,8 @@ if st.session_state.legs:
         for d in dates:
             pnl = 0
             for leg in st.session_state.legs:
-                sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
-                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, sim_vol)
+                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, leg['Vol'])
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * 100
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
