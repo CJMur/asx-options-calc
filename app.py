@@ -29,7 +29,6 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .header-title { font-size: 22px; font-weight: 700; white-space: nowrap; }
-    .header-info { text-align: right; }
     
     /* STATUS BADGE */
     .status-badge {
@@ -38,12 +37,14 @@ st.markdown("""
         display: inline-block; margin-top: 4px;
     }
     .status-success { color: #16a34a; background-color: #f0fdf4; border-color: #bbf7d0; }
+    .status-error { color: #dc2626; background-color: #fef2f2; border-color: #fecaca; }
     
     /* BUTTONS */
     div[data-testid="stButton"] > button {
-        background-color: #15803d !important; 
+        background-color: #ef4444 !important; /* Red/Orange like screenshot */
         color: white !important;
         border: none;
+        font-weight: 600;
     }
     
     /* TABLE TWEAKS */
@@ -60,7 +61,7 @@ if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
 if 'data_source' not in st.session_state: st.session_state.data_source = "None"
-if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 20.0
+if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 33.5 # Matching screenshot
 
 # --- 3. DATA ENGINE ---
 @st.cache_data(ttl=600)
@@ -90,16 +91,26 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
+# --- MATH ENGINE (ROBUST) ---
 def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     try:
-        t = max(0.001, time_days/365.0)
-        c = mibian.BS([spot, strike, rate_pct, time_days], volatility=vol_pct)
+        # SAFETY: If expired, return Intrinsic Value
+        if time_days <= 0:
+            if kind == 'Call': return max(0.0, spot - strike)
+            else: return max(0.0, strike - spot)
+            
+        # SAFETY: Mibian hates 0 days. Force min 0.5 days for math.
+        safe_days = max(0.5, time_days)
+        
+        c = mibian.BS([spot, strike, rate_pct, safe_days], volatility=vol_pct)
         return c.callPrice if kind == 'Call' else c.putPrice
     except: return 0.0
 
 def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     try:
-        c = mibian.BS([spot, strike, rate_pct, time_days], volatility=vol_pct)
+        if time_days <= 0: return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
+        safe_days = max(0.5, time_days)
+        c = mibian.BS([spot, strike, rate_pct, safe_days], volatility=vol_pct)
         g = c.call if kind == 'Call' else c.put
         return {'delta': g.delta, 'gamma': g.gamma, 'theta': g.theta, 'vega': g.vega}
     except: return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
@@ -143,7 +154,7 @@ c_search, c_vol, c_btn = st.columns([2, 1, 1])
 with c_search:
     query = st.text_input("Ticker", st.session_state.ticker, label_visibility="collapsed")
 with c_vol:
-    st.session_state.vol_manual = st.slider("Implied Volatility %", 10.0, 100.0, st.session_state.vol_manual, 5.0, label_visibility="collapsed")
+    st.session_state.vol_manual = st.slider("Implied Volatility %", 10.0, 100.0, st.session_state.vol_manual, 0.5, label_visibility="collapsed")
 
 if c_btn.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
     st.session_state.ticker = query.upper()
@@ -168,195 +179,12 @@ if st.session_state.data_source == "SHEET":
     
     if not subset.empty:
         valid_exps = sorted(subset['Expiry'].unique())
+        # Filter out old dates just in case, but keep today
+        # valid_exps = [d for d in valid_exps if d >= datetime.now() - timedelta(days=1)]
+        
         exp_map = {d.strftime("%Y-%m-%d"): d for d in valid_exps}
-        current_exp = st.selectbox("Expiry", list(exp_map.keys()))
-        target_dt = exp_map[current_exp]
         
-        day_chain = subset[subset['Expiry'] == target_dt]
-        calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')['Code']
-        puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')['Code']
-        
-        all_strikes = sorted(list(set(calls.index) | set(puts.index)))
-        df_view = pd.DataFrame({'STRIKE': all_strikes})
-        df_view['C_Code'] = df_view['STRIKE'].map(calls)
-        df_view['P_Code'] = df_view['STRIKE'].map(puts)
-        
-        # PRICING & GREEKS
-        days = (target_dt - datetime.now()).days
-        spot = st.session_state.spot_price
-        vol = st.session_state.vol_manual
-        
-        # Calculate Columns
-        c_px, c_delta, p_px, p_delta = [], [], [], []
-        
-        for s in df_view['STRIKE']:
-            # Call Side
-            c_px.append(get_bs_price('Call', spot, s, days, vol))
-            c_delta.append(get_greeks('Call', spot, s, days, vol)['delta'])
-            # Put Side
-            p_px.append(get_bs_price('Put', spot, s, days, vol))
-            p_delta.append(get_greeks('Put', spot, s, days, vol)['delta'])
-            
-        df_view['C_Price'] = c_px
-        df_view['C_Delta'] = c_delta
-        df_view['C_Vol'] = vol
-        
-        df_view['P_Price'] = p_px
-        df_view['P_Delta'] = p_delta
-        df_view['P_Vol'] = vol
-
-# RENDER ADVANCED TABLE
-if not df_view.empty and current_exp:
-    center = st.session_state.spot_price
-    # Filter range
-    if center > 0:
-        df_view = df_view[(df_view['STRIKE'] > center*0.8) & (df_view['STRIKE'] < center*1.2)]
-    
-    st.markdown(f"**Chain: {current_exp}**")
-    
-    # Define Column Order matching screenshot:
-    # C_Code, C_Price, C_Vol, C_Delta | STRIKE | P_Price, P_Vol, P_Delta, P_Code
-    
-    # Stylized Dataframe
-    # We want to highlight ITM rows. 
-    # ITM Call: Strike < Spot (Background Green)
-    # ITM Put: Strike > Spot (Background Green)
-    
-    def highlight_itm(row):
-        styles = [''] * len(row)
-        s = row['STRIKE']
-        spot = st.session_state.spot_price
-        
-        # Call ITM (Left Side)
-        if s < spot:
-            styles[0] = 'background-color: #dcfce7' # C_Code
-            styles[1] = 'background-color: #dcfce7' # C_Price
-            styles[2] = 'background-color: #dcfce7' # C_Vol
-            styles[3] = 'background-color: #dcfce7' # C_Delta
-            
-        # Put ITM (Right Side)
-        if s > spot:
-            styles[5] = 'background-color: #dcfce7' # P_Price
-            styles[6] = 'background-color: #dcfce7' # P_Vol
-            styles[7] = 'background-color: #dcfce7' # P_Delta
-            styles[8] = 'background-color: #dcfce7' # P_Code
-            
-        return styles
-
-    # Prepare display frame
-    disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
-    
-    # Display using Streamlit Dataframe with formatting
-    # Note: Streamlit doesn't support row-based conditional formatting perfectly yet in `st.dataframe`, 
-    # so we use `st.data_editor` disabled or `st.dataframe` with `column_config` for formatting numbers.
-    
-    selection = st.dataframe(
-        disp,
-        column_config={
-            "C_Code": st.column_config.TextColumn("Call Code"),
-            "C_Price": st.column_config.NumberColumn("Theo Price", format="%.3f"),
-            "C_Vol": st.column_config.NumberColumn("Vol %", format="%.1f"),
-            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
-            "STRIKE": st.column_config.NumberColumn("Strike", format="%.2f"), # Bold handled by UI typically
-            "P_Price": st.column_config.NumberColumn("Theo Price", format="%.3f"),
-            "P_Vol": st.column_config.NumberColumn("Vol %", format="%.1f"),
-            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
-            "P_Code": st.column_config.TextColumn("Put Code"),
-        },
-        hide_index=True,
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row"
-    )
-    
-    if selection.selection['rows']:
-        idx = selection.selection['rows'][0]
-        row = disp.iloc[idx]
-        d_obj = datetime.strptime(current_exp, "%Y-%m-%d")
-        days = (d_obj - datetime.now()).days
-        
-        st.info(f"Selected: **${row['STRIKE']} Strike**")
-        
-        def add(side, kind, px, code_hint):
-            st.session_state.legs.append({
-                "Qty": 1 if side=="Buy" else -1, "Type": kind, 
-                "Strike": row['STRIKE'], "Expiry": days, 
-                "Vol": st.session_state.vol_manual, 
-                "Entry": px, "Code": code_hint
-            })
-            
-        # Helper to safely get codes (handle NaN)
-        c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
-        p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
-        
-        b1, b2, b3, b4 = st.columns(4)
-        if b1.button("Buy Call"): add("Buy", "Call", row['C_Price'], c_c)
-        if b2.button("Sell Call"): add("Sell", "Call", row['C_Price'], c_c)
-        if b3.button("Buy Put"): add("Buy", "Put", row['P_Price'], p_c)
-        if b4.button("Sell Put"): add("Sell", "Put", row['P_Price'], p_c)
-
-# --- 7. PORTFOLIO & TICKETS ---
-if st.session_state.legs:
-    st.markdown("---")
-    
-    # A. TRADE TICKET
-    ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
-    ticket_text += "-"*40 + "\n"
-    for leg in st.session_state.legs:
-        direction = "Buy" if leg['Qty'] > 0 else "Sell"
-        qty = abs(leg['Qty'])
-        ticket_text += f"{direction} {qty}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.3f}\n"
-    
-    c_tick, c_port = st.columns([1, 2])
-    with c_tick:
-        st.caption("Trade Ticket (Copy)")
-        st.code(ticket_text, language="text")
-        if st.button("Clear Portfolio"):
-            st.session_state.legs = []
-            st.rerun()
-
-    # B. COLORED PORTFOLIO
-    with c_port:
-        st.caption("Active Legs")
-        df_port = pd.DataFrame(st.session_state.legs)
-        
-        def highlight_type(val):
-            color = '#dcfce7' if val == 'Call' else '#fee2e2'
-            return f'background-color: {color}; color: black; font-weight: bold;'
-
-        if not df_port.empty:
-            disp_port = df_port[['Qty', 'Code', 'Type', 'Strike', 'Entry']].copy()
-            styled_port = disp_port.style.applymap(highlight_type, subset=['Type'])
-            styled_port = styled_port.format({"Entry": "${:.3f}", "Strike": "{:.2f}"})
-            st.dataframe(styled_port, use_container_width=True, hide_index=True)
-
-    # C. CHARTS
-    st.markdown("---")
-    c_ctrl, c_view = st.columns([1, 3])
-    with c_ctrl:
-        if st.button("Zoom 5%"): st.session_state.range_pct = 0.05
-        if st.button("Zoom 15%"): st.session_state.range_pct = 0.15
-        ts = st.slider("Time Step", 0, 60, 15)
-    
-    with c_view:
-        center = st.session_state.spot_price
-        pct = st.session_state.range_pct
-        prices = np.linspace(center*(1-pct), center*(1+pct), 80)
-        p0, pF = [], []
-        for p in prices:
-            v0, vF = 0, 0
-            for leg in st.session_state.legs:
-                px = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
-                v0 += (px - leg['Entry']) * leg['Qty'] * 100
-                tf = max(0, leg['Expiry'] - ts)
-                pxf = get_bs_price(leg['Type'], p, leg['Strike'], tf, leg['Vol'])
-                vF += (pxf - leg['Entry']) * leg['Qty'] * 100
-            p0.append(v0)
-            pF.append(vF)
-            
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=prices, y=p0, name="Today", line=dict(color='#2980b9', width=3)))
-        if ts > 0: fig.add_trace(go.Scatter(x=prices, y=pF, name=f"T+{ts}d", line=dict(color='#e67e22', dash='dash')))
-        fig.add_vline(x=center, line_dash="dot", annotation_text="Spot")
-        fig.update_layout(height=350, template="plotly_white", margin=dict(t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        # Default to a future expiry if possible
+        default_idx = 0
+        if len(exp_map) > 0:
+            current_exp = st.
