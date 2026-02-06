@@ -37,7 +37,7 @@ if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
 
-# --- 3. DATA LOADER (MATCHING YOUR SCREENSHOT) ---
+# --- 3. DATA LOADER ---
 
 @st.cache_data(ttl=600)
 def load_sheet(raw_url):
@@ -50,11 +50,7 @@ def load_sheet(raw_url):
             csv_url = raw_url
 
         # READ SPECIFIC COLUMNS BASED ON YOUR SCREENSHOT:
-        # Col C (Index 2) = ASXCode
-        # Col D (Index 3) = Underlying (Ticker)
-        # Col E (Index 4) = OptType (C/P)
-        # Col F (Index 5) = ExpDate
-        # Col G (Index 6) = Strike
+        # Col C (2)=ASXCode, D (3)=Underlying, E (4)=OptType, F (5)=ExpDate, G (6)=Strike
         df = pd.read_csv(csv_url, usecols=[2, 3, 4, 5, 6], on_bad_lines='skip', dtype=str)
         
         # Rename to standard internal names
@@ -151,4 +147,158 @@ st.markdown(f"""
 
 # --- 6. SEARCH ---
 c1, c2 = st.columns([3, 1])
-query = c1.text_input("Ticker", st.session_state.ticker, label_visibility
+# FIX: Added closing parenthesis below
+query = c1.text_input("Ticker", st.session_state.ticker, label_visibility="collapsed")
+
+if c2.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
+    st.session_state.ticker = query.upper()
+    with st.spinner("Connecting..."):
+        status, px, obj = fetch_yahoo(st.session_state.ticker)
+        st.session_state.spot_price = px
+        st.session_state.chain_obj = obj
+        
+        # Force re-load sheet
+        data, msg = load_sheet(RAW_SHEET_URL)
+        st.session_state.ref_data = data
+        st.session_state.sheet_msg = msg
+        
+        if status == "NO_CHAIN":
+            st.warning(f"Price found (${px:.2f}), but Yahoo has no Options Data for {query}. Using Manual Mode.")
+        elif status == "ERROR":
+            st.error("Ticker not found.")
+        st.rerun()
+
+# --- 7. MAIN DISPLAY ---
+
+# A. OPTION CHAIN
+if st.session_state.chain_obj:
+    tk = st.session_state.chain_obj
+    exps = tk.options
+    if exps:
+        sel_exp = st.selectbox("Expiry", exps)
+        try:
+            chain = tk.option_chain(sel_exp)
+            df = pd.merge(chain.calls, chain.puts, on="strike", how="outer", suffixes=("_c", "_p")).fillna(0)
+            center = st.session_state.spot_price
+            df = df[(df['strike'] > center*0.8) & (df['strike'] < center*1.2)]
+            
+            st.markdown(f"**Chain: {sel_exp}**")
+            
+            view = pd.DataFrame({
+                'STRIKE': df['strike'],
+                'C_Last': df['lastPrice_c'], 'C_Vol': df['impliedVolatility_c'],
+                'P_Last': df['lastPrice_p'], 'P_Vol': df['impliedVolatility_p']
+            })
+            
+            selection = st.dataframe(
+                view,
+                column_config={
+                    "C_Last": st.column_config.NumberColumn("Call $", format="$%.2f"),
+                    "STRIKE": st.column_config.NumberColumn("Strike", format="%.2f"),
+                    "P_Last": st.column_config.NumberColumn("Put $", format="$%.2f"),
+                    "C_Vol": None, "P_Vol": None
+                },
+                hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row"
+            )
+            
+            if selection.selection['rows']:
+                idx = selection.selection['rows'][0]
+                row = view.iloc[idx]
+                days = (datetime.strptime(sel_exp, "%Y-%m-%d") - datetime.now()).days
+                
+                st.info(f"Selected: **${row['STRIKE']} Strike**")
+                
+                def add(side, kind, px, iv):
+                    if iv < 0.01: iv = 0.20
+                    code = lookup_code(st.session_state.ticker, sel_exp, row['STRIKE'], kind)
+                    st.session_state.legs.append({
+                        "Qty": 1 if side=="Buy" else -1, "Type": kind, 
+                        "Strike": row['STRIKE'], "Expiry": days, "Vol": iv*100, 
+                        "Entry": px, "Code": code
+                    })
+                
+                b1, b2, b3, b4 = st.columns(4)
+                if b1.button("Buy Call"): add("Buy", "Call", row['C_Last'], row['C_Vol'])
+                if b2.button("Sell Call"): add("Sell", "Call", row['C_Last'], row['C_Vol'])
+                if b3.button("Buy Put"): add("Buy", "Put", row['P_Last'], row['P_Vol'])
+                if b4.button("Sell Put"): add("Sell", "Put", row['P_Last'], row['P_Vol'])
+        except Exception as e:
+            st.error(f"Chain Error: {e}")
+    else:
+        st.warning("Yahoo returned empty option list.")
+
+# B. MANUAL BUILDER
+with st.expander("🛠 Manual Leg Builder (Use if Chain missing)", expanded=not st.session_state.chain_obj):
+    with st.form("manual"):
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        code = c1.text_input("Code", "BHPS49")
+        qty = c2.number_input("Qty", 1)
+        kind = c3.selectbox("Type", ["Call", "Put"])
+        strk = c4.number_input("Strike", value=round(st.session_state.spot_price, 2))
+        days = c5.number_input("Days", 45)
+        vol = c6.number_input("Vol%", 20.0)
+        if st.form_submit_button("Add Manually"):
+            px = get_bs_price(kind, st.session_state.spot_price, strk, days, vol, 4.0)
+            st.session_state.legs.append({
+                "Qty": qty, "Type": kind, "Strike": strk, 
+                "Expiry": days, "Vol": vol, "Entry": px, "Code": code
+            })
+            st.rerun()
+
+# --- 8. PORTFOLIO & CHARTS ---
+if st.session_state.legs:
+    st.markdown("---")
+    st.subheader("📋 Active Portfolio")
+    
+    # Editor
+    df_port = pd.DataFrame(st.session_state.legs)
+    edited = st.data_editor(
+        df_port,
+        column_config={
+            "Code": st.column_config.TextColumn("ASX Code", width="medium"),
+            "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
+            "Vol": st.column_config.NumberColumn("Vol %", format="%.1f%%"),
+            "Strike": st.column_config.NumberColumn("Strike", format="%.2f"),
+        },
+        use_container_width=True, num_rows="dynamic", key="editor"
+    )
+    st.session_state.legs = edited.to_dict('records')
+    
+    # Delta
+    tot_delta = 0
+    for leg in st.session_state.legs:
+        g = get_greeks(leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
+        tot_delta += g['delta'] * leg['Qty'] * 100
+    st.metric("Net Delta", f"{tot_delta:.1f}")
+    
+    # Chart
+    st.markdown("---")
+    c_ctrl, c_view = st.columns([1, 3])
+    with c_ctrl:
+        st.caption("Controls")
+        if st.button("Zoom 5%"): st.session_state.range_pct = 0.05
+        if st.button("Zoom 15%"): st.session_state.range_pct = 0.15
+        ts = st.slider("Time Step", 0, 60, 15)
+    
+    with c_view:
+        center = st.session_state.spot_price
+        pct = st.session_state.range_pct
+        prices = np.linspace(center*(1-pct), center*(1+pct), 80)
+        p0, pF = [], []
+        for p in prices:
+            v0, vF = 0, 0
+            for leg in st.session_state.legs:
+                px = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
+                v0 += (px - leg['Entry']) * leg['Qty'] * 100
+                tf = max(0, leg['Expiry'] - ts)
+                pxf = get_bs_price(leg['Type'], p, leg['Strike'], tf, leg['Vol'], 4.0)
+                vF += (pxf - leg['Entry']) * leg['Qty'] * 100
+            p0.append(v0)
+            pF.append(vF)
+            
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=prices, y=p0, name="Today", line=dict(color='#2980b9', width=3)))
+        if ts > 0: fig.add_trace(go.Scatter(x=prices, y=pF, name=f"T+{ts}d", line=dict(color='#e67e22', dash='dash')))
+        fig.add_vline(x=center, line_dash="dot", annotation_text="Spot")
+        fig.update_layout(height=350, template="plotly_white", margin=dict(t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
