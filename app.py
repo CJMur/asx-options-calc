@@ -10,16 +10,13 @@ from datetime import datetime, timedelta
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
-# --- CSS STYLING (The Fix) ---
+# --- CSS STYLING ---
 st.markdown("""
 <style>
-    /* 1. Global Spacing Fix */
     .block-container { 
         padding-top: 2rem !important; 
         padding-bottom: 5rem !important;
     }
-    
-    /* 2. Custom Header Box */
     .main-header {
         background-color: #0e1b32; 
         padding: 1.5rem 2rem; 
@@ -31,53 +28,29 @@ st.markdown("""
         margin-bottom: 2rem; 
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
-    .header-left { display: flex; flex-direction: column; }
-    .header-title { font-size: 24px; font-weight: 700; letter-spacing: 0.5px; }
+    .header-title { font-size: 24px; font-weight: 700; }
     .header-subtitle { font-size: 14px; opacity: 0.8; font-weight: 300; }
-    
     .header-right { text-align: right; }
-    .spot-price { font-size: 32px; font-weight: 700; color: #4ade80; text-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    .spot-price { font-size: 32px; font-weight: 700; color: #4ade80; }
     .ticker-name { font-size: 16px; font-weight: 600; opacity: 0.9; }
-    
-    /* 3. Status Badge */
     .status-badge {
         font-size: 12px; padding: 4px 8px; border-radius: 6px; 
         background-color: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
         display: inline-block; margin-top: 5px; color: #cbd5e1;
     }
-
-    /* 4. SLIDER COLOR FIX (Hue Rotate Hack) */
-    /* This turns the default Streamlit RED slider into a BLUE/NEUTRAL slider 
-       without breaking the internal CSS structure */
-    div[data-baseweb="slider"] {
-        filter: hue-rotate(200deg) saturate(80%); 
-    }
-
-    /* 5. BUTTON STYLING */
-    /* Primary (Load Chain) - Dark Green */
+    div[data-baseweb="slider"] { filter: hue-rotate(200deg) saturate(80%); }
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; 
         color: white !important;
         border: none;
         font-weight: 600;
-        transition: all 0.2s;
     }
-    div[data-testid="stButton"] button[kind="primary"]:hover {
-        background-color: #166534 !important;
-        transform: translateY(-1px);
-    }
-    
-    /* Secondary (Clear, etc) - Neutral */
     div[data-testid="stButton"] button[kind="secondary"] {
         background-color: #f8fafc !important;
         color: #334155 !important;
         border: 1px solid #cbd5e1 !important;
     }
-
-    /* 6. Clean Tables */
     .stDataFrame { border: none !important; }
-    
-    /* 7. Input Label Size Increase */
     label { font-size: 14px !important; font-weight: 600 !important; color: #475569 !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -123,14 +96,16 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- MATH ENGINE ---
+# --- MATH ENGINE (PRECISE TIME) ---
 def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     try:
+        # Strict expiry check: If <= 0, it's expired
         if time_days <= 0:
             if kind == 'Call': return max(0.0, spot - strike)
             else: return max(0.0, strike - spot)
         
-        safe_days = max(0.5, time_days)
+        # Mibian crash prevention: enforce minimum 0.01 days (approx 15 mins)
+        safe_days = max(0.01, time_days)
         c = mibian.BS([spot, strike, rate_pct, safe_days], volatility=vol_pct)
         return c.callPrice if kind == 'Call' else c.putPrice
     except: return 0.0
@@ -138,7 +113,7 @@ def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
 def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     try:
         if time_days <= 0: return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
-        safe_days = max(0.5, time_days)
+        safe_days = max(0.01, time_days)
         c = mibian.BS([spot, strike, rate_pct, safe_days], volatility=vol_pct)
         g = c.call if kind == 'Call' else c.put
         return {'delta': g.delta, 'gamma': g.gamma, 'theta': g.theta, 'vega': g.vega}
@@ -147,7 +122,7 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
 def solve_iv(price, spot, strike, time_days, rate_pct=4.0):
     try:
         if time_days <= 0: return None
-        safe_days = max(0.5, time_days)
+        safe_days = max(0.01, time_days)
         c = mibian.BS([spot, strike, rate_pct, safe_days], callPrice=price)
         return c.impliedVolatility
     except: return None
@@ -175,7 +150,6 @@ def fetch_data(t):
 status_parts = st.session_state.sheet_msg.split("|")
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
 
-# Enhanced Header HTML
 st.markdown(f"""
 <div class="main-header">
     <div class="header-left">
@@ -191,7 +165,6 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- 5. MAIN CONTROLS ---
-# Use columns with gap for better spacing
 c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
 
 with c1:
@@ -213,7 +186,7 @@ with c3:
     st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 
 with c4:
-    st.write("") # Spacer to align button with inputs
+    st.write("") 
     st.write("")
     if st.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
         if query.upper() != st.session_state.ticker:
@@ -243,7 +216,6 @@ with st.expander("🎯 IV Calibrator"):
     cal_days = cal_c2.number_input("Days to Expiry", value=30)
     cal_price = cal_c3.number_input("Call Price ($)", value=1.00, step=0.05)
     
-    # Vertically center this button
     cal_c4.write("")
     cal_c4.write("")
     if cal_c4.button("Apply IV"):
@@ -265,37 +237,52 @@ if st.session_state.ref_data is not None:
     subset = ref[ref['Ticker'] == tkr]
     
     if not subset.empty:
-        valid_exps = sorted(subset['Expiry'].unique())
+        # --- FIX: Filter out Expired Dates (Yesterday or older) ---
+        today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # Keep only dates >= today
+        valid_subset = subset[subset['Expiry'] >= today_date]
+        
+        valid_exps = sorted(valid_subset['Expiry'].unique())
         exp_map = {d.strftime("%Y-%m-%d"): d for d in valid_exps}
         
-        current_exp = st.selectbox("Expiry Date", list(exp_map.keys()))
-        target_dt = exp_map[current_exp]
-        
-        day_chain = subset[subset['Expiry'] == target_dt]
-        calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')['Code']
-        puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')['Code']
-        
-        all_strikes = sorted(list(set(calls.index) | set(puts.index)))
-        df_view = pd.DataFrame({'STRIKE': all_strikes})
-        df_view['C_Code'] = df_view['STRIKE'].map(calls)
-        df_view['P_Code'] = df_view['STRIKE'].map(puts)
-        
-        days = (target_dt - datetime.now()).days
-        spot = st.session_state.spot_price
-        vol = st.session_state.vol_manual
-        
-        # Batch Calculation
-        c_px = [get_bs_price('Call', spot, s, days, vol) for s in df_view['STRIKE']]
-        c_delta = [get_greeks('Call', spot, s, days, vol)['delta'] for s in df_view['STRIKE']]
-        p_px = [get_bs_price('Put', spot, s, days, vol) for s in df_view['STRIKE']]
-        p_delta = [get_greeks('Put', spot, s, days, vol)['delta'] for s in df_view['STRIKE']]
+        if valid_exps:
+            current_exp = st.selectbox("Expiry Date", list(exp_map.keys()))
+            target_dt = exp_map[current_exp]
             
-        df_view['C_Price'] = c_px
-        df_view['C_Delta'] = c_delta
-        df_view['C_Vol'] = vol
-        df_view['P_Price'] = p_px
-        df_view['P_Delta'] = p_delta
-        df_view['P_Vol'] = vol
+            day_chain = valid_subset[valid_subset['Expiry'] == target_dt]
+            calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')['Code']
+            puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')['Code']
+            
+            all_strikes = sorted(list(set(calls.index) | set(puts.index)))
+            df_view = pd.DataFrame({'STRIKE': all_strikes})
+            df_view['C_Code'] = df_view['STRIKE'].map(calls)
+            df_view['P_Code'] = df_view['STRIKE'].map(puts)
+            
+            # --- FIX: Precise Days Calculation ---
+            # Set expiry to 4:00 PM (Market Close) for better precision
+            target_dt_close = target_dt.replace(hour=16, minute=0, second=0)
+            time_diff = target_dt_close - datetime.now()
+            
+            # Convert to Fractional Days (e.g. 0.5 days)
+            days = time_diff.total_seconds() / (24 * 3600)
+            
+            spot = st.session_state.spot_price
+            vol = st.session_state.vol_manual
+            
+            # Batch Calculation
+            c_px = [get_bs_price('Call', spot, s, days, vol) for s in df_view['STRIKE']]
+            c_delta = [get_greeks('Call', spot, s, days, vol)['delta'] for s in df_view['STRIKE']]
+            p_px = [get_bs_price('Put', spot, s, days, vol) for s in df_view['STRIKE']]
+            p_delta = [get_greeks('Put', spot, s, days, vol)['delta'] for s in df_view['STRIKE']]
+                
+            df_view['C_Price'] = c_px
+            df_view['C_Delta'] = c_delta
+            df_view['C_Vol'] = vol
+            df_view['P_Price'] = p_px
+            df_view['P_Delta'] = p_delta
+            df_view['P_Vol'] = vol
+        else:
+            st.warning("No future option expiries found for this ticker.")
 
 # RENDER
 if not df_view.empty and current_exp:
@@ -330,7 +317,7 @@ if not df_view.empty and current_exp:
         idx = selection.selection['rows'][0]
         row = disp.iloc[idx]
         d_obj = datetime.strptime(current_exp, "%Y-%m-%d")
-        days = (d_obj - datetime.now()).days
+        days = (d_obj - datetime.now()).days # Used for ticket text mostly
         
         st.info(f"Selected: **${row['STRIKE']} Strike**")
         
