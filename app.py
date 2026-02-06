@@ -10,11 +10,10 @@ from datetime import datetime, timedelta
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 
 # ==========================================
-# 🛑 GOOGLE SHEET CONFIG
+# 🛑 CONFIGURATION
 # ==========================================
-# Using the export format for the ID you provided
-SHEET_ID = "1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4"
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+# The link you provided:
+RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 st.markdown("""
 <style>
@@ -27,7 +26,10 @@ st.markdown("""
     .status-badge {
         font-size: 12px; background-color: #f1f5f9; color: #475569; 
         padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1;
+        cursor: help;
     }
+    .status-error { color: #dc2626; background-color: #fef2f2; border-color: #fecaca; }
+    .status-success { color: #16a34a; background-color: #f0fdf4; border-color: #bbf7d0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -38,31 +40,44 @@ if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
 if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.05
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
-if 'sheet_status' not in st.session_state: st.session_state.sheet_status = "Checking..."
+if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
 
 # --- 3. DATA LOADING ---
 
 @st.cache_data(ttl=300)
-def load_sheet(url):
+def load_sheet(raw_url):
     try:
-        # Only read first 5 cols to avoid "Expected 599 fields" error
-        df = pd.read_csv(url, usecols=[0, 1, 2, 3, 4], on_bad_lines='skip')
-        df.columns = ['Ticker', 'Expiry', 'Strike', 'Type', 'Code']
+        # Convert "Edit" link to "Export" link
+        if "/edit" in raw_url:
+            base = raw_url.split("/edit")[0]
+            # gid=0 ensures we get the first sheet
+            csv_url = f"{base}/export?format=csv&gid=0"
+        else:
+            csv_url = raw_url
+
+        # Load Data (Strict Column Limit)
+        df = pd.read_csv(csv_url, usecols=[0, 1, 2, 3, 4], on_bad_lines='skip')
         
-        # Clean
+        # Validate Headers
+        expected = ['Ticker', 'Expiry', 'Strike', 'Type', 'Code']
+        df.columns = expected # Force headers
+        
+        # Clean Data
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
         df['Type'] = df['Type'].astype(str).str.title().str.strip()
         df['Strike'] = df['Strike'].astype(str).str.replace('$', '', regex=False).astype(float)
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
-        return df, f"✅ Active ({len(df)} codes)"
+        
+        return df, f"success|{len(df)} Codes Active"
+    
     except Exception as e:
-        return pd.DataFrame(), f"❌ Connection Failed"
+        return pd.DataFrame(), f"error|{str(e)[:40]}"
 
-# Load Sheet
+# Initialize Data
 if st.session_state.ref_data is None:
-    data, status = load_sheet(SHEET_URL)
+    data, msg = load_sheet(RAW_SHEET_URL)
     st.session_state.ref_data = data
-    st.session_state.sheet_status = status
+    st.session_state.sheet_msg = msg
 
 def lookup_code(ticker, expiry_str, strike, kind):
     df = st.session_state.ref_data
@@ -89,7 +104,6 @@ def fetch_yahoo(t):
         hist = tk.history(period="1d")
         if not hist.empty:
             px = float(hist['Close'].iloc[-1])
-            # Check if options exist
             if tk.options:
                 return "OK", px, tk
             else:
@@ -113,13 +127,17 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct):
     except: return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
 
 # --- 5. UI HEADER ---
+status_parts = st.session_state.sheet_msg.split("|")
+status_cls = "status-success" if status_parts[0] == "success" else "status-error"
+status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
+
 st.markdown(f"""
 <div class="main-header">
     <div style="font-size: 22px; font-weight: 700;">TradersCircle <span style="font-weight: 300; opacity: 0.7;">| PRO</span></div>
     <div style="text-align: right;">
         <div style="font-size: 12px; opacity: 0.8;">{st.session_state.ticker}</div>
         <div style="font-size: 24px; font-weight: 700; color: #4ade80;">${st.session_state.spot_price:.2f}</div>
-        <div class="status-badge">Sheet: {st.session_state.sheet_status}</div>
+        <span class="status-badge {status_cls}" title="Sheet Status">Sheet: {status_txt}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -133,6 +151,12 @@ if c2.button("Load Chain", type="primary", use_container_width=True) or (query.u
         status, px, obj = fetch_yahoo(st.session_state.ticker)
         st.session_state.spot_price = px
         st.session_state.chain_obj = obj
+        
+        # Force re-load sheet on search (optional, helps debug)
+        data, msg = load_sheet(RAW_SHEET_URL)
+        st.session_state.ref_data = data
+        st.session_state.sheet_msg = msg
+        
         if status == "NO_CHAIN":
             st.warning(f"Price found (${px:.2f}), but Yahoo has no Options Data for {query}. Using Manual Mode.")
         elif status == "ERROR":
@@ -141,7 +165,7 @@ if c2.button("Load Chain", type="primary", use_container_width=True) or (query.u
 
 # --- 7. MAIN DISPLAY ---
 
-# A. OPTION CHAIN (If Available)
+# A. OPTION CHAIN
 if st.session_state.chain_obj:
     tk = st.session_state.chain_obj
     exps = tk.options
@@ -198,7 +222,7 @@ if st.session_state.chain_obj:
     else:
         st.warning("Yahoo returned empty option list.")
 
-# B. MANUAL BUILDER (Always Visible Fallback)
+# B. MANUAL BUILDER
 with st.expander("🛠 Manual Leg Builder (Use if Chain missing)", expanded=not st.session_state.chain_obj):
     with st.form("manual"):
         c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -249,3 +273,27 @@ if st.session_state.legs:
         st.caption("Controls")
         if st.button("Zoom 5%"): st.session_state.range_pct = 0.05
         if st.button("Zoom 15%"): st.session_state.range_pct = 0.15
+        ts = st.slider("Time Step", 0, 60, 15)
+    
+    with c_view:
+        center = st.session_state.spot_price
+        pct = st.session_state.range_pct
+        prices = np.linspace(center*(1-pct), center*(1+pct), 80)
+        p0, pF = [], []
+        for p in prices:
+            v0, vF = 0, 0
+            for leg in st.session_state.legs:
+                px = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'], 4.0)
+                v0 += (px - leg['Entry']) * leg['Qty'] * 100
+                tf = max(0, leg['Expiry'] - ts)
+                pxf = get_bs_price(leg['Type'], p, leg['Strike'], tf, leg['Vol'], 4.0)
+                vF += (pxf - leg['Entry']) * leg['Qty'] * 100
+            p0.append(v0)
+            pF.append(vF)
+            
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=prices, y=p0, name="Today", line=dict(color='#2980b9', width=3)))
+        if ts > 0: fig.add_trace(go.Scatter(x=prices, y=pF, name=f"T+{ts}d", line=dict(color='#e67e22', dash='dash')))
+        fig.add_vline(x=center, line_dash="dot", annotation_text="Spot")
+        fig.update_layout(height=350, template="plotly_white", margin=dict(t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
