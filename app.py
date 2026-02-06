@@ -12,7 +12,7 @@ st.set_page_config(layout="wide", page_title="TradersCircle Options")
 # ==========================================
 # 🛑 PASTE YOUR GOOGLE SHEET CSV LINK HERE
 # ==========================================
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing" 
+SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0IDc0Hp6qCRMxEK7qrIf5bkt0fOZ6i6_dCB7pz1Idc7v9dobpnvopZSzB0HWeEhcwq2YN9uZoAjyR/pub?gid=0&single=true&output=csv" 
 # ^ Replace the URL above with your actual link
 
 st.markdown("""
@@ -255,4 +255,5 @@ if st.session_state.legs:
         fig.add_vline(x=center, line_dash="dot", annotation_text="Spot")
         fig.update_layout(height=350, template="plotly_white", margin=dict(t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
+
 
