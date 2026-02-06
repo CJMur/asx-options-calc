@@ -10,53 +10,75 @@ from datetime import datetime, timedelta
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
-# --- CSS STYLING ---
+# --- CSS STYLING (The Fix) ---
 st.markdown("""
 <style>
-    .block-container { padding-top: 1rem; }
+    /* 1. Global Spacing Fix */
+    .block-container { 
+        padding-top: 2rem !important; 
+        padding-bottom: 5rem !important;
+    }
     
-    /* HEADER */
+    /* 2. Custom Header Box */
     .main-header {
         background-color: #0e1b32; 
-        padding: 1rem 1.5rem; 
+        padding: 1.5rem 2rem; 
         color: white;
-        border-radius: 8px; 
-        display: grid;
-        grid-template-columns: 1fr auto;
+        border-radius: 12px; 
+        display: flex;
+        justify-content: space-between;
         align-items: center;
-        gap: 1rem;
         margin-bottom: 2rem; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
-    .header-title { font-size: 22px; font-weight: 700; white-space: nowrap; }
+    .header-left { display: flex; flex-direction: column; }
+    .header-title { font-size: 24px; font-weight: 700; letter-spacing: 0.5px; }
+    .header-subtitle { font-size: 14px; opacity: 0.8; font-weight: 300; }
     
-    /* STATUS BADGE */
+    .header-right { text-align: right; }
+    .spot-price { font-size: 32px; font-weight: 700; color: #4ade80; text-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    .ticker-name { font-size: 16px; font-weight: 600; opacity: 0.9; }
+    
+    /* 3. Status Badge */
     .status-badge {
-        font-size: 11px; background-color: #f1f5f9; color: #475569; 
-        padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e1;
-        display: inline-block; margin-top: 4px;
+        font-size: 12px; padding: 4px 8px; border-radius: 6px; 
+        background-color: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+        display: inline-block; margin-top: 5px; color: #cbd5e1;
     }
-    .status-success { color: #16a34a; background-color: #f0fdf4; border-color: #bbf7d0; }
-    .status-error { color: #dc2626; background-color: #fef2f2; border-color: #fecaca; }
-    
-    /* BUTTON STYLING */
+
+    /* 4. SLIDER COLOR FIX (Hue Rotate Hack) */
+    /* This turns the default Streamlit RED slider into a BLUE/NEUTRAL slider 
+       without breaking the internal CSS structure */
+    div[data-baseweb="slider"] {
+        filter: hue-rotate(200deg) saturate(80%); 
+    }
+
+    /* 5. BUTTON STYLING */
+    /* Primary (Load Chain) - Dark Green */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; 
         color: white !important;
         border: none;
         font-weight: 600;
+        transition: all 0.2s;
     }
-    div[data-testid="stButton"] button[kind="secondary"] {
-        background-color: #f1f5f9 !important;
-        color: #0f172a !important;
-        border: 1px solid #cbd5e1 !important;
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #166534 !important;
+        transform: translateY(-1px);
     }
     
-    /* SLIDER OVERRIDE */
-    div[data-baseweb="slider"] div { background-color: #0e1b32 !important; }
+    /* Secondary (Clear, etc) - Neutral */
+    div[data-testid="stButton"] button[kind="secondary"] {
+        background-color: #f8fafc !important;
+        color: #334155 !important;
+        border: 1px solid #cbd5e1 !important;
+    }
 
-    /* TABLE TWEAKS */
+    /* 6. Clean Tables */
     .stDataFrame { border: none !important; }
+    
+    /* 7. Input Label Size Increase */
+    label { font-size: 14px !important; font-weight: 600 !important; color: #475569 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -131,7 +153,6 @@ def solve_iv(price, spot, strike, time_days, rate_pct=4.0):
     except: return None
 
 def fetch_data(t):
-    # Only fetch Yahoo if NOT in manual spot mode
     if st.session_state.manual_spot:
         return "MANUAL", st.session_state.spot_price, None
 
@@ -150,61 +171,60 @@ def fetch_data(t):
         else: return "SHEET", spot, None
     except: return "ERROR", 0.0, None
 
-# --- 4. HEADER WITH SPOT OVERRIDE ---
+# --- 4. HEADER ---
 status_parts = st.session_state.sheet_msg.split("|")
-status_cls = "status-success" if status_parts[0] == "success" else "status-error"
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
 
-# Custom Header UI to allow Spot Editing
-with st.container():
-    st.markdown(f"""
-    <div class="main-header">
-        <div class="header-title">TradersCircle <span style="font-weight: 300; opacity: 0.7;">| PRO</span></div>
-        <div class="header-info">
-            <div class="status-badge {status_cls}">{status_txt}</div>
-        </div>
+# Enhanced Header HTML
+st.markdown(f"""
+<div class="main-header">
+    <div class="header-left">
+        <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
+        <div class="header-subtitle">Option Chain & Strategy Builder</div>
     </div>
-    """, unsafe_allow_html=True)
+    <div class="header-right">
+        <div class="ticker-name">{st.session_state.ticker}</div>
+        <div class="spot-price">${st.session_state.spot_price:.2f}</div>
+        <div class="status-badge">{status_txt}</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-# --- 5. CONTROLS ---
-# Top Row: Search | Spot Price (Editable) | Volatility | Load
-c1, c2, c3, c4 = st.columns([1, 1, 2, 1])
+# --- 5. MAIN CONTROLS ---
+# Use columns with gap for better spacing
+c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
 
 with c1:
     query = st.text_input("Ticker Symbol", st.session_state.ticker)
 
 with c2:
-    # SPOT PRICE OVERRIDE
     new_spot = st.number_input(
         "Spot Price ($)", 
         value=float(st.session_state.spot_price), 
         format="%.2f",
         step=0.01,
-        help="Edit this manually to override Yahoo Finance data."
+        help="Edit to override Yahoo Finance data."
     )
-    # Check if user changed the price manually
     if new_spot != st.session_state.spot_price:
         st.session_state.spot_price = new_spot
         st.session_state.manual_spot = True
-        # Don't rerun immediately, let the flow continue or wait for button
 
 with c3:
     st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 
 with c4:
-    st.write("") 
+    st.write("") # Spacer to align button with inputs
     st.write("")
-    # If user searches NEW ticker, reset manual flag
     if st.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
         if query.upper() != st.session_state.ticker:
-            st.session_state.manual_spot = False # Reset on new ticker
+            st.session_state.manual_spot = False
         
         st.session_state.ticker = query.upper()
         
-        with st.spinner("Analyzing Market..."):
+        with st.spinner("Processing..."):
             source, px, obj = fetch_data(st.session_state.ticker)
             if not st.session_state.manual_spot:
-                st.session_state.spot_price = px # Only update if not overridden
+                st.session_state.spot_price = px
             
             st.session_state.chain_obj = obj
             st.session_state.data_source = source
@@ -214,25 +234,28 @@ with c4:
             st.rerun()
 
 # --- 6. IV CALIBRATION EXPANDER ---
-with st.expander("🎯 IV Calibrator (Reverse Engineer from Market Price)"):
-    st.caption("Enter a real option price from the market to calculate the exact Implied Volatility.")
+with st.expander("🎯 IV Calibrator"):
+    st.caption("Calculate Implied Volatility from a known option price.")
     cal_c1, cal_c2, cal_c3, cal_c4 = st.columns(4)
     
     atm_strike = round(st.session_state.spot_price, 0)
-    cal_strike = cal_c1.number_input("ATM Strike ($)", value=atm_strike)
+    cal_strike = cal_c1.number_input("Strike ($)", value=atm_strike)
     cal_days = cal_c2.number_input("Days to Expiry", value=30)
-    cal_price = cal_c3.number_input("Market Price of Call ($)", value=1.00, step=0.05)
+    cal_price = cal_c3.number_input("Call Price ($)", value=1.00, step=0.05)
     
-    if cal_c4.button("Calculate & Apply"):
+    # Vertically center this button
+    cal_c4.write("")
+    cal_c4.write("")
+    if cal_c4.button("Apply IV"):
         new_iv = solve_iv(cal_price, st.session_state.spot_price, cal_strike, cal_days)
         if new_iv:
             st.session_state.vol_manual = new_iv
-            st.success(f"Calculated IV: {new_iv:.2f}% (Applied to Slider)")
+            st.success(f"Calibrated! IV set to {new_iv:.2f}%")
             st.rerun()
         else:
-            st.error("Could not calculate IV")
+            st.error("Calculation failed. Check inputs.")
 
-# --- 7. ADVANCED CHAIN DISPLAY ---
+# --- 7. TABLE DISPLAY ---
 df_view = pd.DataFrame()
 current_exp = None
 
@@ -261,13 +284,11 @@ if st.session_state.ref_data is not None:
         spot = st.session_state.spot_price
         vol = st.session_state.vol_manual
         
-        c_px, c_delta, p_px, p_delta = [], [], [], []
-        
-        for s in df_view['STRIKE']:
-            c_px.append(get_bs_price('Call', spot, s, days, vol))
-            c_delta.append(get_greeks('Call', spot, s, days, vol)['delta'])
-            p_px.append(get_bs_price('Put', spot, s, days, vol))
-            p_delta.append(get_greeks('Put', spot, s, days, vol)['delta'])
+        # Batch Calculation
+        c_px = [get_bs_price('Call', spot, s, days, vol) for s in df_view['STRIKE']]
+        c_delta = [get_greeks('Call', spot, s, days, vol)['delta'] for s in df_view['STRIKE']]
+        p_px = [get_bs_price('Put', spot, s, days, vol) for s in df_view['STRIKE']]
+        p_delta = [get_greeks('Put', spot, s, days, vol)['delta'] for s in df_view['STRIKE']]
             
         df_view['C_Price'] = c_px
         df_view['C_Delta'] = c_delta
@@ -276,13 +297,13 @@ if st.session_state.ref_data is not None:
         df_view['P_Delta'] = p_delta
         df_view['P_Vol'] = vol
 
-# RENDER TABLE
+# RENDER
 if not df_view.empty and current_exp:
     center = st.session_state.spot_price
     if center > 0:
         df_view = df_view[(df_view['STRIKE'] > center*0.85) & (df_view['STRIKE'] < center*1.15)]
     
-    st.markdown(f"**Chain: {current_exp}** (Spot Used: ${center:.2f})")
+    st.markdown(f"**Chain: {current_exp}** (Spot: ${center:.2f})")
     
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
@@ -331,29 +352,28 @@ if not df_view.empty and current_exp:
         if b3.button("Buy Put"): add("Buy", "Put", row['P_Price'], p_c)
         if b4.button("Sell Put"): add("Sell", "Put", row['P_Price'], p_c)
 
-# --- 8. PORTFOLIO ---
+# --- 8. PORTFOLIO & MATRIX ---
 if st.session_state.legs:
     st.markdown("---")
     
-    c_tick, c_port = st.columns([1, 2])
+    c_tick, c_port = st.columns([1, 2], gap="large")
     
     with c_tick:
+        st.subheader("Ticket")
         ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
         for leg in st.session_state.legs:
             direction = "Buy" if leg['Qty'] > 0 else "Sell"
             qty = abs(leg['Qty'])
             ticket_text += f"{direction} {qty}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.3f}\n"
         
-        st.caption("Trade Ticket (Copy)")
-        st.code(ticket_text, language="text")
+        st.text_area("Copy Trade", ticket_text, height=150)
         
         if st.button("Clear Portfolio", type="secondary"):
             st.session_state.legs = []
             st.rerun()
 
     with c_port:
-        st.caption("Active Legs (Edit Qty or Check 'Remove')")
-        
+        st.subheader("Active Legs")
         df_port = pd.DataFrame(st.session_state.legs)
         if 'Remove' not in df_port.columns: df_port['Remove'] = False
 
@@ -380,19 +400,19 @@ if st.session_state.legs:
         else:
             st.session_state.legs = edited_df.to_dict('records')
 
-    # --- C. PAYOFF MATRIX ---
-    st.markdown("### 📊 Payoff Matrix")
+    # MATRIX
+    st.markdown("---")
+    st.subheader("Payoff Matrix")
     m_c1, m_c2, m_c3 = st.columns(3)
-    time_step = m_c1.slider("Time Increment (Days)", 1, 30, 7)
+    time_step = m_c1.slider("Time Step (Days)", 1, 30, 7)
     range_pct = m_c2.select_slider("Price Range", options=[0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%")
     
     with m_c3:
-        st.write("Volatility Modifier")
         c_v1, c_v2, c_v3 = st.columns(3)
+        st.write("Vol Scenario")
         if c_v1.button("-10%"): st.session_state.matrix_vol_mod -= 10
-        if c_v2.button("Reset"): st.session_state.matrix_vol_mod = 0
+        if c_v2.button("Flat"): st.session_state.matrix_vol_mod = 0
         if c_v3.button("+10%"): st.session_state.matrix_vol_mod += 10
-        st.caption(f"Current Mod: {st.session_state.matrix_vol_mod:+}%")
 
     spot = st.session_state.spot_price
     prices = np.linspace(spot * (1 - range_pct), spot * (1 + range_pct), 12)
@@ -427,9 +447,8 @@ if st.session_state.legs:
         height=450
     )
 
-    # --- D. PAYOFF DIAGRAM ---
-    st.markdown("### 📈 Payoff Diagram")
-    
+    # CHART
+    st.markdown("### Payoff Diagram")
     chart_prices = np.linspace(spot * (1 - range_pct*1.5), spot * (1 + range_pct*1.5), 100)
     pnl_today = []
     pnl_expiry = []
