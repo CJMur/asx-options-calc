@@ -47,11 +47,14 @@ st.markdown("""
     }
 
     /* 4. SLIDER COLOR FIX (Hue Rotate Hack) */
+    /* This turns the default Streamlit RED slider into a BLUE/NEUTRAL slider 
+       without breaking the internal CSS structure */
     div[data-baseweb="slider"] {
         filter: hue-rotate(200deg) saturate(80%); 
     }
 
     /* 5. BUTTON STYLING */
+    /* Primary (Load Chain) - Dark Green */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; 
         color: white !important;
@@ -64,6 +67,7 @@ st.markdown("""
         transform: translateY(-1px);
     }
     
+    /* Secondary (Clear, etc) - Neutral */
     div[data-testid="stButton"] button[kind="secondary"] {
         background-color: #f8fafc !important;
         color: #334155 !important;
@@ -171,6 +175,7 @@ def fetch_data(t):
 status_parts = st.session_state.sheet_msg.split("|")
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
 
+# Enhanced Header HTML
 st.markdown(f"""
 <div class="main-header">
     <div class="header-left">
@@ -186,6 +191,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- 5. MAIN CONTROLS ---
+# Use columns with gap for better spacing
 c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
 
 with c1:
@@ -207,7 +213,7 @@ with c3:
     st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 
 with c4:
-    st.write("") 
+    st.write("") # Spacer to align button with inputs
     st.write("")
     if st.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
         if query.upper() != st.session_state.ticker:
@@ -237,6 +243,7 @@ with st.expander("🎯 IV Calibrator"):
     cal_days = cal_c2.number_input("Days to Expiry", value=30)
     cal_price = cal_c3.number_input("Call Price ($)", value=1.00, step=0.05)
     
+    # Vertically center this button
     cal_c4.write("")
     cal_c4.write("")
     if cal_c4.button("Apply IV"):
@@ -406,7 +413,6 @@ if st.session_state.legs:
         if c_v1.button("-10%"): st.session_state.matrix_vol_mod -= 10
         if c_v2.button("Flat"): st.session_state.matrix_vol_mod = 0
         if c_v3.button("+10%"): st.session_state.matrix_vol_mod += 10
-        st.caption(f"Current Mod: {st.session_state.matrix_vol_mod:+}%")
 
     spot = st.session_state.spot_price
     prices = np.linspace(spot * (1 - range_pct), spot * (1 + range_pct), 12)
