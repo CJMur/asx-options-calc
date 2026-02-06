@@ -10,37 +10,22 @@ from datetime import datetime, timedelta
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
-# --- CSS STYLING (Stable) ---
+# --- CSS STYLING ---
 st.markdown("""
 <style>
     .block-container { padding-top: 2rem; }
-    
-    /* Header */
     .header-box {
-        padding: 1.5rem;
-        background-color: #0e1b32;
-        border-radius: 10px;
-        color: white;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        padding: 1.5rem; background-color: #0e1b32; border-radius: 10px; color: white;
+        margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .header-title { font-size: 24px; font-weight: 700; margin: 0; }
     .header-sub { font-size: 14px; opacity: 0.8; margin: 0; }
-    
-    /* Badge */
     .status-tag {
-        background-color: rgba(255,255,255,0.15);
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-size: 12px;
-        font-family: monospace;
+        background-color: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 4px;
+        font-size: 12px; font-family: monospace;
     }
-    
-    /* Native Button Override */
     div[data-testid="stButton"] button[kind="primary"] {
-        background-color: #15803d !important;
-        border: none;
-        transition: background-color 0.2s;
+        background-color: #15803d !important; border: none;
     }
     div[data-testid="stButton"] button[kind="primary"]:hover {
         background-color: #166534 !important;
@@ -89,44 +74,25 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- MATH ENGINE (ROBUST VERSION) ---
+# --- MATH ENGINE (Standard) ---
 def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
-    # 1. Calculate Intrinsic Value (Minimum possible value)
     intrinsic = 0.0
     try:
-        s = float(spot)
-        k = float(strike)
-        if kind == 'Call': intrinsic = max(0.0, s - k)
-        else: intrinsic = max(0.0, k - s)
-    except:
-        return 0.0
-
-    # 2. Try Black-Scholes
-    try:
-        t = float(time_days)
-        v = float(vol_pct)
+        s, k = float(spot), float(strike)
+        intrinsic = max(0.0, s - k) if kind == 'Call' else max(0.0, k - s)
         
-        # If expired or close to it, return intrinsic
-        if t <= 0.5: 
-            return intrinsic
+        t, v = float(time_days), float(vol_pct)
+        if t <= 0.5: return intrinsic
             
         c = mibian.BS([s, k, rate_pct, t], volatility=v)
         price = c.callPrice if kind == 'Call' else c.putPrice
-        
-        # Sanity check: Option price can't be less than intrinsic
         return max(intrinsic, price)
-        
-    except:
-        # Fallback to intrinsic if math fails (e.g. overflow)
-        return intrinsic
+    except: return intrinsic
 
 def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     try:
         t = max(0.5, float(time_days))
-        s = float(spot)
-        k = float(strike)
-        v = float(vol_pct)
-        
+        s, k, v = float(spot), float(strike), float(vol_pct)
         c = mibian.BS([s, k, rate_pct, t], volatility=v)
         g = c.call if kind == 'Call' else c.put
         return {'delta': g.delta, 'gamma': g.gamma, 'theta': g.theta, 'vega': g.vega}
@@ -182,36 +148,22 @@ with st.container():
 
 # --- 5. CONTROLS ---
 c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
-
-with c1:
-    query = st.text_input("Ticker", st.session_state.ticker)
-
+with c1: query = st.text_input("Ticker", st.session_state.ticker)
 with c2:
-    new_spot = st.number_input(
-        "Spot Price ($)", 
-        value=float(st.session_state.spot_price), 
-        format="%.2f",
-        step=0.01
-    )
+    new_spot = st.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
     if new_spot != st.session_state.spot_price:
         st.session_state.spot_price = new_spot
         st.session_state.manual_spot = True
-
-with c3:
-    st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
-
+with c3: st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 with c4:
     st.write("") 
     st.write("")
     if st.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
-        if query.upper() != st.session_state.ticker:
-            st.session_state.manual_spot = False
+        if query.upper() != st.session_state.ticker: st.session_state.manual_spot = False
         st.session_state.ticker = query.upper()
-        
         with st.spinner("Fetching Data..."):
             source, px, obj = fetch_data(st.session_state.ticker)
-            if not st.session_state.manual_spot:
-                st.session_state.spot_price = px
+            if not st.session_state.manual_spot: st.session_state.spot_price = px
             st.session_state.chain_obj = obj
             st.session_state.data_source = source
             data, msg = load_sheet(RAW_SHEET_URL)
@@ -219,23 +171,36 @@ with c4:
             st.session_state.sheet_msg = msg
             st.rerun()
 
-# --- 6. IV CALIBRATOR ---
-with st.expander("🎯 IV Calibrator"):
-    cc1, cc2, cc3, cc4 = st.columns(4)
-    cal_strike = cc1.number_input("ATM Strike", value=round(st.session_state.spot_price,0))
-    cal_days = cc2.number_input("Days to Exp", value=30)
-    cal_price = cc3.number_input("Call Price", value=1.00)
+# --- 6. 🕵️‍♀️ DIAGNOSTICS PANEL (BUG FINDER) ---
+with st.expander("🕵️‍♀️ Diagnostics (Troubleshoot Zero Values)", expanded=True):
+    st.write("If Delta/Price is zero, check the test below:")
     
-    cc4.write("")
-    cc4.write("")
-    if cc4.button("Apply"):
-        new_iv = solve_iv(cal_price, st.session_state.spot_price, cal_strike, cal_days)
-        if new_iv:
-            st.session_state.vol_manual = new_iv
-            st.success(f"IV Updated: {new_iv:.2f}%")
-            st.rerun()
-        else:
-            st.error("Calc Failed")
+    # Setup Test Variables
+    test_spot = st.session_state.spot_price
+    test_vol = st.session_state.vol_manual
+    test_strike = round(test_spot, 2)
+    test_days = 30
+    
+    d_c1, d_c2 = st.columns(2)
+    with d_c1:
+        st.markdown(f"""
+        **Inputs being used:**
+        * Spot: `{test_spot}` (Type: {type(test_spot)})
+        * Strike: `{test_strike}` (Type: {type(test_strike)})
+        * Days: `{test_days}` (Type: {type(test_days)})
+        * Vol: `{test_vol}` (Type: {type(test_vol)})
+        """)
+        
+    with d_c2:
+        if st.button("Run Test Calculation"):
+            try:
+                # Direct Library Call (No Try/Except to force error show)
+                c = mibian.BS([test_spot, test_strike, 4.0, test_days], volatility=test_vol)
+                st.success(f"✅ Success! Calculated Call Price: ${c.callPrice:.4f}")
+                st.success(f"✅ Success! Calculated Delta: {c.call.delta:.4f}")
+            except Exception as e:
+                st.error(f"❌ CRITICAL ERROR: {str(e)}")
+                st.code(f"Error Type: {type(e)}\nDetails: {e}")
 
 # --- 7. TABLE ---
 df_view = pd.DataFrame()
@@ -246,7 +211,6 @@ if st.session_state.ref_data is not None:
     tkr = st.session_state.ticker.replace(".AX", "")
     subset = ref[ref['Ticker'] == tkr]
     
-    # Filter Future Expiries
     today = datetime.now().replace(hour=0, minute=0, second=0)
     subset = subset[subset['Expiry'] >= today]
     
@@ -256,8 +220,6 @@ if st.session_state.ref_data is not None:
         
         current_exp = st.selectbox("Expiry", list(exp_map.keys()))
         target_dt = exp_map[current_exp]
-        
-        # Calculate Days (Integer is safer)
         days_diff = (target_dt - today).days
         
         day_chain = subset[subset['Expiry'] == target_dt]
@@ -340,14 +302,11 @@ if not df_view.empty and current_exp:
 if st.session_state.legs:
     st.markdown("---")
     c_tick, c_port = st.columns([1, 2], gap="medium")
-    
     with c_tick:
         st.subheader("Ticket")
         ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
         for leg in st.session_state.legs:
-            direction = "Buy" if leg['Qty'] > 0 else "Sell"
-            qty = abs(leg['Qty'])
-            ticket_text += f"{direction} {qty}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.3f}\n"
+            ticket_text += f"{'Buy' if leg['Qty']>0 else 'Sell'} {abs(leg['Qty'])}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.3f}\n"
         st.text_area("Copy", ticket_text, height=100)
         if st.button("Clear Portfolio", type="secondary"):
             st.session_state.legs = []
@@ -358,20 +317,7 @@ if st.session_state.legs:
         df_port = pd.DataFrame(st.session_state.legs)
         if 'Remove' not in df_port.columns: df_port['Remove'] = False
         
-        edited_df = st.data_editor(
-            df_port,
-            column_config={
-                "Remove": st.column_config.CheckboxColumn("Del", default=False, width="small"),
-                "Code": st.column_config.TextColumn("Code"),
-                "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
-                "Vol": st.column_config.NumberColumn("Vol", format="%.1f%%"),
-                "Strike": st.column_config.NumberColumn("Strike", format="%.2f"),
-            },
-            use_container_width=True,
-            num_rows="dynamic",
-            key="port_edit"
-        )
-        
+        edited_df = st.data_editor(df_port, key="port_edit", num_rows="dynamic", use_container_width=True)
         if edited_df['Remove'].any():
             st.session_state.legs = edited_df[~edited_df['Remove']].drop(columns=['Remove']).to_dict('records')
             st.rerun()
@@ -398,26 +344,19 @@ if st.session_state.legs:
                 rem_days = max(0, leg['Expiry'] - d)
                 exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, leg['Vol'])
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * 100
-            
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
             row[col_name] = pnl
         matrix_data.append(row)
         
     df_mx = pd.DataFrame(matrix_data).set_index("Price")
-    
-    # Simple Gradient Styling (Robust)
-    st.dataframe(
-        df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"),
-        use_container_width=True
-    )
+    st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True)
 
     # CHART
     st.markdown("### Chart")
     chart_prices = np.linspace(spot * (1 - range_pct*1.5), spot * (1 + range_pct*1.5), 100)
     pnl_today = []
     pnl_expiry = []
-    
     for p in chart_prices:
         val_t0 = 0
         val_tF = 0
@@ -426,8 +365,7 @@ if st.session_state.legs:
             price_t0 = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
             val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * 100
             # Expiry
-            if leg['Type'] == 'Call': price_tf = max(0, p - leg['Strike'])
-            else: price_tf = max(0, leg['Strike'] - p)
+            price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
             val_tF += (price_tf - leg['Entry']) * leg['Qty'] * 100
         pnl_today.append(val_t0)
         pnl_expiry.append(val_tF)
