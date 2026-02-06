@@ -40,28 +40,21 @@ st.markdown("""
     .status-error { color: #dc2626; background-color: #fef2f2; border-color: #fecaca; }
     
     /* BUTTON STYLING */
-    /* Target PRIMARY buttons (Load Chain) -> Dark Green */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; 
         color: white !important;
         border: none;
         font-weight: 600;
     }
-    div[data-testid="stButton"] button[kind="primary"]:hover {
-        background-color: #166534 !important;
-    }
-
-    /* Target SECONDARY buttons (Clear, Zoom, etc) -> Neutral Tone */
     div[data-testid="stButton"] button[kind="secondary"] {
         background-color: #f1f5f9 !important;
         color: #0f172a !important;
         border: 1px solid #cbd5e1 !important;
     }
-    div[data-testid="stButton"] button[kind="secondary"]:hover {
-        background-color: #e2e8f0 !important;
-        border-color: #94a3b8 !important;
-    }
     
+    /* SLIDER OVERRIDE */
+    div[data-baseweb="slider"] div { background-color: #0e1b32 !important; }
+
     /* TABLE TWEAKS */
     .stDataFrame { border: none !important; }
 </style>
@@ -78,6 +71,7 @@ if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializi
 if 'data_source' not in st.session_state: st.session_state.data_source = "None"
 if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 33.5
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
+if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 
 # --- 3. DATA ENGINE ---
 @st.cache_data(ttl=600)
@@ -128,7 +122,19 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
         return {'delta': g.delta, 'gamma': g.gamma, 'theta': g.theta, 'vega': g.vega}
     except: return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
 
+def solve_iv(price, spot, strike, time_days, rate_pct=4.0):
+    try:
+        if time_days <= 0: return None
+        safe_days = max(0.5, time_days)
+        c = mibian.BS([spot, strike, rate_pct, safe_days], callPrice=price)
+        return c.impliedVolatility
+    except: return None
+
 def fetch_data(t):
+    # Only fetch Yahoo if NOT in manual spot mode
+    if st.session_state.manual_spot:
+        return "MANUAL", st.session_state.spot_price, None
+
     clean = t.upper().replace(".AX", "").strip()
     sym = f"{clean}.AX"
     spot = 0.0
@@ -144,43 +150,62 @@ def fetch_data(t):
         else: return "SHEET", spot, None
     except: return "ERROR", 0.0, None
 
-# --- 4. HEADER ---
+# --- 4. HEADER WITH SPOT OVERRIDE ---
 status_parts = st.session_state.sheet_msg.split("|")
 status_cls = "status-success" if status_parts[0] == "success" else "status-error"
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
 
-st.markdown(f"""
-<div class="main-header">
-    <div class="header-title">
-        TradersCircle <span style="font-weight: 300; opacity: 0.7;">| PRO</span>
+# Custom Header UI to allow Spot Editing
+with st.container():
+    st.markdown(f"""
+    <div class="main-header">
+        <div class="header-title">TradersCircle <span style="font-weight: 300; opacity: 0.7;">| PRO</span></div>
+        <div class="header-info">
+            <div class="status-badge {status_cls}">{status_txt}</div>
+        </div>
     </div>
-    <div class="header-info">
-        <div style="font-size: 14px; opacity: 0.9;">{st.session_state.ticker}</div>
-        <div style="font-size: 28px; font-weight: 700; color: #4ade80;">${st.session_state.spot_price:.2f}</div>
-        <div class="status-badge {status_cls}">{status_txt}</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 # --- 5. CONTROLS ---
-# Using columns to align Ticker Input, Vol Slider, and Load Button
-c_search, c_vol, c_btn = st.columns([1, 2, 1])
+# Top Row: Search | Spot Price (Editable) | Volatility | Load
+c1, c2, c3, c4 = st.columns([1, 1, 2, 1])
 
-with c_search:
+with c1:
     query = st.text_input("Ticker Symbol", st.session_state.ticker)
 
-with c_vol:
+with c2:
+    # SPOT PRICE OVERRIDE
+    new_spot = st.number_input(
+        "Spot Price ($)", 
+        value=float(st.session_state.spot_price), 
+        format="%.2f",
+        step=0.01,
+        help="Edit this manually to override Yahoo Finance data."
+    )
+    # Check if user changed the price manually
+    if new_spot != st.session_state.spot_price:
+        st.session_state.spot_price = new_spot
+        st.session_state.manual_spot = True
+        # Don't rerun immediately, let the flow continue or wait for button
+
+with c3:
     st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 
-with c_btn:
-    # Adding a little vertical spacer so the button aligns with the input boxes
+with c4:
     st.write("") 
     st.write("")
+    # If user searches NEW ticker, reset manual flag
     if st.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
+        if query.upper() != st.session_state.ticker:
+            st.session_state.manual_spot = False # Reset on new ticker
+        
         st.session_state.ticker = query.upper()
+        
         with st.spinner("Analyzing Market..."):
             source, px, obj = fetch_data(st.session_state.ticker)
-            st.session_state.spot_price = px
+            if not st.session_state.manual_spot:
+                st.session_state.spot_price = px # Only update if not overridden
+            
             st.session_state.chain_obj = obj
             st.session_state.data_source = source
             data, msg = load_sheet(RAW_SHEET_URL)
@@ -188,11 +213,30 @@ with c_btn:
             st.session_state.sheet_msg = msg
             st.rerun()
 
-# --- 6. ADVANCED CHAIN DISPLAY ---
+# --- 6. IV CALIBRATION EXPANDER ---
+with st.expander("🎯 IV Calibrator (Reverse Engineer from Market Price)"):
+    st.caption("Enter a real option price from the market to calculate the exact Implied Volatility.")
+    cal_c1, cal_c2, cal_c3, cal_c4 = st.columns(4)
+    
+    atm_strike = round(st.session_state.spot_price, 0)
+    cal_strike = cal_c1.number_input("ATM Strike ($)", value=atm_strike)
+    cal_days = cal_c2.number_input("Days to Expiry", value=30)
+    cal_price = cal_c3.number_input("Market Price of Call ($)", value=1.00, step=0.05)
+    
+    if cal_c4.button("Calculate & Apply"):
+        new_iv = solve_iv(cal_price, st.session_state.spot_price, cal_strike, cal_days)
+        if new_iv:
+            st.session_state.vol_manual = new_iv
+            st.success(f"Calculated IV: {new_iv:.2f}% (Applied to Slider)")
+            st.rerun()
+        else:
+            st.error("Could not calculate IV")
+
+# --- 7. ADVANCED CHAIN DISPLAY ---
 df_view = pd.DataFrame()
 current_exp = None
 
-if st.session_state.data_source == "SHEET":
+if st.session_state.ref_data is not None:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     subset = ref[ref['Ticker'] == tkr]
@@ -238,7 +282,7 @@ if not df_view.empty and current_exp:
     if center > 0:
         df_view = df_view[(df_view['STRIKE'] > center*0.85) & (df_view['STRIKE'] < center*1.15)]
     
-    st.markdown(f"**Chain: {current_exp}**")
+    st.markdown(f"**Chain: {current_exp}** (Spot Used: ${center:.2f})")
     
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
@@ -281,14 +325,13 @@ if not df_view.empty and current_exp:
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
         p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
         
-        # Action Buttons (Using neutral secondary buttons except where emphasized)
         b1, b2, b3, b4 = st.columns(4)
         if b1.button("Buy Call"): add("Buy", "Call", row['C_Price'], c_c)
         if b2.button("Sell Call"): add("Sell", "Call", row['C_Price'], c_c)
         if b3.button("Buy Put"): add("Buy", "Put", row['P_Price'], p_c)
         if b4.button("Sell Put"): add("Sell", "Put", row['P_Price'], p_c)
 
-# --- 7. PORTFOLIO ---
+# --- 8. PORTFOLIO ---
 if st.session_state.legs:
     st.markdown("---")
     
