@@ -10,9 +10,8 @@ from datetime import datetime, timedelta
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 
 # ==========================================
-# 🛑 YOUR GOOGLE SHEET LINK IS SET HERE
+# 🛑 YOUR GOOGLE SHEET LINK
 # ==========================================
-# We use the 'export' format to ensure it reads as a clean CSV file
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/export?format=csv"
 
 st.markdown("""
@@ -39,8 +38,7 @@ if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 @st.cache_data(ttl=600)
 def load_reference_data(url):
     try:
-        # Load columns A-E only (Ticker, Expiry, Strike, Type, Code)
-        # on_bad_lines='skip' ensures empty rows don't crash the app
+        # Load columns A-E only
         df = pd.read_csv(url, usecols=[0, 1, 2, 3, 4], on_bad_lines='skip')
         
         # Standardize Header Names
@@ -48,8 +46,7 @@ def load_reference_data(url):
         
         # Clean Data Types for Matching
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
-        df['Type'] = df['Type'].astype(str).str.title().str.strip() # "Call"/"Put"
-        # Remove '$' sign if present in strike
+        df['Type'] = df['Type'].astype(str).str.title().str.strip() 
         df['Strike'] = df['Strike'].astype(str).str.replace('$', '').astype(float)
         
         # Flexible Date Parsing
@@ -57,7 +54,6 @@ def load_reference_data(url):
         
         return df
     except Exception as e:
-        # Silent fail - returns empty so app keeps working manually
         return pd.DataFrame()
 
 # Load Data on Startup
@@ -72,11 +68,3 @@ def lookup_code(ticker, expiry_str, strike, kind):
         target_date = pd.to_datetime(expiry_str)
         
         # Filter Logic
-        mask = (
-            (df['Ticker'] == ticker.replace(".AX","")) &
-            (df['Type'] == kind) &
-            (np.isclose(df['Strike'], strike, atol=0.01)) & # Floating point tolerance
-            (df['Expiry'] == target_date)
-        )
-        
-        results = df
