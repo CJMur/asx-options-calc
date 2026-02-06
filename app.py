@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import mibian
 import yfinance as yf
 from datetime import datetime, timedelta
+from scipy.stats import norm # Standard Math Library
+import math
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -13,7 +14,7 @@ RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--Ivo
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    .block-container { padding-top: 2rem; }
+    .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
     .header-box {
         padding: 1.5rem; background-color: #0e1b32; border-radius: 10px; color: white;
         margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -27,9 +28,10 @@ st.markdown("""
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; border: none;
     }
-    div[data-testid="stButton"] button[kind="primary"]:hover {
-        background-color: #166534 !important;
+    div[data-testid="stButton"] button[kind="secondary"] {
+        background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
+    .stDataFrame { border: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,37 +76,54 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- MATH ENGINE (Standard) ---
-def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
-    intrinsic = 0.0
+# --- 4. MANUAL MATH ENGINE (NO MIBIAN) ---
+def black_scholes(S, K, T, r, sigma, option_type='Call'):
+    """
+    S: Spot Price
+    K: Strike Price
+    T: Time to Expiry (in years)
+    r: Risk-free rate (decimal, e.g. 0.04)
+    sigma: Volatility (decimal, e.g. 0.20)
+    """
     try:
-        s, k = float(spot), float(strike)
-        intrinsic = max(0.0, s - k) if kind == 'Call' else max(0.0, k - s)
+        if T <= 0:
+            return max(0, S - K) if option_type == 'Call' else max(0, K - S)
         
-        t, v = float(time_days), float(vol_pct)
-        if t <= 0.5: return intrinsic
-            
-        c = mibian.BS([s, k, rate_pct, t], volatility=v)
-        price = c.callPrice if kind == 'Call' else c.putPrice
-        return max(intrinsic, price)
-    except: return intrinsic
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        
+        if option_type == 'Call':
+            price = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+        else:
+            price = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        return price
+    except:
+        return 0.0
+
+def calculate_delta(S, K, T, r, sigma, option_type='Call'):
+    try:
+        if T <= 0: return 0.0
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        if option_type == 'Call':
+            return norm.cdf(d1)
+        else:
+            return norm.cdf(d1) - 1
+    except:
+        return 0.0
+
+# Wrappers to match old structure
+def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
+    T = max(0.001, time_days / 365.0) # Convert days to years
+    v = vol_pct / 100.0
+    r = rate_pct / 100.0
+    return black_scholes(float(spot), float(strike), T, r, v, kind)
 
 def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
-    try:
-        t = max(0.5, float(time_days))
-        s, k, v = float(spot), float(strike), float(vol_pct)
-        c = mibian.BS([s, k, rate_pct, t], volatility=v)
-        g = c.call if kind == 'Call' else c.put
-        return {'delta': g.delta, 'gamma': g.gamma, 'theta': g.theta, 'vega': g.vega}
-    except: return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
-
-def solve_iv(price, spot, strike, time_days, rate_pct=4.0):
-    try:
-        if time_days <= 0: return None
-        safe_days = max(0.5, float(time_days))
-        c = mibian.BS([float(spot), float(strike), rate_pct, safe_days], callPrice=float(price))
-        return c.impliedVolatility
-    except: return None
+    T = max(0.001, time_days / 365.0)
+    v = vol_pct / 100.0
+    r = rate_pct / 100.0
+    delta = calculate_delta(float(spot), float(strike), T, r, v, kind)
+    return {'delta': delta}
 
 def fetch_data(t):
     if st.session_state.manual_spot:
@@ -125,7 +144,7 @@ def fetch_data(t):
         else: return "SHEET", spot, None
     except: return "ERROR", 0.0, None
 
-# --- 4. HEADER ---
+# --- 5. HEADER ---
 status_parts = st.session_state.sheet_msg.split("|")
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
 
@@ -146,7 +165,7 @@ with st.container():
     </div>
     """, unsafe_allow_html=True)
 
-# --- 5. CONTROLS ---
+# --- 6. CONTROLS ---
 c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
 with c1: query = st.text_input("Ticker", st.session_state.ticker)
 with c2:
@@ -171,38 +190,7 @@ with c4:
             st.session_state.sheet_msg = msg
             st.rerun()
 
-# --- 6. 🕵️‍♀️ DIAGNOSTICS PANEL (BUG FINDER) ---
-with st.expander("🕵️‍♀️ Diagnostics (Troubleshoot Zero Values)", expanded=True):
-    st.write("If Delta/Price is zero, check the test below:")
-    
-    # Setup Test Variables
-    test_spot = st.session_state.spot_price
-    test_vol = st.session_state.vol_manual
-    test_strike = round(test_spot, 2)
-    test_days = 30
-    
-    d_c1, d_c2 = st.columns(2)
-    with d_c1:
-        st.markdown(f"""
-        **Inputs being used:**
-        * Spot: `{test_spot}` (Type: {type(test_spot)})
-        * Strike: `{test_strike}` (Type: {type(test_strike)})
-        * Days: `{test_days}` (Type: {type(test_days)})
-        * Vol: `{test_vol}` (Type: {type(test_vol)})
-        """)
-        
-    with d_c2:
-        if st.button("Run Test Calculation"):
-            try:
-                # Direct Library Call (No Try/Except to force error show)
-                c = mibian.BS([test_spot, test_strike, 4.0, test_days], volatility=test_vol)
-                st.success(f"✅ Success! Calculated Call Price: ${c.callPrice:.4f}")
-                st.success(f"✅ Success! Calculated Delta: {c.call.delta:.4f}")
-            except Exception as e:
-                st.error(f"❌ CRITICAL ERROR: {str(e)}")
-                st.code(f"Error Type: {type(e)}\nDetails: {e}")
-
-# --- 7. TABLE ---
+# --- 7. TABLE DISPLAY ---
 df_view = pd.DataFrame()
 current_exp = None
 
@@ -234,7 +222,7 @@ if st.session_state.ref_data is not None:
         spot = st.session_state.spot_price
         vol = st.session_state.vol_manual
         
-        # Calculations
+        # Batch Calculation
         c_px = [get_bs_price('Call', spot, s, days_diff, vol) for s in df_view['STRIKE']]
         c_delta = [get_greeks('Call', spot, s, days_diff, vol)['delta'] for s in df_view['STRIKE']]
         p_px = [get_bs_price('Put', spot, s, days_diff, vol) for s in df_view['STRIKE']]
@@ -324,13 +312,20 @@ if st.session_state.legs:
         else:
             st.session_state.legs = edited_df.to_dict('records')
 
-    # MATRIX (ROBUST)
+    # MATRIX
     st.markdown("---")
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
     time_step = m1.slider("Step (Days)", 1, 30, 7)
     range_pct = m2.select_slider("Range", options=[0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%")
     
+    with m1:
+        c_v1, c_v2, c_v3 = st.columns(3)
+        if c_v1.button("-10%"): st.session_state.matrix_vol_mod -= 10
+        if c_v2.button("Flat"): st.session_state.matrix_vol_mod = 0
+        if c_v3.button("+10%"): st.session_state.matrix_vol_mod += 10
+        st.caption(f"Vol Mod: {st.session_state.matrix_vol_mod:+}%")
+
     spot = st.session_state.spot_price
     prices = np.linspace(spot * (1 - range_pct), spot * (1 + range_pct), 12)
     dates = [0, time_step, time_step*2, time_step*3, time_step*4]
@@ -341,8 +336,9 @@ if st.session_state.legs:
         for d in dates:
             pnl = 0
             for leg in st.session_state.legs:
+                sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
-                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, leg['Vol'])
+                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, sim_vol)
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * 100
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
