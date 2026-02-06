@@ -12,7 +12,6 @@ st.set_page_config(layout="wide", page_title="TradersCircle Options")
 # ==========================================
 # 🛑 CONFIGURATION
 # ==========================================
-# The link you provided:
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 st.markdown("""
@@ -26,7 +25,7 @@ st.markdown("""
     .status-badge {
         font-size: 12px; background-color: #f1f5f9; color: #475569; 
         padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1;
-        cursor: help;
+        cursor: help; white-space: nowrap;
     }
     .status-error { color: #dc2626; background-color: #fef2f2; border-color: #fecaca; }
     .status-success { color: #16a34a; background-color: #f0fdf4; border-color: #bbf7d0; }
@@ -42,7 +41,7 @@ if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
 
-# --- 3. DATA LOADING ---
+# --- 3. BULLETPROOF DATA LOADING ---
 
 @st.cache_data(ttl=300)
 def load_sheet(raw_url):
@@ -50,28 +49,45 @@ def load_sheet(raw_url):
         # Convert "Edit" link to "Export" link
         if "/edit" in raw_url:
             base = raw_url.split("/edit")[0]
-            # gid=0 ensures we get the first sheet
             csv_url = f"{base}/export?format=csv&gid=0"
         else:
             csv_url = raw_url
 
-        # Load Data (Strict Column Limit)
-        df = pd.read_csv(csv_url, usecols=[0, 1, 2, 3, 4], on_bad_lines='skip')
+        # Load Data (Strict Column Limit A-E)
+        df = pd.read_csv(csv_url, usecols=[0, 1, 2, 3, 4], on_bad_lines='skip', dtype=str)
         
-        # Validate Headers
-        expected = ['Ticker', 'Expiry', 'Strike', 'Type', 'Code']
-        df.columns = expected # Force headers
+        # Force Headers
+        df.columns = ['Ticker', 'Expiry', 'Strike', 'Type', 'Code']
         
-        # Clean Data
-        df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
-        df['Type'] = df['Type'].astype(str).str.title().str.strip()
-        df['Strike'] = df['Strike'].astype(str).str.replace('$', '', regex=False).astype(float)
+        # --- ROBUST CLEANING (The Fix) ---
+        
+        # 1. Ticker: Upper case, strip spaces
+        df['Ticker'] = df['Ticker'].str.upper().str.strip()
+        
+        # 2. Strike: Remove '$' and commas, force to number.
+        # errors='coerce' turns "A28B" into NaN (Not a Number) so we can drop it later
+        df['Strike'] = pd.to_numeric(df['Strike'].str.replace('$', '', regex=False).str.replace(',', ''), errors='coerce')
+        
+        # 3. Expiry: Try parsing dates
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
-        return df, f"success|{len(df)} Codes Active"
+        # 4. Drop Bad Rows (Where Strike or Expiry failed to parse)
+        initial_count = len(df)
+        df = df.dropna(subset=['Strike', 'Expiry', 'Code'])
+        final_count = len(df)
+        dropped = initial_count - final_count
+        
+        # 5. Clean Type
+        df['Type'] = df['Type'].str.title().str.strip()
+
+        msg = f"success|{final_count} Codes Ready"
+        if dropped > 0:
+            msg += f" ({dropped} skipped)"
+            
+        return df, msg
     
     except Exception as e:
-        return pd.DataFrame(), f"error|{str(e)[:40]}"
+        return pd.DataFrame(), f"error|System Error: {str(e)[:20]}"
 
 # Initialize Data
 if st.session_state.ref_data is None:
@@ -137,7 +153,7 @@ st.markdown(f"""
     <div style="text-align: right;">
         <div style="font-size: 12px; opacity: 0.8;">{st.session_state.ticker}</div>
         <div style="font-size: 24px; font-weight: 700; color: #4ade80;">${st.session_state.spot_price:.2f}</div>
-        <span class="status-badge {status_cls}" title="Sheet Status">Sheet: {status_txt}</span>
+        <span class="status-badge {status_cls}" title="Data Status">Sheet: {status_txt}</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -152,7 +168,7 @@ if c2.button("Load Chain", type="primary", use_container_width=True) or (query.u
         st.session_state.spot_price = px
         st.session_state.chain_obj = obj
         
-        # Force re-load sheet on search (optional, helps debug)
+        # Refresh sheet
         data, msg = load_sheet(RAW_SHEET_URL)
         st.session_state.ref_data = data
         st.session_state.sheet_msg = msg
