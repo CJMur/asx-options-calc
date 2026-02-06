@@ -39,19 +39,28 @@ st.markdown("""
     .status-success { color: #16a34a; background-color: #f0fdf4; border-color: #bbf7d0; }
     .status-error { color: #dc2626; background-color: #fef2f2; border-color: #fecaca; }
     
-    /* LOAD CHAIN BUTTON (Dark Green) */
-    div[data-testid="stButton"] > button {
+    /* BUTTON STYLING */
+    /* Target PRIMARY buttons (Load Chain) -> Dark Green */
+    div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; 
         color: white !important;
         border: none;
         font-weight: 600;
     }
-    
-    /* CLEAR PORTFOLIO BUTTON (Neutral Slate - Overrides Green above via specificity if needed, 
-       but Streamlit classes are tricky. We'll rely on the order or specific styling below) */
-       
-    /* SLIDER OVERRIDE (Attempt to neutralize Streamlit Red) */
-    div[data-baseweb="slider"] div { background-color: #0e1b32 !important; }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #166534 !important;
+    }
+
+    /* Target SECONDARY buttons (Clear, Zoom, etc) -> Neutral Tone */
+    div[data-testid="stButton"] button[kind="secondary"] {
+        background-color: #f1f5f9 !important;
+        color: #0f172a !important;
+        border: 1px solid #cbd5e1 !important;
+    }
+    div[data-testid="stButton"] button[kind="secondary"]:hover {
+        background-color: #e2e8f0 !important;
+        border-color: #94a3b8 !important;
+    }
     
     /* TABLE TWEAKS */
     .stDataFrame { border: none !important; }
@@ -154,23 +163,30 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- 5. CONTROLS ---
-c_search, c_vol, c_btn = st.columns([2, 1, 1])
-with c_search:
-    query = st.text_input("Ticker", st.session_state.ticker, label_visibility="collapsed")
-with c_vol:
-    st.session_state.vol_manual = st.slider("Implied Volatility %", 10.0, 100.0, st.session_state.vol_manual, 0.5, label_visibility="collapsed")
+# Using columns to align Ticker Input, Vol Slider, and Load Button
+c_search, c_vol, c_btn = st.columns([1, 2, 1])
 
-if c_btn.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
-    st.session_state.ticker = query.upper()
-    with st.spinner("Analyzing Market..."):
-        source, px, obj = fetch_data(st.session_state.ticker)
-        st.session_state.spot_price = px
-        st.session_state.chain_obj = obj
-        st.session_state.data_source = source
-        data, msg = load_sheet(RAW_SHEET_URL)
-        st.session_state.ref_data = data
-        st.session_state.sheet_msg = msg
-        st.rerun()
+with c_search:
+    query = st.text_input("Ticker Symbol", st.session_state.ticker)
+
+with c_vol:
+    st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
+
+with c_btn:
+    # Adding a little vertical spacer so the button aligns with the input boxes
+    st.write("") 
+    st.write("")
+    if st.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
+        st.session_state.ticker = query.upper()
+        with st.spinner("Analyzing Market..."):
+            source, px, obj = fetch_data(st.session_state.ticker)
+            st.session_state.spot_price = px
+            st.session_state.chain_obj = obj
+            st.session_state.data_source = source
+            data, msg = load_sheet(RAW_SHEET_URL)
+            st.session_state.ref_data = data
+            st.session_state.sheet_msg = msg
+            st.rerun()
 
 # --- 6. ADVANCED CHAIN DISPLAY ---
 df_view = pd.DataFrame()
@@ -185,7 +201,7 @@ if st.session_state.data_source == "SHEET":
         valid_exps = sorted(subset['Expiry'].unique())
         exp_map = {d.strftime("%Y-%m-%d"): d for d in valid_exps}
         
-        current_exp = st.selectbox("Expiry", list(exp_map.keys()))
+        current_exp = st.selectbox("Expiry Date", list(exp_map.keys()))
         target_dt = exp_map[current_exp]
         
         day_chain = subset[subset['Expiry'] == target_dt]
@@ -265,6 +281,7 @@ if not df_view.empty and current_exp:
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
         p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
         
+        # Action Buttons (Using neutral secondary buttons except where emphasized)
         b1, b2, b3, b4 = st.columns(4)
         if b1.button("Buy Call"): add("Buy", "Call", row['C_Price'], c_c)
         if b2.button("Sell Call"): add("Sell", "Call", row['C_Price'], c_c)
@@ -277,7 +294,6 @@ if st.session_state.legs:
     
     c_tick, c_port = st.columns([1, 2])
     
-    # A. TRADE TICKET
     with c_tick:
         ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
         for leg in st.session_state.legs:
@@ -288,23 +304,10 @@ if st.session_state.legs:
         st.caption("Trade Ticket (Copy)")
         st.code(ticket_text, language="text")
         
-        # NEUTRAL CLEAR BUTTON
-        if st.button("Clear Portfolio", key="clr_btn"):
+        if st.button("Clear Portfolio", type="secondary"):
             st.session_state.legs = []
             st.rerun()
 
-        # Inject Neutral Style for Clear Button using ID hack
-        st.markdown("""
-        <style>
-        div.stButton > button:first-child { 
-             /* This targets the 'Clear' button specifically if it's rendered here, 
-                but Streamlit CSS is global. 
-                We use inline style overriding for the Load Chain earlier. */
-        }
-        </style>
-        """, unsafe_allow_html=True)
-
-    # B. INTERACTIVE PORTFOLIO
     with c_port:
         st.caption("Active Legs (Edit Qty or Check 'Remove')")
         
@@ -381,10 +384,9 @@ if st.session_state.legs:
         height=450
     )
 
-    # --- D. PAYOFF DIAGRAM (Restored & Bottom) ---
+    # --- D. PAYOFF DIAGRAM ---
     st.markdown("### 📈 Payoff Diagram")
     
-    # Re-calculate points for smooth chart
     chart_prices = np.linspace(spot * (1 - range_pct*1.5), spot * (1 + range_pct*1.5), 100)
     pnl_today = []
     pnl_expiry = []
@@ -393,19 +395,15 @@ if st.session_state.legs:
         val_t0 = 0
         val_tF = 0
         for leg in st.session_state.legs:
-            # T+0 PnL
-            # Use current vol for T+0
+            # T+0
             sim_vol = leg['Vol'] 
-            rem_days = leg['Expiry'] # Days remaining today
+            rem_days = leg['Expiry']
             price_t0 = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, sim_vol)
             val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * 100
             
-            # Expiry PnL (T_Final)
-            # Intrinsic value at expiry
-            if leg['Type'] == 'Call':
-                price_tf = max(0, p - leg['Strike'])
-            else:
-                price_tf = max(0, leg['Strike'] - p)
+            # Expiry
+            if leg['Type'] == 'Call': price_tf = max(0, p - leg['Strike'])
+            else: price_tf = max(0, leg['Strike'] - p)
             val_tF += (price_tf - leg['Entry']) * leg['Qty'] * 100
             
         pnl_today.append(val_t0)
