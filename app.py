@@ -1,3 +1,8 @@
+# ==========================================
+# TradersCircle Options Calculator
+# VERSION: 4.0 (Auto-Vol & Code Auditor)
+# ==========================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,29 +12,33 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v4.0")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
 st.markdown("""
 <style>
     .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
+    
     .header-box {
         padding: 1.5rem; background-color: #0e1b32; border-radius: 10px; color: white;
         margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .header-title { font-size: 24px; font-weight: 700; margin: 0; }
     .header-sub { font-size: 14px; opacity: 0.8; margin: 0; }
+    
     .status-tag {
         background-color: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 4px;
         font-size: 12px; font-family: monospace;
     }
+    
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; border: none;
     }
     div[data-testid="stButton"] button[kind="secondary"] {
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
+    
     .stDataFrame { border: none !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -75,39 +84,28 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- 4. PURE PYTHON MATH ENGINE (No Dependencies) ---
+# --- 4. MATH ENGINE (ZERO DEPENDENCY) ---
 def norm_cdf(x):
-    """Standard Normal CDF using Error Function (No Scipy needed)"""
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 def black_scholes(S, K, T, r, sigma, option_type='Call'):
     try:
-        if T <= 0:
-            return max(0, S - K) if option_type == 'Call' else max(0, K - S)
-        
+        if T <= 0: return max(0, S - K) if option_type == 'Call' else max(0, K - S)
         d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
         d2 = d1 - sigma * math.sqrt(T)
-        
         if option_type == 'Call':
-            price = S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+            return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
         else:
-            price = K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
-        return price
-    except:
-        return 0.0
+            return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
+    except: return 0.0
 
 def calculate_delta(S, K, T, r, sigma, option_type='Call'):
     try:
         if T <= 0: return 0.0
         d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-        if option_type == 'Call':
-            return norm_cdf(d1)
-        else:
-            return norm_cdf(d1) - 1
-    except:
-        return 0.0
+        return norm_cdf(d1) if option_type == 'Call' else norm_cdf(d1) - 1
+    except: return 0.0
 
-# Wrappers
 def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     T = max(0.001, time_days / 365.0)
     v = vol_pct / 100.0
@@ -121,12 +119,44 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     delta = calculate_delta(float(spot), float(strike), T, r, v, kind)
     return {'delta': delta}
 
+# --- 5. AUTOMATED VOLATILITY ENGINE ---
+def calculate_historical_volatility(ticker_symbol):
+    """
+    Fetches 3 months of history and calculates annualized volatility.
+    Returns: Float (e.g. 34.5 for 34.5%)
+    """
+    try:
+        # Fetch 3mo history
+        tk = yf.Ticker(ticker_symbol)
+        hist = tk.history(period="3mo")
+        if hist.empty: return None
+        
+        # Calculate Log Returns
+        hist['Log_Ret'] = np.log(hist['Close'] / hist['Close'].shift(1))
+        
+        # Calculate Std Dev (Daily Vol)
+        daily_vol = hist['Log_Ret'].std()
+        
+        # Annualize (x sqrt(252 trading days))
+        annual_vol = daily_vol * np.sqrt(252) * 100
+        
+        return round(annual_vol, 1)
+    except:
+        return None
+
 def fetch_data(t):
+    clean = t.upper().replace(".AX", "").strip()
+    sym = f"{clean}.AX"
+    
+    # 1. Volatility Calculation (Always try this, even for manual spot)
+    auto_vol = calculate_historical_volatility(sym)
+    if auto_vol and auto_vol > 0:
+        st.session_state.vol_manual = auto_vol
+        st.toast(f"✅ Volatility Auto-Detected: {auto_vol}%")
+
     if st.session_state.manual_spot:
         return "MANUAL", st.session_state.spot_price, None
 
-    clean = t.upper().replace(".AX", "").strip()
-    sym = f"{clean}.AX"
     spot = 0.0
     try:
         tk = yf.Ticker(sym)
@@ -140,7 +170,7 @@ def fetch_data(t):
         else: return "SHEET", spot, None
     except: return "ERROR", 0.0, None
 
-# --- 5. HEADER ---
+# --- 6. HEADER ---
 status_parts = st.session_state.sheet_msg.split("|")
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
 
@@ -150,7 +180,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder</div>
+                <div class="header-sub">Option Strategy Builder v4.0</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -161,7 +191,7 @@ with st.container():
     </div>
     """, unsafe_allow_html=True)
 
-# --- 6. CONTROLS ---
+# --- 7. CONTROLS ---
 c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
 with c1: query = st.text_input("Ticker", st.session_state.ticker)
 with c2:
@@ -169,7 +199,8 @@ with c2:
     if new_spot != st.session_state.spot_price:
         st.session_state.spot_price = new_spot
         st.session_state.manual_spot = True
-with c3: st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
+with c3:
+    st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 with c4:
     st.write("") 
     st.write("")
@@ -186,7 +217,55 @@ with c4:
             st.session_state.sheet_msg = msg
             st.rerun()
 
-# --- 7. TABLE DISPLAY ---
+# --- 8. TOOLS: AUDITOR & CALIBRATOR ---
+t1, t2 = st.tabs(["🔎 Code Auditor", "🎯 IV Calibrator"])
+
+with t1:
+    st.caption("Verify if a specific code matches the Tradefloor definition.")
+    audit_code = st.text_input("Enter Option Code (e.g. BHPW8)", placeholder="Type code here...").upper().strip()
+    if audit_code and st.session_state.ref_data is not None:
+        ref = st.session_state.ref_data
+        match = ref[ref['Code'] == audit_code]
+        if not match.empty:
+            row = match.iloc[0]
+            st.success(f"✅ **FOUND:** {audit_code}")
+            st.markdown(f"""
+            * **Ticker:** {row['Ticker']}
+            * **Type:** {row['Type']}
+            * **Strike:** ${float(row['Strike']):.2f}
+            * **Expiry:** {pd.to_datetime(row['Expiry']).strftime('%d %b %Y')}
+            """)
+        else:
+            st.error(f"❌ Code '{audit_code}' not found in database (94k loaded).")
+
+with t2:
+    st.caption("Reverse engineer Volatility from a known price.")
+    cc1, cc2, cc3, cc4 = st.columns(4)
+    cal_strike = cc1.number_input("ATM Strike", value=round(st.session_state.spot_price,0))
+    cal_days = cc2.number_input("Days to Exp", value=30)
+    cal_price = cc3.number_input("Call Price", value=1.00)
+    
+    cc4.write("")
+    cc4.write("")
+    # Solves IV using simple binary search for pure python
+    if cc4.button("Apply"):
+        # Simple solver logic since we have no Scipy optimize
+        low, high = 0.01, 2.0
+        found = False
+        for i in range(20):
+            mid = (low + high) / 2
+            p = get_bs_price('Call', st.session_state.spot_price, cal_strike, cal_days, mid*100)
+            if abs(p - cal_price) < 0.01:
+                st.session_state.vol_manual = mid * 100
+                st.success(f"IV Set: {mid*100:.1f}%")
+                found = True
+                st.rerun()
+                break
+            if p < cal_price: low = mid
+            else: high = mid
+        if not found: st.warning("Approximate match found.")
+
+# --- 9. TABLE DISPLAY ---
 df_view = pd.DataFrame()
 current_exp = None
 
@@ -282,7 +361,7 @@ if not df_view.empty and current_exp:
         if b3.button(f"Buy Put {row['STRIKE']}"): add("Buy", "Put", row['P_Price'], p_c)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c)
 
-# --- 8. PORTFOLIO & MATRIX ---
+# --- 10. PORTFOLIO & MATRIX ---
 if st.session_state.legs:
     st.markdown("---")
     c_tick, c_port = st.columns([1, 2], gap="medium")
@@ -332,8 +411,9 @@ if st.session_state.legs:
         for d in dates:
             pnl = 0
             for leg in st.session_state.legs:
+                sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
-                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, leg['Vol'])
+                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, sim_vol)
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * 100
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
