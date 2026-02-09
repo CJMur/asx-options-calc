@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 5.4 (Integrated Footer & Totals)
+# VERSION: 5.5 (Dark Mode Fix)
 # ==========================================
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v5.4")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v5.5")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -172,7 +172,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v5.4</div>
+                <div class="header-sub">Option Strategy Builder v5.5</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -364,24 +364,19 @@ if st.session_state.legs:
             total_premium = df_port['Premium'].sum()
             total_theo = (df_port['Qty'] * df_port['Theo (Unit)'] * 100).sum()
             
-            # Create Total Row
             total_row = pd.DataFrame([{
                 'Qty': 0, 'Type': '', 'Strike': 0, 'Expiry': 0, 'Entry': 0, 
                 'Code': 'TOTAL', 
-                'Theo (Unit)': total_theo / 100 if abs(df_port['Qty'].sum()) != 0 else 0, # Rough Unit
+                'Theo (Unit)': total_theo, # Hijacked for Sum
                 'Net Delta': total_delta,
                 'Premium': total_premium
             }])
-            # We only really care about the summed columns for display
-            total_row['Theo (Unit)'] = total_theo # Hijack this column for Total Strategy Value
             
-            # Append to display dataframe
             df_display = pd.concat([df_port, total_row], ignore_index=True)
         else:
             df_display = df_port
 
-        # --- DISPLAY WITH STYLING ---
-        # Configure columns
+        # --- DISPLAY WITH DARK MODE COMPATIBLE STYLE ---
         column_config = {
             "Code": st.column_config.TextColumn("Code"),
             "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
@@ -393,10 +388,11 @@ if st.session_state.legs:
         
         cols = ['Qty', 'Code', 'Type', 'Strike', 'Entry', 'Theo (Unit)', 'Net Delta', 'Premium']
         
-        # Style the last row (TOTAL)
         def highlight_total(row):
             if row['Code'] == 'TOTAL':
-                return ['background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #cbd5e1'] * len(row)
+                # No background color = transparent (adapts to theme)
+                # Just bold font and top border
+                return ['font-weight: bold; border-top: 2px solid #888888;'] * len(row)
             return [''] * len(row)
 
         event = st.dataframe(
@@ -411,18 +407,10 @@ if st.session_state.legs:
             selection_mode="multi-row"
         )
         
-        # --- DELETE LOGIC ---
         if event.selection.rows:
-            # Check if user selected the TOTAL row (last row)
             selected_indices = event.selection.rows
-            final_idx = len(df_display) - 1
-            
-            # Filter out the TOTAL row from deletion request
             valid_deletions = [i for i in selected_indices if i < len(st.session_state.legs)]
-            
             if valid_deletions:
-                # Rebuild legs list excluding deleted indices
-                # Sort descending to delete from end first to avoid index shift issues (though list comp handles it)
                 current_legs = st.session_state.legs
                 st.session_state.legs = [leg for i, leg in enumerate(current_legs) if i not in valid_deletions]
                 st.rerun()
