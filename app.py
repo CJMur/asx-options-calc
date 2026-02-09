@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 4.3 (The "Fair Value" Independence Update)
+# VERSION: 5.0 (UI/UX Polish)
 # ==========================================
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v4.3")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v5.0")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -32,6 +32,7 @@ st.markdown("""
         font-size: 12px; font-family: monospace;
     }
     
+    /* Button Overrides */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; border: none;
     }
@@ -45,7 +46,7 @@ st.markdown("""
 
 # --- 2. SESSION STATE ---
 if 'legs' not in st.session_state: st.session_state.legs = [] 
-if 'ticker' not in st.session_state: st.session_state.ticker = "BHP"
+if 'ticker' not in st.session_state: st.session_state.ticker = "" # Default Empty
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
 if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.05
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
@@ -84,7 +85,7 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- 4. MATH ENGINE (Pure Python) ---
+# --- 4. MATH ENGINE ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
@@ -119,28 +120,19 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     delta = calculate_delta(float(spot), float(strike), T, r, v, kind)
     return {'delta': delta}
 
-# --- 5. "SMART" INDEPENDENT VOLATILITY ---
+# --- 5. SMART VOLATILITY ---
 def calculate_smart_volatility(ticker_symbol):
-    """
-    Calculates volatility purely from price history (High/Low).
-    This creates an independent 'Fair Value' benchmark.
-    """
     try:
         tk = yf.Ticker(ticker_symbol)
         hist = tk.history(period="3mo")
         if hist.empty: return None
         
-        # 1. Standard Volatility (Close-to-Close)
         hist['Log_Ret'] = np.log(hist['Close'] / hist['Close'].shift(1))
         std_vol = hist['Log_Ret'].std() * np.sqrt(252) * 100
         
-        # 2. Parkinson Volatility (High/Low Range)
-        # This captures intraday panic/euphoria that Close price misses.
-        # It is usually a better proxy for Option Pricing.
         hl_ratio_sq = np.log(hist['High'] / hist['Low']) ** 2
         parkinson_vol = np.sqrt(1 / (4 * np.log(2)) * hl_ratio_sq.mean()) * np.sqrt(252) * 100
         
-        # Use the Maximum to be conservative (Options are usually priced on the higher risk side)
         final_vol = max(std_vol, parkinson_vol)
         return round(final_vol, 1)
     except: return None
@@ -149,11 +141,10 @@ def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
     sym = f"{clean}.AX"
     
-    # Independent Volatility Calculation
     auto_vol = calculate_smart_volatility(sym)
     if auto_vol and auto_vol > 0:
         st.session_state.vol_manual = auto_vol
-        st.toast(f"✅ Independent Volatility Calculated: {auto_vol}%")
+        st.toast(f"✅ Volatility Set: {auto_vol}%")
 
     if st.session_state.manual_spot:
         return "MANUAL", st.session_state.spot_price, None
@@ -181,11 +172,11 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Independent Strategy Builder v4.3</div>
+                <div class="header-sub">Option Strategy Builder v5.0</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
-                <div class="header-sub">{st.session_state.ticker}</div>
+                <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
                 <span class="status-tag">{status_txt}</span>
             </div>
         </div>
@@ -194,35 +185,43 @@ with st.container():
 
 # --- 7. CONTROLS ---
 c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
-with c1: query = st.text_input("Ticker", st.session_state.ticker)
+with c1: 
+    # Empty default, placeholder added
+    query = st.text_input("Ticker", value=st.session_state.ticker, placeholder="Enter Stock Code")
+
 with c2:
     new_spot = st.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
     if new_spot != st.session_state.spot_price:
         st.session_state.spot_price = new_spot
         st.session_state.manual_spot = True
 with c3:
-    st.session_state.vol_manual = st.slider("Historical Volatility Estimate %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
+    # Renamed Label
+    st.session_state.vol_manual = st.slider("Volatility Estimate %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 with c4:
     st.write("") 
     st.write("")
-    if st.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
-        if query.upper() != st.session_state.ticker: st.session_state.manual_spot = False
-        st.session_state.ticker = query.upper()
-        with st.spinner("Analyzing Market Data..."):
-            source, px, obj = fetch_data(st.session_state.ticker)
-            if not st.session_state.manual_spot: st.session_state.spot_price = px
-            st.session_state.chain_obj = obj
-            st.session_state.data_source = source
-            data, msg = load_sheet(RAW_SHEET_URL)
-            st.session_state.ref_data = data
-            st.session_state.sheet_msg = msg
-            st.rerun()
+    # Logic to handle empty ticker
+    if st.button("Load Chain", type="primary", use_container_width=True) or (query and query.upper() != st.session_state.ticker):
+        if not query:
+            st.warning("Please enter a ticker symbol.")
+        else:
+            if query.upper() != st.session_state.ticker: st.session_state.manual_spot = False
+            st.session_state.ticker = query.upper()
+            with st.spinner("Fetching Data..."):
+                source, px, obj = fetch_data(st.session_state.ticker)
+                if not st.session_state.manual_spot: st.session_state.spot_price = px
+                st.session_state.chain_obj = obj
+                st.session_state.data_source = source
+                data, msg = load_sheet(RAW_SHEET_URL)
+                st.session_state.ref_data = data
+                st.session_state.sheet_msg = msg
+                st.rerun()
 
 # --- 9. TABLE DISPLAY ---
 df_view = pd.DataFrame()
 current_exp = None
 
-if st.session_state.ref_data is not None:
+if st.session_state.ref_data is not None and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     subset = ref[ref['Ticker'] == tkr]
@@ -234,39 +233,53 @@ if st.session_state.ref_data is not None:
         valid_exps = sorted(subset['Expiry'].unique())
         exp_map = {d.strftime("%Y-%m-%d"): d for d in valid_exps}
         
-        current_exp = st.selectbox("Expiry", list(exp_map.keys()))
-        target_dt = exp_map[current_exp]
-        days_diff = (target_dt - today).days
+        # Expiry Selector (No default selection)
+        current_exp = st.selectbox(
+            "Expiry", 
+            list(exp_map.keys()), 
+            index=None, 
+            placeholder="Select Expiry"
+        )
         
-        day_chain = subset[subset['Expiry'] == target_dt]
-        calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')['Code']
-        puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')['Code']
-        
-        all_strikes = sorted(list(set(calls.index) | set(puts.index)))
-        df_view = pd.DataFrame({'STRIKE': all_strikes})
-        df_view['C_Code'] = df_view['STRIKE'].map(calls)
-        df_view['P_Code'] = df_view['STRIKE'].map(puts)
-        
-        spot = st.session_state.spot_price
-        vol = st.session_state.vol_manual
-        
-        # Batch Calculation
-        c_px = [get_bs_price('Call', spot, s, days_diff, vol) for s in df_view['STRIKE']]
-        c_delta = [get_greeks('Call', spot, s, days_diff, vol)['delta'] for s in df_view['STRIKE']]
-        p_px = [get_bs_price('Put', spot, s, days_diff, vol) for s in df_view['STRIKE']]
-        p_delta = [get_greeks('Put', spot, s, days_diff, vol)['delta'] for s in df_view['STRIKE']]
+        if current_exp:
+            target_dt = exp_map[current_exp]
+            days_diff = (target_dt - today).days
             
-        df_view['C_Price'] = c_px
-        df_view['C_Delta'] = c_delta
-        df_view['C_Vol'] = vol
-        df_view['P_Price'] = p_px
-        df_view['P_Delta'] = p_delta
-        df_view['P_Vol'] = vol
+            day_chain = subset[subset['Expiry'] == target_dt]
+            calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')['Code']
+            puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')['Code']
+            
+            all_strikes = sorted(list(set(calls.index) | set(puts.index)))
+            df_view = pd.DataFrame({'STRIKE': all_strikes})
+            df_view['C_Code'] = df_view['STRIKE'].map(calls)
+            df_view['P_Code'] = df_view['STRIKE'].map(puts)
+            
+            spot = st.session_state.spot_price
+            vol = st.session_state.vol_manual
+            
+            # Batch Calculation
+            c_px = [get_bs_price('Call', spot, s, days_diff, vol) for s in df_view['STRIKE']]
+            c_delta = [get_greeks('Call', spot, s, days_diff, vol)['delta'] for s in df_view['STRIKE']]
+            p_px = [get_bs_price('Put', spot, s, days_diff, vol) for s in df_view['STRIKE']]
+            p_delta = [get_greeks('Put', spot, s, days_diff, vol)['delta'] for s in df_view['STRIKE']]
+                
+            df_view['C_Price'] = c_px
+            df_view['C_Delta'] = c_delta
+            df_view['C_Vol'] = vol
+            df_view['P_Price'] = p_px
+            df_view['P_Delta'] = p_delta
+            df_view['P_Vol'] = vol
 
 if not df_view.empty and current_exp:
     center = st.session_state.spot_price
     if center > 0:
-        df_view = df_view[(df_view['STRIKE'] > center*0.85) & (df_view['STRIKE'] < center*1.15)]
+        # LOGIC: Find the ATM index and slice +/- 12 rows
+        # This forces the view to be centered on the ATM strike
+        df_view['Diff'] = abs(df_view['STRIKE'] - center)
+        atm_idx = df_view['Diff'].idxmin()
+        start_idx = max(0, atm_idx - 12)
+        end_idx = min(len(df_view), atm_idx + 13)
+        df_view = df_view.iloc[start_idx:end_idx].drop(columns=['Diff'])
     
     st.markdown(f"**Chain: {current_exp}**")
     
@@ -308,10 +321,11 @@ if not df_view.empty and current_exp:
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
         p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
         
-        b1, b2, b3, b4 = st.columns(4)
-        if b1.button(f"Buy Call {row['STRIKE']}"): add("Buy", "Call", row['C_Price'], c_c)
+        # Buttons Left Aligned (Compacted)
+        b1, b2, b3, b4, _ = st.columns([1, 1, 1, 1, 6]) 
+        if b1.button(f"Buy Call"): add("Buy", "Call", row['C_Price'], c_c)
         if b2.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c)
-        if b3.button(f"Buy Put {row['STRIKE']}"): add("Buy", "Put", row['P_Price'], p_c)
+        if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c)
 
 # --- 10. PORTFOLIO & MATRIX ---
