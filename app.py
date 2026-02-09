@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 5.0 (UI/UX Polish)
+# VERSION: 5.2 (Premium Tracking)
 # ==========================================
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v5.0")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v5.2")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -46,7 +46,7 @@ st.markdown("""
 
 # --- 2. SESSION STATE ---
 if 'legs' not in st.session_state: st.session_state.legs = [] 
-if 'ticker' not in st.session_state: st.session_state.ticker = "" # Default Empty
+if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
 if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.05
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
@@ -172,7 +172,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v5.0</div>
+                <div class="header-sub">Option Strategy Builder v5.2</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -186,7 +186,6 @@ with st.container():
 # --- 7. CONTROLS ---
 c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
 with c1: 
-    # Empty default, placeholder added
     query = st.text_input("Ticker", value=st.session_state.ticker, placeholder="Enter Stock Code")
 
 with c2:
@@ -195,12 +194,10 @@ with c2:
         st.session_state.spot_price = new_spot
         st.session_state.manual_spot = True
 with c3:
-    # Renamed Label
     st.session_state.vol_manual = st.slider("Volatility Estimate %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 with c4:
     st.write("") 
     st.write("")
-    # Logic to handle empty ticker
     if st.button("Load Chain", type="primary", use_container_width=True) or (query and query.upper() != st.session_state.ticker):
         if not query:
             st.warning("Please enter a ticker symbol.")
@@ -233,13 +230,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         valid_exps = sorted(subset['Expiry'].unique())
         exp_map = {d.strftime("%Y-%m-%d"): d for d in valid_exps}
         
-        # Expiry Selector (No default selection)
-        current_exp = st.selectbox(
-            "Expiry", 
-            list(exp_map.keys()), 
-            index=None, 
-            placeholder="Select Expiry"
-        )
+        current_exp = st.selectbox("Expiry", list(exp_map.keys()), index=None, placeholder="Select Expiry")
         
         if current_exp:
             target_dt = exp_map[current_exp]
@@ -273,8 +264,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
 if not df_view.empty and current_exp:
     center = st.session_state.spot_price
     if center > 0:
-        # LOGIC: Find the ATM index and slice +/- 12 rows
-        # This forces the view to be centered on the ATM strike
         df_view['Diff'] = abs(df_view['STRIKE'] - center)
         atm_idx = df_view['Diff'].idxmin()
         start_idx = max(0, atm_idx - 12)
@@ -309,24 +298,33 @@ if not df_view.empty and current_exp:
         row = disp.iloc[idx]
         days_diff = (datetime.strptime(current_exp, "%Y-%m-%d") - datetime.now()).days
         
-        def add(side, kind, px, code_hint):
+        q_col, _ = st.columns([1, 5])
+        trade_qty = q_col.number_input("Trade Quantity", min_value=1, value=1, step=1)
+        
+        def add(side, kind, px, code_hint, delta_val, qty_val):
+            final_qty = qty_val if side == "Buy" else -qty_val
+            
             st.session_state.legs.append({
-                "Qty": 1 if side=="Buy" else -1, "Type": kind, 
-                "Strike": row['STRIKE'], "Expiry": days_diff, 
+                "Qty": final_qty, 
+                "Type": kind, 
+                "Strike": row['STRIKE'], 
+                "Expiry": days_diff, 
                 "Vol": st.session_state.vol_manual, 
-                "Entry": px, "Code": code_hint,
+                "Entry": px, 
+                "Code": code_hint,
+                "Delta": delta_val,
                 "Remove": False 
             })
+            st.rerun()
             
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
         p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
         
-        # Buttons Left Aligned (Compacted)
         b1, b2, b3, b4, _ = st.columns([1, 1, 1, 1, 6]) 
-        if b1.button(f"Buy Call"): add("Buy", "Call", row['C_Price'], c_c)
-        if b2.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c)
-        if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c)
-        if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c)
+        if b1.button(f"Buy Call"): add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
+        if b2.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
+        if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
+        if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
 # --- 10. PORTFOLIO & MATRIX ---
 if st.session_state.legs:
@@ -344,15 +342,51 @@ if st.session_state.legs:
 
     with c_port:
         st.subheader("Legs")
+        
         df_port = pd.DataFrame(st.session_state.legs)
+        
+        if 'Delta' in df_port.columns:
+            df_port['Net Delta'] = df_port['Qty'] * df_port['Delta'] * 100
+        else:
+            df_port['Net Delta'] = 0.0
+            
+        # Margin Impact (Premium Paid/Received)
+        # Entry Price * Quantity * 100 (Contract Size)
+        # Negative for Buy (Debit), Positive for Sell (Credit)
+        # Note: 'Qty' is already signed (Buy +, Sell -), but paying money is usually shown as negative in account balance.
+        # Let's align with convention: 
+        # Buy: You Pay $1.00 * 100 = -$100. (Debit)
+        # Sell: You Get $1.00 * 100 = +$100. (Credit)
+        # Since our Qty is + for Buy, we need to flip the sign to show cash flow.
+        # Cash Flow = -(Qty * Price * 100)
+        
+        df_port['Margin Impact'] = -(df_port['Qty'] * df_port['Entry'] * 100)
+        
         if 'Remove' not in df_port.columns: df_port['Remove'] = False
         
-        edited_df = st.data_editor(df_port, key="port_edit", num_rows="dynamic", use_container_width=True)
+        column_config = {
+            "Remove": st.column_config.CheckboxColumn("Del", default=False, width="small"),
+            "Code": st.column_config.TextColumn("Code"),
+            "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
+            "Vol": st.column_config.NumberColumn("Vol", format="%.1f%%"),
+            "Strike": st.column_config.NumberColumn("Strike", format="%.2f"),
+            "Net Delta": st.column_config.NumberColumn("Net Delta", format="%.2f"),
+            "Margin Impact": st.column_config.NumberColumn("Premium (Cash)", format="$%.2f"),
+        }
+        
+        edited_df = st.data_editor(
+            df_port, 
+            key="port_edit", 
+            num_rows="dynamic", 
+            use_container_width=True,
+            column_config=column_config
+        )
+        
         if edited_df['Remove'].any():
-            st.session_state.legs = edited_df[~edited_df['Remove']].drop(columns=['Remove']).to_dict('records')
+            st.session_state.legs = edited_df[~edited_df['Remove']].drop(columns=['Remove', 'Net Delta', 'Margin Impact']).to_dict('records')
             st.rerun()
         else:
-            st.session_state.legs = edited_df.to_dict('records')
+            st.session_state.legs = edited_df.drop(columns=['Net Delta', 'Margin Impact']).to_dict('records')
 
     # MATRIX
     st.markdown("---")
