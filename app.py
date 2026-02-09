@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 4.1 (Clean UI & Smart Volatility)
+# VERSION: 4.3 (The "Fair Value" Independence Update)
 # ==========================================
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v4.1")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v4.3")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -32,7 +32,6 @@ st.markdown("""
         font-size: 12px; font-family: monospace;
     }
     
-    /* Button Overrides */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; border: none;
     }
@@ -120,32 +119,29 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     delta = calculate_delta(float(spot), float(strike), T, r, v, kind)
     return {'delta': delta}
 
-# --- 5. SMART VOLATILITY ENGINE ---
+# --- 5. "SMART" INDEPENDENT VOLATILITY ---
 def calculate_smart_volatility(ticker_symbol):
     """
-    Calculates both Standard Historical and Parkinson (High/Low) Volatility.
-    Returns the higher of the two to be safe/conservative.
+    Calculates volatility purely from price history (High/Low).
+    This creates an independent 'Fair Value' benchmark.
     """
     try:
         tk = yf.Ticker(ticker_symbol)
-        # Fetch 3 months of data
         hist = tk.history(period="3mo")
         if hist.empty: return None
         
-        # 1. Standard Close-to-Close Volatility
+        # 1. Standard Volatility (Close-to-Close)
         hist['Log_Ret'] = np.log(hist['Close'] / hist['Close'].shift(1))
         std_vol = hist['Log_Ret'].std() * np.sqrt(252) * 100
         
-        # 2. Parkinson Volatility (High-Low Range) - Captures intraday swings
-        # Formula: sqrt(1/(4*ln(2))) * sqrt(sum(ln(H/L)^2) / N)
-        # Simplified: Daily Range Vol * sqrt(252)
+        # 2. Parkinson Volatility (High/Low Range)
+        # This captures intraday panic/euphoria that Close price misses.
+        # It is usually a better proxy for Option Pricing.
         hl_ratio_sq = np.log(hist['High'] / hist['Low']) ** 2
         parkinson_vol = np.sqrt(1 / (4 * np.log(2)) * hl_ratio_sq.mean()) * np.sqrt(252) * 100
         
-        # Return the "Truer" Volatility (Parkinson is often better for options)
-        # We average them or take max. Let's take Max to be conservative (higher premiums)
+        # Use the Maximum to be conservative (Options are usually priced on the higher risk side)
         final_vol = max(std_vol, parkinson_vol)
-        
         return round(final_vol, 1)
     except: return None
 
@@ -153,11 +149,11 @@ def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
     sym = f"{clean}.AX"
     
-    # Auto-Calculate Volatility
+    # Independent Volatility Calculation
     auto_vol = calculate_smart_volatility(sym)
     if auto_vol and auto_vol > 0:
         st.session_state.vol_manual = auto_vol
-        st.toast(f"✅ Volatility Auto-Set: {auto_vol}% (High/Low Analysis)")
+        st.toast(f"✅ Independent Volatility Calculated: {auto_vol}%")
 
     if st.session_state.manual_spot:
         return "MANUAL", st.session_state.spot_price, None
@@ -185,7 +181,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v4.1</div>
+                <div class="header-sub">Independent Strategy Builder v4.3</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -205,14 +201,14 @@ with c2:
         st.session_state.spot_price = new_spot
         st.session_state.manual_spot = True
 with c3:
-    st.session_state.vol_manual = st.slider("Implied Volatility (IV) %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
+    st.session_state.vol_manual = st.slider("Historical Volatility Estimate %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
 with c4:
     st.write("") 
     st.write("")
     if st.button("Load Chain", type="primary", use_container_width=True) or (query.upper() != st.session_state.ticker):
         if query.upper() != st.session_state.ticker: st.session_state.manual_spot = False
         st.session_state.ticker = query.upper()
-        with st.spinner("Fetching Data..."):
+        with st.spinner("Analyzing Market Data..."):
             source, px, obj = fetch_data(st.session_state.ticker)
             if not st.session_state.manual_spot: st.session_state.spot_price = px
             st.session_state.chain_obj = obj
@@ -280,12 +276,12 @@ if not df_view.empty and current_exp:
         disp,
         column_config={
             "C_Code": st.column_config.TextColumn("Call Code"),
-            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f"),
-            "C_Vol": st.column_config.NumberColumn("Vol", format="%.1f"),
+            "C_Price": st.column_config.NumberColumn("Fair Value", format="%.3f"),
+            "C_Vol": st.column_config.NumberColumn("Hist Vol", format="%.1f"),
             "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
             "STRIKE": st.column_config.NumberColumn("Strike", format="%.2f"),
-            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f"),
-            "P_Vol": st.column_config.NumberColumn("Vol", format="%.1f"),
+            "P_Price": st.column_config.NumberColumn("Fair Value", format="%.3f"),
+            "P_Vol": st.column_config.NumberColumn("Hist Vol", format="%.1f"),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
             "P_Code": st.column_config.TextColumn("Put Code"),
         },
@@ -370,7 +366,7 @@ if st.session_state.legs:
             for leg in st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
-                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, leg['Vol'])
+                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, sim_vol)
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * 100
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
