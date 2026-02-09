@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 5.6 (Clean Footer - Blank Zeroes)
+# VERSION: 5.7 (Bold Strikes & Blank Footer)
 # ==========================================
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v5.6")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v5.7")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -172,7 +172,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v5.6</div>
+                <div class="header-sub">Option Strategy Builder v5.7</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -274,8 +274,19 @@ if not df_view.empty and current_exp:
     
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
+    # --- STYLE: BOLD STRIKE COLUMN ---
+    # We apply a style to the STRIKE column to make it stand out
+    styled_disp = disp.style.applymap(
+        lambda x: "font-weight: bold; background-color: rgba(255,255,255,0.05);", 
+        subset=['STRIKE']
+    ).format({
+        'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}',
+        'STRIKE': '{:.2f}',
+        'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
+    })
+
     selection = st.dataframe(
-        disp,
+        styled_disp,
         column_config={
             "C_Code": st.column_config.TextColumn("Call Code"),
             "C_Price": st.column_config.NumberColumn("Fair Value", format="%.3f"),
@@ -364,12 +375,13 @@ if st.session_state.legs:
             total_premium = df_port['Premium'].sum()
             total_theo = (df_port['Qty'] * df_port['Theo (Unit)'] * 100).sum()
             
+            # Use np.nan for blank numeric cells
             total_row = pd.DataFrame([{
-                'Qty': None, # Blank
+                'Qty': np.nan, 
                 'Type': '', 
-                'Strike': None, # Blank
+                'Strike': np.nan, 
                 'Expiry': None, 
-                'Entry': None, # Blank
+                'Entry': np.nan, 
                 'Code': 'TOTAL', 
                 'Theo (Unit)': total_theo, 
                 'Net Delta': total_delta,
@@ -394,8 +406,6 @@ if st.session_state.legs:
         
         def highlight_total(row):
             if row['Code'] == 'TOTAL':
-                # No background color = transparent (adapts to theme)
-                # Just bold font and top border
                 return ['font-weight: bold; border-top: 2px solid #888888;'] * len(row)
             return [''] * len(row)
 
