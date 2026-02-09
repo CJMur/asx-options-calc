@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 5.5 (Dark Mode Fix)
+# VERSION: 5.6 (Clean Footer - Blank Zeroes)
 # ==========================================
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v5.5")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v5.6")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -172,7 +172,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v5.5</div>
+                <div class="header-sub">Option Strategy Builder v5.6</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -365,9 +365,13 @@ if st.session_state.legs:
             total_theo = (df_port['Qty'] * df_port['Theo (Unit)'] * 100).sum()
             
             total_row = pd.DataFrame([{
-                'Qty': 0, 'Type': '', 'Strike': 0, 'Expiry': 0, 'Entry': 0, 
+                'Qty': None, # Blank
+                'Type': '', 
+                'Strike': None, # Blank
+                'Expiry': None, 
+                'Entry': None, # Blank
                 'Code': 'TOTAL', 
-                'Theo (Unit)': total_theo, # Hijacked for Sum
+                'Theo (Unit)': total_theo, 
                 'Net Delta': total_delta,
                 'Premium': total_premium
             }])
