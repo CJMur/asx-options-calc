@@ -32,6 +32,7 @@ st.markdown("""
         font-size: 12px; font-family: monospace;
     }
     
+    /* Button Overrides */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; border: none;
     }
@@ -84,7 +85,7 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- 4. MATH ENGINE (ZERO DEPENDENCY) ---
+# --- 4. MATH ENGINE (Pure Python) ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
@@ -119,14 +120,10 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     delta = calculate_delta(float(spot), float(strike), T, r, v, kind)
     return {'delta': delta}
 
-# --- 5. AUTOMATED VOLATILITY ENGINE ---
+# --- 5. AUTO-VOLATILITY ENGINE (NEW!) ---
 def calculate_historical_volatility(ticker_symbol):
-    """
-    Fetches 3 months of history and calculates annualized volatility.
-    Returns: Float (e.g. 34.5 for 34.5%)
-    """
+    """Calculates 3-month annualized volatility from Yahoo Finance history."""
     try:
-        # Fetch 3mo history
         tk = yf.Ticker(ticker_symbol)
         hist = tk.history(period="3mo")
         if hist.empty: return None
@@ -139,20 +136,18 @@ def calculate_historical_volatility(ticker_symbol):
         
         # Annualize (x sqrt(252 trading days))
         annual_vol = daily_vol * np.sqrt(252) * 100
-        
         return round(annual_vol, 1)
-    except:
-        return None
+    except: return None
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
     sym = f"{clean}.AX"
     
-    # 1. Volatility Calculation (Always try this, even for manual spot)
+    # Auto-Calculate Volatility
     auto_vol = calculate_historical_volatility(sym)
     if auto_vol and auto_vol > 0:
         st.session_state.vol_manual = auto_vol
-        st.toast(f"✅ Volatility Auto-Detected: {auto_vol}%")
+        st.toast(f"✅ Volatility Auto-Set to {auto_vol}% based on history.")
 
     if st.session_state.manual_spot:
         return "MANUAL", st.session_state.spot_price, None
@@ -217,18 +212,18 @@ with c4:
             st.session_state.sheet_msg = msg
             st.rerun()
 
-# --- 8. TOOLS: AUDITOR & CALIBRATOR ---
+# --- 8. TOOLS: AUDITOR & CALIBRATOR (NEW!) ---
 t1, t2 = st.tabs(["🔎 Code Auditor", "🎯 IV Calibrator"])
 
 with t1:
-    st.caption("Verify if a specific code matches the Tradefloor definition.")
-    audit_code = st.text_input("Enter Option Code (e.g. BHPW8)", placeholder="Type code here...").upper().strip()
+    st.caption("Enter a code from Tradefloor (e.g. BHPZC9) to confirm it matches our data.")
+    audit_code = st.text_input("Audit Code", placeholder="BHPZC9").upper().strip()
     if audit_code and st.session_state.ref_data is not None:
         ref = st.session_state.ref_data
         match = ref[ref['Code'] == audit_code]
         if not match.empty:
             row = match.iloc[0]
-            st.success(f"✅ **FOUND:** {audit_code}")
+            st.success(f"✅ **MATCH FOUND:** {audit_code}")
             st.markdown(f"""
             * **Ticker:** {row['Ticker']}
             * **Type:** {row['Type']}
@@ -236,7 +231,7 @@ with t1:
             * **Expiry:** {pd.to_datetime(row['Expiry']).strftime('%d %b %Y')}
             """)
         else:
-            st.error(f"❌ Code '{audit_code}' not found in database (94k loaded).")
+            st.error(f"❌ Code '{audit_code}' not found in the 94,000 code database.")
 
 with t2:
     st.caption("Reverse engineer Volatility from a known price.")
@@ -247,9 +242,8 @@ with t2:
     
     cc4.write("")
     cc4.write("")
-    # Solves IV using simple binary search for pure python
     if cc4.button("Apply"):
-        # Simple solver logic since we have no Scipy optimize
+        # Binary search solver for pure python
         low, high = 0.01, 2.0
         found = False
         for i in range(20):
