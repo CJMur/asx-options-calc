@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 5.2 (Premium Tracking)
+# VERSION: 5.3 (Subtotals & Live Portfolio)
 # ==========================================
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v5.2")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v5.3")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -31,6 +31,17 @@ st.markdown("""
         background-color: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 4px;
         font-size: 12px; font-family: monospace;
     }
+    
+    /* Summary Metric Box */
+    .metric-container {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 15px;
+        text-align: center;
+    }
+    .metric-label { font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase; }
+    .metric-value { font-size: 20px; color: #0f172a; font-weight: 700; }
     
     /* Button Overrides */
     div[data-testid="stButton"] button[kind="primary"] {
@@ -172,7 +183,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v5.2</div>
+                <div class="header-sub">Option Strategy Builder v5.3</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -312,7 +323,6 @@ if not df_view.empty and current_exp:
                 "Vol": st.session_state.vol_manual, 
                 "Entry": px, 
                 "Code": code_hint,
-                "Delta": delta_val,
                 "Remove": False 
             })
             st.rerun()
@@ -330,6 +340,7 @@ if not df_view.empty and current_exp:
 if st.session_state.legs:
     st.markdown("---")
     c_tick, c_port = st.columns([1, 2], gap="medium")
+    
     with c_tick:
         st.subheader("Ticket")
         ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
@@ -343,50 +354,80 @@ if st.session_state.legs:
     with c_port:
         st.subheader("Legs")
         
-        df_port = pd.DataFrame(st.session_state.legs)
-        
-        if 'Delta' in df_port.columns:
-            df_port['Net Delta'] = df_port['Qty'] * df_port['Delta'] * 100
-        else:
-            df_port['Net Delta'] = 0.0
+        # --- RECALCULATE LIVE PORTFOLIO ---
+        # This loop ensures the portfolio updates when Spot/Vol changes
+        live_legs = []
+        for leg in st.session_state.legs:
+            # Re-run Math
+            new_theo = get_bs_price(leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], st.session_state.vol_manual)
+            new_greeks = get_greeks(leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], st.session_state.vol_manual)
             
-        # Margin Impact (Premium Paid/Received)
-        # Entry Price * Quantity * 100 (Contract Size)
-        # Negative for Buy (Debit), Positive for Sell (Credit)
-        # Note: 'Qty' is already signed (Buy +, Sell -), but paying money is usually shown as negative in account balance.
-        # Let's align with convention: 
-        # Buy: You Pay $1.00 * 100 = -$100. (Debit)
-        # Sell: You Get $1.00 * 100 = +$100. (Credit)
-        # Since our Qty is + for Buy, we need to flip the sign to show cash flow.
-        # Cash Flow = -(Qty * Price * 100)
+            leg_update = leg.copy()
+            leg_update['Theo (Unit)'] = new_theo
+            leg_update['Delta (Unit)'] = new_greeks['delta']
+            
+            # Derived Cols
+            leg_update['Net Delta'] = leg['Qty'] * new_greeks['delta'] * 100
+            leg_update['Premium'] = -(leg['Qty'] * leg['Entry'] * 100) # Negative for Debit
+            
+            live_legs.append(leg_update)
+            
+        df_port = pd.DataFrame(live_legs)
         
-        df_port['Margin Impact'] = -(df_port['Qty'] * df_port['Entry'] * 100)
+        # --- TOTALS ---
+        total_delta = df_port['Net Delta'].sum()
+        total_premium = df_port['Premium'].sum()
+        total_theo = (df_port['Qty'] * df_port['Theo (Unit)'] * 100).sum()
         
+        # Display Table
         if 'Remove' not in df_port.columns: df_port['Remove'] = False
         
         column_config = {
             "Remove": st.column_config.CheckboxColumn("Del", default=False, width="small"),
             "Code": st.column_config.TextColumn("Code"),
             "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
-            "Vol": st.column_config.NumberColumn("Vol", format="%.1f%%"),
-            "Strike": st.column_config.NumberColumn("Strike", format="%.2f"),
+            "Theo (Unit)": st.column_config.NumberColumn("Theo", format="$%.3f"),
             "Net Delta": st.column_config.NumberColumn("Net Delta", format="%.2f"),
-            "Margin Impact": st.column_config.NumberColumn("Premium (Cash)", format="$%.2f"),
+            "Premium": st.column_config.NumberColumn("Premium (Cash)", format="$%.2f"),
         }
         
+        # Hide internal calc columns
+        display_cols = ['Remove', 'Qty', 'Code', 'Type', 'Strike', 'Entry', 'Theo (Unit)', 'Net Delta', 'Premium']
+        
         edited_df = st.data_editor(
-            df_port, 
+            df_port[display_cols], 
             key="port_edit", 
             num_rows="dynamic", 
             use_container_width=True,
             column_config=column_config
         )
         
+        # Handle Deletions
         if edited_df['Remove'].any():
-            st.session_state.legs = edited_df[~edited_df['Remove']].drop(columns=['Remove', 'Net Delta', 'Margin Impact']).to_dict('records')
+            # Filter original session state list based on index
+            keep_indices = edited_df[~edited_df['Remove']].index
+            st.session_state.legs = [st.session_state.legs[i] for i in keep_indices]
             st.rerun()
-        else:
-            st.session_state.legs = edited_df.drop(columns=['Net Delta', 'Margin Impact']).to_dict('records')
+
+        # --- SUMMARY FOOTER ---
+        st.markdown(f"""
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px;">
+            <div class="metric-container">
+                <div class="metric-label">Total Net Delta</div>
+                <div class="metric-value">{total_delta:.2f}</div>
+            </div>
+            <div class="metric-container">
+                <div class="metric-label">Net Premium (Entry)</div>
+                <div class="metric-value" style="color: {'#16a34a' if total_premium > 0 else '#dc2626'}">
+                    ${total_premium:,.2f}
+                </div>
+            </div>
+            <div class="metric-container">
+                <div class="metric-label">Net Strategy Cost (Theo)</div>
+                <div class="metric-value">${total_theo:,.2f}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # MATRIX
     st.markdown("---")
