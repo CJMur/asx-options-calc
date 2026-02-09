@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 4.0 (Auto-Vol & Code Auditor)
+# VERSION: 4.1 (Clean UI & Smart Volatility)
 # ==========================================
 
 import streamlit as st
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v4.0")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v4.1")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -120,23 +120,33 @@ def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     delta = calculate_delta(float(spot), float(strike), T, r, v, kind)
     return {'delta': delta}
 
-# --- 5. AUTO-VOLATILITY ENGINE (NEW!) ---
-def calculate_historical_volatility(ticker_symbol):
-    """Calculates 3-month annualized volatility from Yahoo Finance history."""
+# --- 5. SMART VOLATILITY ENGINE ---
+def calculate_smart_volatility(ticker_symbol):
+    """
+    Calculates both Standard Historical and Parkinson (High/Low) Volatility.
+    Returns the higher of the two to be safe/conservative.
+    """
     try:
         tk = yf.Ticker(ticker_symbol)
+        # Fetch 3 months of data
         hist = tk.history(period="3mo")
         if hist.empty: return None
         
-        # Calculate Log Returns
+        # 1. Standard Close-to-Close Volatility
         hist['Log_Ret'] = np.log(hist['Close'] / hist['Close'].shift(1))
+        std_vol = hist['Log_Ret'].std() * np.sqrt(252) * 100
         
-        # Calculate Std Dev (Daily Vol)
-        daily_vol = hist['Log_Ret'].std()
+        # 2. Parkinson Volatility (High-Low Range) - Captures intraday swings
+        # Formula: sqrt(1/(4*ln(2))) * sqrt(sum(ln(H/L)^2) / N)
+        # Simplified: Daily Range Vol * sqrt(252)
+        hl_ratio_sq = np.log(hist['High'] / hist['Low']) ** 2
+        parkinson_vol = np.sqrt(1 / (4 * np.log(2)) * hl_ratio_sq.mean()) * np.sqrt(252) * 100
         
-        # Annualize (x sqrt(252 trading days))
-        annual_vol = daily_vol * np.sqrt(252) * 100
-        return round(annual_vol, 1)
+        # Return the "Truer" Volatility (Parkinson is often better for options)
+        # We average them or take max. Let's take Max to be conservative (higher premiums)
+        final_vol = max(std_vol, parkinson_vol)
+        
+        return round(final_vol, 1)
     except: return None
 
 def fetch_data(t):
@@ -144,10 +154,10 @@ def fetch_data(t):
     sym = f"{clean}.AX"
     
     # Auto-Calculate Volatility
-    auto_vol = calculate_historical_volatility(sym)
+    auto_vol = calculate_smart_volatility(sym)
     if auto_vol and auto_vol > 0:
         st.session_state.vol_manual = auto_vol
-        st.toast(f"✅ Volatility Auto-Set to {auto_vol}% based on history.")
+        st.toast(f"✅ Volatility Auto-Set: {auto_vol}% (High/Low Analysis)")
 
     if st.session_state.manual_spot:
         return "MANUAL", st.session_state.spot_price, None
@@ -175,7 +185,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v4.0</div>
+                <div class="header-sub">Option Strategy Builder v4.1</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -211,53 +221,6 @@ with c4:
             st.session_state.ref_data = data
             st.session_state.sheet_msg = msg
             st.rerun()
-
-# --- 8. TOOLS: AUDITOR & CALIBRATOR (NEW!) ---
-t1, t2 = st.tabs(["🔎 Code Auditor", "🎯 IV Calibrator"])
-
-with t1:
-    st.caption("Enter a code from Tradefloor (e.g. BHPZC9) to confirm it matches our data.")
-    audit_code = st.text_input("Audit Code", placeholder="BHPZC9").upper().strip()
-    if audit_code and st.session_state.ref_data is not None:
-        ref = st.session_state.ref_data
-        match = ref[ref['Code'] == audit_code]
-        if not match.empty:
-            row = match.iloc[0]
-            st.success(f"✅ **MATCH FOUND:** {audit_code}")
-            st.markdown(f"""
-            * **Ticker:** {row['Ticker']}
-            * **Type:** {row['Type']}
-            * **Strike:** ${float(row['Strike']):.2f}
-            * **Expiry:** {pd.to_datetime(row['Expiry']).strftime('%d %b %Y')}
-            """)
-        else:
-            st.error(f"❌ Code '{audit_code}' not found in the 94,000 code database.")
-
-with t2:
-    st.caption("Reverse engineer Volatility from a known price.")
-    cc1, cc2, cc3, cc4 = st.columns(4)
-    cal_strike = cc1.number_input("ATM Strike", value=round(st.session_state.spot_price,0))
-    cal_days = cc2.number_input("Days to Exp", value=30)
-    cal_price = cc3.number_input("Call Price", value=1.00)
-    
-    cc4.write("")
-    cc4.write("")
-    if cc4.button("Apply"):
-        # Binary search solver for pure python
-        low, high = 0.01, 2.0
-        found = False
-        for i in range(20):
-            mid = (low + high) / 2
-            p = get_bs_price('Call', st.session_state.spot_price, cal_strike, cal_days, mid*100)
-            if abs(p - cal_price) < 0.01:
-                st.session_state.vol_manual = mid * 100
-                st.success(f"IV Set: {mid*100:.1f}%")
-                found = True
-                st.rerun()
-                break
-            if p < cal_price: low = mid
-            else: high = mid
-        if not found: st.warning("Approximate match found.")
 
 # --- 9. TABLE DISPLAY ---
 df_view = pd.DataFrame()
@@ -407,7 +370,7 @@ if st.session_state.legs:
             for leg in st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
-                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, sim_vol)
+                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, leg['Vol'])
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * 100
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
