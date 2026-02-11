@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 7.1 (Visual Spreadsheet & Chart Polish)
+# VERSION: 7.2 (Clean Dark-Mode Table)
 # ==========================================
 
 import streamlit as st
@@ -13,10 +13,10 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v7.1")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v7.2")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
-# --- CSS STYLING (Teal & Table) ---
+# --- CSS STYLING ---
 st.markdown("""
 <style>
     .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
@@ -35,7 +35,7 @@ st.markdown("""
         font-size: 12px; font-family: monospace;
     }
     
-    /* Primary Button Override (Teal) */
+    /* Primary Button (Teal) */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #1DBFD2 !important; border: none; color: white !important; font-weight: bold;
     }
@@ -43,7 +43,7 @@ st.markdown("""
         background-color: #16aebf !important;
     }
     
-    /* Secondary Button Override */
+    /* Secondary Button */
     div[data-testid="stButton"] button[kind="secondary"] {
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
@@ -55,26 +55,18 @@ st.markdown("""
     
     .stDataFrame { border: none !important; }
 
-    /* Custom Table Styles */
-    .trade-row-call {
-        background-color: #f0fdf4; /* Green Tint */
-        border-bottom: 1px solid #bbf7d0;
-        padding: 8px 0;
-        font-size: 14px;
-        align-items: center;
-    }
-    .trade-row-put {
-        background-color: #fef2f2; /* Red Tint */
-        border-bottom: 1px solid #fecaca;
-        padding: 8px 0;
-        font-size: 14px;
-        align-items: center;
-    }
+    /* Clean Table Headers */
     .trade-header {
-        font-weight: 700; color: #64748b; font-size: 12px; text-transform: uppercase;
-        padding-bottom: 5px; border-bottom: 2px solid #e2e8f0; margin-bottom: 5px;
+        font-weight: 700; color: #94a3b8; font-size: 12px; text-transform: uppercase;
+        margin-bottom: 5px;
     }
-    .val-text { color: #0f172a; }
+    
+    /* Delete Button Styling */
+    button[kind="secondary"] {
+        padding: 0rem 0.5rem !important;
+        min-height: 0px !important;
+        height: 32px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -175,7 +167,7 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
         S = float(spot)
         K = float(strike)
         
-        # Discrete Dividend Logic (Auto Only)
+        # Discrete Dividend Logic
         if st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
@@ -261,7 +253,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v7.1</div>
+                <div class="header-sub">Option Strategy Builder v7.2</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -286,7 +278,6 @@ with c2:
 with c3:
     st.write("") 
     st.write("")
-    # Renamed Button to "Load Options"
     if st.button("Load Options", type="primary", use_container_width=True) or (query and query.upper() != st.session_state.ticker):
         if not query:
             st.warning("Please enter a ticker symbol.")
@@ -426,12 +417,12 @@ if not df_view.empty and current_exp:
         if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
-# --- 10. STRATEGY (TABLE VIEW) ---
+# --- 10. STRATEGY (CLEAN TABLE VIEW) ---
 if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
-    # Header Row
+    # Headers
     h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns([1, 2, 1, 1, 1, 1, 1, 1, 0.5])
     with h1: st.markdown('<div class="trade-header">Qty</div>', unsafe_allow_html=True)
     with h2: st.markdown('<div class="trade-header">Code</div>', unsafe_allow_html=True)
@@ -441,13 +432,15 @@ if st.session_state.legs:
     with h6: st.markdown('<div class="trade-header">Theo</div>', unsafe_allow_html=True)
     with h7: st.markdown('<div class="trade-header">Delta</div>', unsafe_allow_html=True)
     with h8: st.markdown('<div class="trade-header">Premium</div>', unsafe_allow_html=True)
-    with h9: st.markdown('<div class="trade-header"></div>', unsafe_allow_html=True)
+    with h9: st.markdown('', unsafe_allow_html=True)
+
+    # Line
+    st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
     total_delta = 0
     total_premium = 0
     total_theo = 0
     
-    # Data Rows
     for i, leg in enumerate(st.session_state.legs):
         new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
         net_delta = leg['Qty'] * new_delta * 100
@@ -458,67 +451,14 @@ if st.session_state.legs:
         total_premium += premium
         total_theo += theo_val
         
-        # Row Style
-        row_class = "trade-row-call" if leg['Type'] == 'Call' else "trade-row-put"
-        
-        with st.container():
-            c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([1, 2, 1, 1, 1, 1, 1, 1, 0.5])
-            
-            # Use columns directly inside container to form the "Row"
-            # We inject the color via a wrapper div around the columns if possible, 
-            # but Streamlit columns break HTML flow. 
-            # Alternative: Render each cell with custom markdown that has background color?
-            # Better: Just use the `st.markdown` for the whole row content? No, alignment issues.
-            # Compromise: We keep the column layout, but visual "row" effect comes from CSS targeting standard streamlt widgets? 
-            # No, let's just use simple text.
-            
-            # Actually, standard columns don't support background color well. 
-            # I will use a simple markdown table row construction for visual fidelity if interactive elements weren't needed.
-            # But we need the Delete button. 
-            # So standard columns it is. We will visually hint the color using the "Type" column color or emoji.
-            
-            # Let's try applying the style to the whole container
-            st.markdown(f"""
-            <div class="{row_class}" style="display: flex; flex-direction: row; justify-content: space-between;">
-                <div style="width: 10%; padding-left: 10px;"><strong>{leg['Qty']}</strong></div>
-                <div style="width: 20%;">{leg['Code']}</div>
-                <div style="width: 10%;">{leg['Type']}</div>
-                <div style="width: 10%;">{leg['Strike']:.3f}</div>
-                <div style="width: 10%;">${leg['Entry']:.3f}</div>
-                <div style="width: 10%;">${new_theo:.3f}</div>
-                <div style="width: 10%;">{net_delta:.1f}</div>
-                <div style="width: 10%;">${premium:.2f}</div>
-                <div style="width: 5%;"></div> 
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Floating Button Hack: We place the button in a column that visually aligns over the empty div above
-            # This is tricky in Streamlit. 
-            # Let's revert to standard columns for functionality, but lose the background color per row.
-            # OR: We use the `st.columns` approach and just accept white background, but colour the text.
-            
-            # REVISION: To get the requested "Spreadsheet Table" look with Green/Red rows AND a button:
-            # I will assume standard columns but styled text for now.
-            
-    # --- RE-IMPLEMENTATION OF ROW RENDERING (Standard Columns for Stability) ---
-    # I cleared the HTML attempt above to ensure buttons work reliably.
-            
-    for i, leg in enumerate(st.session_state.legs):
-        new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
-        net_delta = leg['Qty'] * new_delta * 100
-        premium = -(leg['Qty'] * leg['Entry'] * 100)
-        theo_val = leg['Qty'] * new_theo * 100
-        total_delta += net_delta
-        total_premium += premium
-        total_theo += theo_val
-        
-        # Visual Tinting Logic (using emoji or colored text since we can't bg-color columns easily)
-        type_color = "#16a34a" if leg['Type'] == 'Call' else "#dc2626"
+        # Color Logic for Text
+        type_color = "#4ade80" if leg['Type'] == 'Call' else "#f87171"
+        type_text = f"<span style='color:{type_color}; font-weight:600'>{leg['Type']}</span>"
         
         c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([1, 2, 1, 1, 1, 1, 1, 1, 0.5])
         with c1: st.write(f"**{leg['Qty']}**")
         with c2: st.write(f"{leg['Code']}")
-        with c3: st.markdown(f"<span style='color:{type_color}; font-weight:bold'>{leg['Type']}</span>", unsafe_allow_html=True)
+        with c3: st.markdown(type_text, unsafe_allow_html=True)
         with c4: st.write(f"{leg['Strike']:.3f}")
         with c5: st.write(f"${leg['Entry']:.3f}")
         with c6: st.write(f"${new_theo:.3f}")
@@ -528,15 +468,15 @@ if st.session_state.legs:
             if st.button("✕", key=f"d_{i}"):
                 st.session_state.legs.pop(i)
                 st.rerun()
-        st.markdown("<hr style='margin: 5px 0; opacity: 0.3'>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
     # Totals Row
     st.markdown(f"""
-    <div style="background-color: #f1f5f9; padding: 15px; border-radius: 8px; margin-top: 10px; border-top: 2px solid #94a3b8; display: flex; justify-content: space-between; align-items: center;">
-        <div style="font-weight: 700; color: #334155;">TOTAL STRATEGY</div>
+    <div style="background-color: transparent; padding: 15px 0; border-top: 2px solid #94a3b8; display: flex; justify-content: space-between; align-items: center; margin-top: 5px;">
+        <div style="font-weight: 700; color: #cbd5e1;">TOTAL STRATEGY</div>
         <div style="text-align: right;">
             <span style="margin-right: 20px;">Net Delta: <strong>{total_delta:.2f}</strong></span>
-            <span style="margin-right: 20px;">Net Premium: <strong style="color: {'#16a34a' if total_premium > 0 else '#dc2626'}">${total_premium:,.2f}</strong></span>
+            <span style="margin-right: 20px;">Net Premium: <strong style="color: {'#4ade80' if total_premium > 0 else '#f87171'}">${total_premium:,.2f}</strong></span>
             <span>Theo Value: <strong>${total_theo:,.2f}</strong></span>
         </div>
     </div>
@@ -596,7 +536,7 @@ if st.session_state.legs:
         
     fig = go.Figure()
     
-    # New Color: Electric Blue #0050FF for Today
+    # Electric Blue Today Line #0050FF
     fig.add_trace(go.Scatter(
         x=chart_prices, y=pnl_today, name="Today", 
         line=dict(color='#0050FF', width=3),
