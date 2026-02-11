@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 7.7 (Nuclear Slider Fix)
+# VERSION: 7.8 (Slider Text White Fix)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v7.7")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v7.8")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -66,9 +66,9 @@ st.markdown("""
         stroke: #0050FF !important;
     }
     
-    /* Target the tick marks labels */
+    /* Target the tick marks labels - CHANGED TO WHITE */
     div[data-testid="stSlider"] p {
-        color: #0050FF !important;
+        color: white !important;
     }
 
     /* Fallback for standard input range if supported */
@@ -276,7 +276,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v7.7</div>
+                <div class="header-sub">Option Strategy Builder v7.8</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
