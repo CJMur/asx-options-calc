@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 7.4 (UI Polish: Caps Button, Hidden Spot, Blue Sliders)
+# VERSION: 7.5 (Perfect Alignment & Blue Sliders)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v7.4")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v7.5")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -48,13 +48,14 @@ st.markdown("""
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
     
-    /* Slider Color Override - Force Blue #0050FF */
-    /* Target thumb and track */
-    div[data-testid="stSlider"] div[role="slider"],
-    div[data-testid="stSlider"] div[data-baseweb="slider"] > div:first-child > div:first-child {
+    /* --- SLIDER COLOR OVERRIDE (Force Blue #0050FF) --- */
+    /* Overrides track, fill, and thumb to remove all default Red */
+    div[data-testid="stSlider"] div[data-baseweb="slider"] div {
         background-color: #0050FF !important;
     }
-
+    div[data-testid="stSlider"] div[role="slider"] {
+        background-color: #0050FF !important;
+    }
     
     .stDataFrame { border: none !important; }
 
@@ -256,7 +257,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v7.4</div>
+                <div class="header-sub">Option Strategy Builder v7.5</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -273,19 +274,17 @@ with c1:
     query = st.text_input("Ticker", value=st.session_state.ticker, placeholder="Enter Stock Code")
 
 with c2:
-    # Only show Spot Price input if a ticker has been loaded
     if st.session_state.ticker:
         new_spot = st.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
         if new_spot != st.session_state.spot_price:
             st.session_state.spot_price = new_spot
             st.session_state.manual_spot = True
     else:
-        st.write("") # Placeholder
+        st.write("")
 
 with c3:
     st.write("") 
     st.write("")
-    # Button text changed to all caps
     if st.button("LOAD OPTIONS", type="primary", use_container_width=True) or (query and query.upper() != st.session_state.ticker):
         if not query:
             st.warning("Please enter a ticker symbol.")
@@ -425,14 +424,16 @@ if not df_view.empty and current_exp:
         if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
-# --- 10. STRATEGY (ALIGNED FOOTER) ---
+# --- 10. STRATEGY (ALIGNED FOOTER & CLEAN LAYOUT) ---
 if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
-    # Column Headers
-    h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 0.5]
-    h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(h_col_spec)
+    # 1. Define Column Ratios
+    col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 0.5]
+    
+    # 2. Render Headers
+    h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(col_spec)
     with h1: st.markdown('<div class="trade-header">Qty</div>', unsafe_allow_html=True)
     with h2: st.markdown('<div class="trade-header">Code</div>', unsafe_allow_html=True)
     with h3: st.markdown('<div class="trade-header">Type</div>', unsafe_allow_html=True)
@@ -442,13 +443,14 @@ if st.session_state.legs:
     with h7: st.markdown('<div class="trade-header">Delta</div>', unsafe_allow_html=True)
     with h8: st.markdown('<div class="trade-header">Premium</div>', unsafe_allow_html=True)
     
+    # Header Line
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
     total_delta = 0
     total_premium = 0
     total_theo = 0
     
-    # Rows
+    # 3. Render Rows
     for i, leg in enumerate(st.session_state.legs):
         new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
         net_delta = leg['Qty'] * new_delta * 100
@@ -462,7 +464,7 @@ if st.session_state.legs:
         type_color = "#4ade80" if leg['Type'] == 'Call' else "#f87171"
         type_text = f"<span style='color:{type_color}; font-weight:600'>{leg['Type']}</span>"
         
-        c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(h_col_spec)
+        c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(col_spec)
         with c1: st.write(f"**{leg['Qty']}**")
         with c2: st.write(f"{leg['Code']}")
         with c3: st.markdown(type_text, unsafe_allow_html=True)
@@ -477,9 +479,25 @@ if st.session_state.legs:
                 st.rerun()
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
-    # --- ALIGNED FOOTER ROW (No line above) ---
+    # 4. Render Footer (Aligned)
+    # Using a container with exact same columns to ensure alignment
     with st.container():
-        f1, f2, f3, f4, f5, f6, f7, f8, f9 = st.columns(h_col_spec)
+        # Background style for footer container
+        st.markdown("""
+        <style>
+        .footer-container {
+            background-color: #f1f5f9; 
+            border-radius: 8px; 
+            padding: 10px 0px; 
+            margin-top: 5px;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # We can't wrap st.columns in a div easily, so we just rely on visual alignment
+        # Remove extra HR
+        f1, f2, f3, f4, f5, f6, f7, f8, f9 = st.columns(col_spec)
+        
         with f2: st.markdown("**TOTAL STRATEGY**")
         with f6: st.markdown(f"**${total_theo:,.2f}**")
         with f7: st.markdown(f"**{total_delta:,.2f}**")
@@ -521,7 +539,8 @@ if st.session_state.legs:
         matrix_data.append(row)
         
     df_mx = pd.DataFrame(matrix_data).set_index("Price")
-    st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True, height=500)
+    # HEIGHT 600px
+    st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True, height=600)
 
     # CHART
     st.markdown("### Payoff Chart")
