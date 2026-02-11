@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 7.8 (Slider Text White Fix)
+# VERSION: 8.0 (Matrix Cleanup & Auto-Height)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v7.8")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v8.0")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -49,29 +49,20 @@ st.markdown("""
     }
     
     /* --- SLIDER COLOR FIX (Deep Override) --- */
-    /* Target the BaseWeb slider track fill specifically */
     div[data-baseweb="slider"] > div > div > div {
         background-color: #0050FF !important;
     }
-    
-    /* Target the Thumb */
     div[role="slider"] {
         background-color: #0050FF !important;
         box-shadow: none !important; 
     }
-    
-    /* Force any internal SVG lines to blue (if rendered that way) */
     div[data-testid="stSlider"] svg path {
         fill: #0050FF !important;
         stroke: #0050FF !important;
     }
-    
-    /* Target the tick marks labels - CHANGED TO WHITE */
     div[data-testid="stSlider"] p {
         color: white !important;
     }
-
-    /* Fallback for standard input range if supported */
     input[type=range] {
         accent-color: #0050FF !important;
     }
@@ -276,7 +267,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v7.8</div>
+                <div class="header-sub">Option Strategy Builder v8.0</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -525,7 +516,7 @@ if st.session_state.legs:
     
     matrix_data = []
     for p in prices:
-        row = {"Price": p}
+        row = {"Price": f"{p:.2f}"} # Strict 2 decimal formatting
         for d in dates:
             pnl = 0
             for leg in st.session_state.legs:
@@ -539,7 +530,8 @@ if st.session_state.legs:
         matrix_data.append(row)
         
     df_mx = pd.DataFrame(matrix_data).set_index("Price")
-    st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True, height=600)
+    # REMOVED FIXED HEIGHT to allow auto-fit and remove empty space
+    st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True)
 
     # CHART
     st.markdown("### Payoff Chart")
