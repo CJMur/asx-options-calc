@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 7.3 (Aligned Footer & Expanded Matrix)
+# VERSION: 7.4 (UI Polish: Caps Button, Hidden Spot, Blue Sliders)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v7.3")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v7.4")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -48,10 +48,13 @@ st.markdown("""
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
     
-    /* Slider Color Override */
-    div[data-testid="stSlider"] > div > div > div > div {
-        background-color: #1DBFD2 !important;
+    /* Slider Color Override - Force Blue #0050FF */
+    /* Target thumb and track */
+    div[data-testid="stSlider"] div[role="slider"],
+    div[data-testid="stSlider"] div[data-baseweb="slider"] > div:first-child > div:first-child {
+        background-color: #0050FF !important;
     }
+
     
     .stDataFrame { border: none !important; }
 
@@ -253,7 +256,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v7.3</div>
+                <div class="header-sub">Option Strategy Builder v7.4</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -270,15 +273,20 @@ with c1:
     query = st.text_input("Ticker", value=st.session_state.ticker, placeholder="Enter Stock Code")
 
 with c2:
-    new_spot = st.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
-    if new_spot != st.session_state.spot_price:
-        st.session_state.spot_price = new_spot
-        st.session_state.manual_spot = True
-        
+    # Only show Spot Price input if a ticker has been loaded
+    if st.session_state.ticker:
+        new_spot = st.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
+        if new_spot != st.session_state.spot_price:
+            st.session_state.spot_price = new_spot
+            st.session_state.manual_spot = True
+    else:
+        st.write("") # Placeholder
+
 with c3:
     st.write("") 
     st.write("")
-    if st.button("Load Options", type="primary", use_container_width=True) or (query and query.upper() != st.session_state.ticker):
+    # Button text changed to all caps
+    if st.button("LOAD OPTIONS", type="primary", use_container_width=True) or (query and query.upper() != st.session_state.ticker):
         if not query:
             st.warning("Please enter a ticker symbol.")
         else:
@@ -470,15 +478,9 @@ if st.session_state.legs:
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
     # --- ALIGNED FOOTER ROW (No line above) ---
-    # We use a slight background to distinguish it, but keep column alignment
     with st.container():
         f1, f2, f3, f4, f5, f6, f7, f8, f9 = st.columns(h_col_spec)
-        
-        # Spacer / Title
-        with f2: 
-            st.markdown("**TOTAL STRATEGY**")
-        
-        # Values
+        with f2: st.markdown("**TOTAL STRATEGY**")
         with f6: st.markdown(f"**${total_theo:,.2f}**")
         with f7: st.markdown(f"**{total_delta:,.2f}**")
         with f8: 
@@ -519,7 +521,6 @@ if st.session_state.legs:
         matrix_data.append(row)
         
     df_mx = pd.DataFrame(matrix_data).set_index("Price")
-    # HEIGHT INCREASED TO 500
     st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True, height=500)
 
     # CHART
