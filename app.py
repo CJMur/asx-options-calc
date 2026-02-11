@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 6.3 (Fix Payoff Matrix Error)
+# VERSION: 7.0 (UI/UX Overhaul - Teal & Cards)
 # ==========================================
 
 import streamlit as st
@@ -12,18 +12,23 @@ from datetime import datetime, time, timedelta
 import pytz
 import math
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v6.3")
+# --- 1. CONFIGURATION & THEME ---
+st.set_page_config(layout="wide", page_title="TradersCircle Options v7.0")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
-# --- CSS STYLING ---
+# --- CSS STYLING (Teal Override) ---
 st.markdown("""
 <style>
+    /* Global Background tweaks */
     .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
     
+    /* TradersCircle Teal: #1DBFD2 */
+    
+    /* Header Box */
     .header-box {
         padding: 1.5rem; background-color: #0e1b32; border-radius: 10px; color: white;
         margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border-bottom: 4px solid #1DBFD2;
     }
     .header-title { font-size: 24px; font-weight: 700; margin: 0; }
     .header-sub { font-size: 14px; opacity: 0.8; margin: 0; }
@@ -33,14 +38,45 @@ st.markdown("""
         font-size: 12px; font-family: monospace;
     }
     
+    /* Primary Button Override (Teal) */
     div[data-testid="stButton"] button[kind="primary"] {
-        background-color: #15803d !important; border: none;
+        background-color: #1DBFD2 !important; 
+        border: none;
+        color: white !important;
+        font-weight: bold;
     }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #16aebf !important;
+    }
+    
+    /* Secondary Button Override */
     div[data-testid="stButton"] button[kind="secondary"] {
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
     
+    /* Slider Color Override */
+    div[data-testid="stSlider"] > div > div > div > div {
+        background-color: #1DBFD2 !important;
+    }
+    
+    /* Remove default dataframe borders */
     .stDataFrame { border: none !important; }
+
+    /* Strategy Card Styles */
+    .leg-card-call {
+        padding: 10px; border-radius: 8px; 
+        background-color: #dcfce7; /* Light Green */
+        border-left: 5px solid #15803d;
+        color: #0f172a; margin-bottom: 8px;
+    }
+    .leg-card-put {
+        padding: 10px; border-radius: 8px; 
+        background-color: #fee2e2; /* Light Red */
+        border-left: 5px solid #b91c1c;
+        color: #0f172a; margin-bottom: 8px;
+    }
+    .leg-text { font-weight: 600; font-size: 14px; }
+    .leg-sub { font-size: 12px; opacity: 0.8; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -55,8 +91,14 @@ if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializi
 if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
-# RESTORED: This variable is required for the Payoff Matrix
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
+
+# Advanced Inputs State
+if 'risk_free_rate' not in st.session_state: st.session_state.risk_free_rate = 4.0
+if 'manual_div_amt' not in st.session_state: st.session_state.manual_div_amt = 0.0
+if 'manual_div_date' not in st.session_state: st.session_state.manual_div_date = None
+if 'use_manual_div' not in st.session_state: st.session_state.use_manual_div = False
+if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 30.0
 
 # --- 3. DATA ENGINE ---
 @st.cache_data(ttl=600)
@@ -70,27 +112,17 @@ def load_sheet(raw_url):
 
         df = pd.read_csv(csv_url, on_bad_lines='skip', dtype=str)
         
-        # Robust Column Mapping
         header_map = {
-            'ASXCode': 'Code',
-            'Underlying': 'Ticker',
-            'OptType': 'Type',
-            'ExpDate': 'Expiry',
-            'Strike': 'Strike',
-            'Volatility': 'Vol',
-            'Settlement': 'Settlement',
-            'Style': 'Style',
-            'Lookup Key': 'LookupKey'
+            'ASXCode': 'Code', 'Underlying': 'Ticker', 'OptType': 'Type', 
+            'ExpDate': 'Expiry', 'Strike': 'Strike', 'Volatility': 'Vol', 
+            'Settlement': 'Settlement', 'Style': 'Style', 'Lookup Key': 'LookupKey'
         }
-        
-        # Rename columns if they exist
         df = df.rename(columns=header_map)
         
         required = ['Code', 'Ticker', 'Strike', 'Expiry']
         if not all(col in df.columns for col in required):
-            return pd.DataFrame(), f"error|Missing columns. Found: {list(df.columns)}"
+            return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
 
-        # Cleaning
         df['Ticker'] = df['Ticker'].str.upper().str.strip()
         df['Type'] = df['Type'].str.upper().str.strip().replace({'C': 'Call', 'P': 'Put'})
         
@@ -139,27 +171,36 @@ def black_scholes_european(S, K, T, r, sigma, option_type):
 
 def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
     bs_price = black_scholes_european(S, K, T, r, sigma, option_type)
-    if option_type == 'Call':
-        return bs_price 
-    else:
-        intrinsic = max(0, K - S)
-        return max(bs_price, intrinsic)
+    if option_type == 'Call': return bs_price 
+    else: return max(bs_price, max(0, K - S))
 
-def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
+def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
+    r = st.session_state.risk_free_rate / 100.0
+    
     try:
         T = max(0.001, time_days / 365.0)
         v = vol_pct / 100.0
-        r = rate_pct / 100.0
         S = float(spot)
         K = float(strike)
         
         # Discrete Dividend Logic
-        div_data = st.session_state.div_info
-        if div_data and div_data['date']:
-            days_to_div = (div_data['date'] - datetime.now()).days
+        div_amt = 0.0
+        div_date = None
+        
+        if st.session_state.use_manual_div:
+            div_amt = st.session_state.manual_div_amt
+            div_date = st.session_state.manual_div_date
+            if div_date and isinstance(div_date, datetime) == False:
+                 div_date = datetime.combine(div_date, datetime.min.time())
+        elif st.session_state.div_info:
+            div_amt = st.session_state.div_info['amount']
+            div_date = st.session_state.div_info['date']
+            
+        if div_date and div_amt > 0:
+            days_to_div = (div_date - datetime.now()).days
             if 0 <= days_to_div < time_days:
                 t_div = days_to_div / 365.0
-                div_pv = div_data['amount'] * math.exp(-r * t_div)
+                div_pv = div_amt * math.exp(-r * t_div)
                 S = max(0.01, S - div_pv)
         
         if style.upper() == 'EUROPEAN':
@@ -168,23 +209,17 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct, rat
             price = bjerksund_stensland_american(S, K, T, r, v, kind)
             
         d1 = (math.log(S / K) + (r + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
-        if kind == 'Call':
-            delta = norm_cdf(d1)
-        else:
-            delta = norm_cdf(d1) - 1
+        if kind == 'Call': delta = norm_cdf(d1)
+        else: delta = norm_cdf(d1) - 1
             
         return price, delta
-    except:
-        return 0.0, 0.0
+    except: return 0.0, 0.0
 
 def check_market_hours():
     sydney_tz = pytz.timezone('Australia/Sydney')
     now = datetime.now(sydney_tz)
-    market_start = time(10, 0)
-    market_end = time(16, 10)
     if now.weekday() >= 5: return False
-    current_time = now.time()
-    return market_start <= current_time <= market_end
+    return time(10, 0) <= now.time() <= time(16, 10)
 
 st.session_state.is_market_open = check_market_hours()
 
@@ -203,18 +238,15 @@ def fetch_data(t):
                 ex_ts = info['exDividendDate']
                 ex_date = datetime.fromtimestamp(ex_ts)
                 amt = info.get('lastDividendValue', info.get('dividendRate', 0)/2)
-                if ex_date > datetime.now():
-                    div_info = {'amount': amt, 'date': ex_date}
+                if ex_date > datetime.now(): div_info = {'amount': amt, 'date': ex_date}
         except: pass
         return "MANUAL", spot, div_info
 
     try:
         tk = yf.Ticker(sym)
         hist = tk.history(period="1d")
-        if not hist.empty:
-            spot = float(hist['Close'].iloc[-1])
-        else:
-            return "ERROR", 0.0, None
+        if not hist.empty: spot = float(hist['Close'].iloc[-1])
+        else: return "ERROR", 0.0, None
             
         try:
             info = tk.info
@@ -235,11 +267,14 @@ status_parts = st.session_state.sheet_msg.split("|")
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 
-div_txt = ""
-if st.session_state.div_info:
+div_display_txt = ""
+if st.session_state.use_manual_div:
+    d_date = st.session_state.manual_div_date.strftime("%d %b") if st.session_state.manual_div_date else "N/A"
+    div_display_txt = f" | 🔧 Fixed Div: ${st.session_state.manual_div_amt:.2f} on {d_date}"
+elif st.session_state.div_info:
     d = st.session_state.div_info
     d_date = d['date'].strftime("%d %b")
-    div_txt = f" | 💰 Next Div: ${d['amount']:.2f} on {d_date}"
+    div_display_txt = f" | 💰 Auto Div: ${d['amount']:.2f} on {d_date}"
 
 with st.container():
     st.markdown(f"""
@@ -247,12 +282,12 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v6.3</div>
+                <div class="header-sub">Option Strategy Builder v7.0</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
                 <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
-                <span class="status-tag">{mkt_status}{div_txt}</span>
+                <span class="status-tag">{mkt_status}{div_display_txt}</span>
             </div>
         </div>
     </div>
@@ -289,7 +324,23 @@ with c3:
                 st.session_state.is_market_open = check_market_hours()
                 st.rerun()
 
-# --- 9. TABLE DISPLAY ---
+# --- 8. ADVANCED INPUTS ---
+with st.expander("⚙️ Advanced Model Inputs (Tune Volatility & Dividends)", expanded=False):
+    ac1, ac2, ac3, ac4 = st.columns(4)
+    with ac1:
+        st.session_state.vol_manual = st.slider("Global Volatility Adj %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
+        st.caption("Note: Pricing mostly uses sheet Volatility now.")
+    with ac2:
+        st.session_state.risk_free_rate = st.number_input("Risk Free Rate (%)", value=4.0, step=0.1)
+    with ac3:
+        st.session_state.use_manual_div = st.checkbox("Override Dividend?", value=st.session_state.use_manual_div)
+        st.session_state.manual_div_amt = st.number_input("Next Dividend ($)", value=0.0, step=0.01, disabled=not st.session_state.use_manual_div)
+    with ac4:
+        st.write("")
+        st.write("")
+        st.session_state.manual_div_date = st.date_input("Ex-Div Date", value=datetime.now(), disabled=not st.session_state.use_manual_div)
+
+# --- 9. CHAIN DISPLAY ---
 df_view = pd.DataFrame()
 current_exp = None
 
@@ -335,13 +386,13 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             
             df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
             df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
-            df_view['C_Delta'] = df_view['STRIKE'].map(calls['Calc_Delta'])
             df_view['C_Vol'] = df_view['STRIKE'].map(calls['Calc_Vol'])
+            df_view['C_Delta'] = df_view['STRIKE'].map(calls['Calc_Delta'])
             
             df_view['P_Code'] = df_view['STRIKE'].map(puts['Code'])
             df_view['P_Price'] = df_view['STRIKE'].map(puts['Calc_Price'])
-            df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
             df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
+            df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
 
 if not df_view.empty and current_exp:
     center = st.session_state.spot_price
@@ -361,7 +412,7 @@ if not df_view.empty and current_exp:
         subset=['STRIKE']
     ).format({
         'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}',
-        'STRIKE': '{:.2f}',
+        'STRIKE': '{:.3f}', # Strict 3 decimal limit request
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
@@ -372,7 +423,7 @@ if not df_view.empty and current_exp:
             "C_Price": st.column_config.NumberColumn("Price", format="%.3f"),
             "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f"),
             "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
-            "STRIKE": st.column_config.NumberColumn("Strike", format="%.2f"),
+            "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f"),
             "P_Price": st.column_config.NumberColumn("Price", format="%.3f"),
             "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f"),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
@@ -395,11 +446,10 @@ if not df_view.empty and current_exp:
         def add(side, kind, px, code_hint, delta_val, qty_val):
             final_qty = qty_val if side == "Buy" else -qty_val
             row_vol = row['C_Vol'] if kind == 'Call' else row['P_Vol']
-            
             st.session_state.legs.append({
                 "Qty": final_qty, "Type": kind, "Strike": row['STRIKE'], 
                 "Expiry": days_diff, "Vol": row_vol, "Entry": px, 
-                "Code": code_hint, "Delta": delta_val, "Remove": False 
+                "Code": code_hint, "Delta": delta_val
             })
             st.rerun()
             
@@ -412,82 +462,79 @@ if not df_view.empty and current_exp:
         if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
-# --- 10. PORTFOLIO & MATRIX ---
+# --- 10. STRATEGY (NEW UI) ---
 if st.session_state.legs:
     st.markdown("---")
-    c_tick, c_port = st.columns([1, 2], gap="medium")
-    with c_tick:
-        st.subheader("Ticket")
-        ticket_text = f"TICKET: {st.session_state.ticker} (Spot ${st.session_state.spot_price:.2f})\n"
-        for leg in st.session_state.legs:
-            ticket_text += f"{'Buy' if leg['Qty']>0 else 'Sell'} {abs(leg['Qty'])}x {leg['Code']} ({leg['Type']} ${leg['Strike']}) @ ${leg['Entry']:.3f}\n"
-        st.text_area("Copy", ticket_text, height=100)
-        if st.button("Clear Portfolio", type="secondary"):
-            st.session_state.legs = []
-            st.rerun()
-
-    with c_port:
-        st.subheader("Legs (Select row to delete)")
+    st.subheader("Strategy")
+    
+    # Calculate Live Totals First
+    live_legs = []
+    total_delta = 0
+    total_premium = 0
+    total_theo = 0
+    
+    for i, leg in enumerate(st.session_state.legs):
+        new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
+        net_delta = leg['Qty'] * new_delta * 100
+        premium = -(leg['Qty'] * leg['Entry'] * 100)
+        theo_val = leg['Qty'] * new_theo * 100
         
-        live_legs = []
-        for leg in st.session_state.legs:
-            # Recalculate using specific leg volatility
-            new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
+        total_delta += net_delta
+        total_premium += premium
+        total_theo += theo_val
+        
+        live_legs.append({
+            "idx": i,
+            "Qty": leg['Qty'],
+            "Code": leg['Code'],
+            "Type": leg['Type'],
+            "Strike": leg['Strike'],
+            "Entry": leg['Entry'],
+            "Theo": new_theo,
+            "NetDelta": net_delta,
+            "Premium": premium
+        })
+    
+    # Render Strategy Cards
+    for leg in live_legs:
+        # Determine Color Class
+        card_class = "leg-card-call" if leg['Type'] == 'Call' else "leg-card-put"
+        
+        # Build Container
+        with st.container():
+            st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
             
-            l = leg.copy()
-            l['Theo (Unit)'] = new_theo
-            l['Delta'] = new_delta
-            l['Net Delta'] = leg['Qty'] * new_delta * 100
-            l['Premium'] = -(leg['Qty'] * leg['Entry'] * 100)
-            live_legs.append(l)
+            # Layout Columns
+            c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 2, 1, 1, 1, 1, 1, 0.5])
             
-        df_port = pd.DataFrame(live_legs)
-        
-        if not df_port.empty:
-            total_delta = df_port['Net Delta'].sum()
-            total_premium = df_port['Premium'].sum()
-            total_theo = (df_port['Qty'] * df_port['Theo (Unit)'] * 100).sum()
+            with c1: st.markdown(f"**{leg['Qty']}** <span style='font-size:12px'>Qty</span>", unsafe_allow_html=True)
+            with c2: st.markdown(f"**{leg['Code']}**", unsafe_allow_html=True)
+            with c3: st.markdown(f"**{leg['Type']}**", unsafe_allow_html=True)
+            with c4: st.markdown(f"**{leg['Strike']:.3f}**", unsafe_allow_html=True)
+            with c5: st.markdown(f"${leg['Entry']:.3f} <span style='font-size:10px'>Entry</span>", unsafe_allow_html=True)
+            with c6: st.markdown(f"${leg['Theo']:.3f} <span style='font-size:10px'>Theo</span>", unsafe_allow_html=True)
+            with c7: st.markdown(f"{leg['NetDelta']:.1f} <span style='font-size:10px'>Delta</span>", unsafe_allow_html=True)
             
-            total_row = pd.DataFrame([{
-                'Qty': np.nan, 'Type': '', 'Strike': np.nan, 'Expiry': None, 'Entry': np.nan, 
-                'Code': 'TOTAL', 'Theo (Unit)': total_theo, 'Net Delta': total_delta, 'Premium': total_premium
-            }])
-            df_display = pd.concat([df_port, total_row], ignore_index=True)
-        else:
-            df_display = df_port
+            with c8:
+                if st.button("✕", key=f"del_{leg['idx']}", help="Remove Leg"):
+                    st.session_state.legs.pop(leg['idx'])
+                    st.rerun()
+            
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        column_config = {
-            "Code": st.column_config.TextColumn("Code"),
-            "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
-            "Theo (Unit)": st.column_config.NumberColumn("Theo Value", format="$%.2f"),
-            "Net Delta": st.column_config.NumberColumn("Net Delta", format="%.2f"),
-            "Premium": st.column_config.NumberColumn("Premium (Cash)", format="$%.2f"),
-            "Qty": st.column_config.NumberColumn("Qty", format="%d"),
-        }
-        
-        cols = ['Qty', 'Code', 'Type', 'Strike', 'Entry', 'Theo (Unit)', 'Net Delta', 'Premium']
-        
-        def highlight_total(row):
-            if row['Code'] == 'TOTAL':
-                return ['font-weight: bold; border-top: 2px solid #888888;'] * len(row)
-            return [''] * len(row)
+    # Totals Row (Clean, Bold)
+    st.markdown(f"""
+    <div style="background-color: #f1f5f9; padding: 15px; border-radius: 8px; margin-top: 10px; border-top: 2px solid #94a3b8; display: flex; justify-content: space-between; align-items: center;">
+        <div style="font-weight: 700; color: #334155;">TOTAL STRATEGY</div>
+        <div style="text-align: right;">
+            <span style="margin-right: 20px;">Net Delta: <strong>{total_delta:.2f}</strong></span>
+            <span style="margin-right: 20px;">Net Premium: <strong style="color: {'#16a34a' if total_premium > 0 else '#dc2626'}">${total_premium:,.2f}</strong></span>
+            <span>Theo Value: <strong>${total_theo:,.2f}</strong></span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        event = st.dataframe(
-            df_display[cols].style.apply(highlight_total, axis=1).format({
-                'Entry': '${:,.3f}', 'Theo (Unit)': '${:,.2f}', 'Net Delta': '{:,.2f}', 'Premium': '${:,.2f}'
-            }),
-            column_config=column_config, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="multi-row"
-        )
-        
-        if event.selection.rows:
-            selected_indices = event.selection.rows
-            valid_deletions = [i for i in selected_indices if i < len(st.session_state.legs)]
-            if valid_deletions:
-                current_legs = st.session_state.legs
-                st.session_state.legs = [leg for i, leg in enumerate(current_legs) if i not in valid_deletions]
-                st.rerun()
-
-    # MATRIX
+    # --- MATRIX ---
     st.markdown("---")
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
@@ -524,7 +571,7 @@ if st.session_state.legs:
     st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True)
 
     # CHART
-    st.markdown("### Chart")
+    st.markdown("### Payoff Chart")
     chart_prices = np.linspace(spot * (1 - range_pct*1.5), spot * (1 + range_pct*1.5), 100)
     pnl_today = []
     pnl_expiry = []
@@ -542,8 +589,23 @@ if st.session_state.legs:
         pnl_expiry.append(val_tF)
         
     fig = go.Figure()
+    # TradersCircle Colors: Dark Blue & Teal
     fig.add_trace(go.Scatter(x=chart_prices, y=pnl_today, name="Today", line=dict(color='#0e1b32', width=3)))
-    fig.add_trace(go.Scatter(x=chart_prices, y=pnl_expiry, name="Expiry", line=dict(color='#15803d', dash='dash')))
+    fig.add_trace(go.Scatter(x=chart_prices, y=pnl_expiry, name="Expiry", line=dict(color='#1DBFD2', dash='dash', width=3)))
     fig.add_vline(x=spot, line_dash="dot", line_color="grey")
-    fig.update_layout(height=400, template="plotly_white", margin=dict(t=10, b=10))
+    
+    # Update Axes with Titles & Dollar Signs
+    fig.update_layout(
+        height=450, 
+        template="plotly_white", 
+        margin=dict(t=30, b=30),
+        xaxis=dict(
+            title="Stock Price @ Expiry",
+            tickprefix="$"
+        ),
+        yaxis=dict(
+            title="Profit / Loss ($)",
+            tickprefix="$"
+        )
+    )
     st.plotly_chart(fig, use_container_width=True)
