@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 7.6 (Slider Color Fix)
+# VERSION: 7.7 (Nuclear Slider Fix)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v7.6")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v7.7")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -48,23 +48,32 @@ st.markdown("""
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
     
-    /* --- SLIDER COLOR FIX (Aggressive Override) --- */
-    /* 1. The Thumb (Circle) */
-    div[data-testid="stSlider"] div[role="slider"] {
-        background-color: #0050FF !important;
-        border-color: #0050FF !important;
-        box-shadow: none !important;
-    }
-    
-    /* 2. The Filled Track (The line to the left of the thumb) */
-    /* This targets the first child div inside the slider track container, which is usually the filled part */
-    div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div:first-child {
+    /* --- SLIDER COLOR FIX (Deep Override) --- */
+    /* Target the BaseWeb slider track fill specifically */
+    div[data-baseweb="slider"] > div > div > div {
         background-color: #0050FF !important;
     }
     
-    /* 3. The Value Text (The numbers '7' or '5%' above) */
-    div[data-testid="stSlider"] div[data-testid="stMarkdownContainer"] p {
+    /* Target the Thumb */
+    div[role="slider"] {
+        background-color: #0050FF !important;
+        box-shadow: none !important; 
+    }
+    
+    /* Force any internal SVG lines to blue (if rendered that way) */
+    div[data-testid="stSlider"] svg path {
+        fill: #0050FF !important;
+        stroke: #0050FF !important;
+    }
+    
+    /* Target the tick marks labels */
+    div[data-testid="stSlider"] p {
         color: #0050FF !important;
+    }
+
+    /* Fallback for standard input range if supported */
+    input[type=range] {
+        accent-color: #0050FF !important;
     }
     
     .stDataFrame { border: none !important; }
@@ -267,7 +276,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v7.6</div>
+                <div class="header-sub">Option Strategy Builder v7.7</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -488,9 +497,7 @@ if st.session_state.legs:
 
     # --- ALIGNED FOOTER ROW ---
     with st.container():
-        # Clean spacing, matching columns
         f1, f2, f3, f4, f5, f6, f7, f8, f9 = st.columns(h_col_spec)
-        
         with f2: st.markdown("**TOTAL STRATEGY**")
         with f6: st.markdown(f"**${total_theo:,.2f}**")
         with f7: st.markdown(f"**{total_delta:,.2f}**")
