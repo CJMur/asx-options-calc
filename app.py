@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 6.2 (New Database Schema Fix)
+# VERSION: 6.3 (Fix Payoff Matrix Error)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v6.2")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v6.3")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -55,8 +55,10 @@ if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializi
 if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
+# RESTORED: This variable is required for the Payoff Matrix
+if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
 
-# --- 3. DATA ENGINE (UPDATED MAPPING) ---
+# --- 3. DATA ENGINE ---
 @st.cache_data(ttl=600)
 def load_sheet(raw_url):
     try:
@@ -66,13 +68,9 @@ def load_sheet(raw_url):
         else:
             csv_url = raw_url
 
-        # Read CSV
         df = pd.read_csv(csv_url, on_bad_lines='skip', dtype=str)
         
-        # Normalize headers to match your screenshot mapping
-        # Screenshot Headers: Lookup Key, BusDate, Market, ASXCode, Underlying, OptType, ExpDate, Strike, Style, ContractSize, DerivativeProduct, Volatility, Settlement
-        
-        # Create a robust map
+        # Robust Column Mapping
         header_map = {
             'ASXCode': 'Code',
             'Underlying': 'Ticker',
@@ -88,42 +86,29 @@ def load_sheet(raw_url):
         # Rename columns if they exist
         df = df.rename(columns=header_map)
         
-        # Check required columns
         required = ['Code', 'Ticker', 'Strike', 'Expiry']
         if not all(col in df.columns for col in required):
-            # Fallback for old sheet format if needed, or error
             return pd.DataFrame(), f"error|Missing columns. Found: {list(df.columns)}"
 
-        # --- DATA CLEANING ---
+        # Cleaning
         df['Ticker'] = df['Ticker'].str.upper().str.strip()
-        
-        # Clean Type (C -> Call, P -> Put)
         df['Type'] = df['Type'].str.upper().str.strip().replace({'C': 'Call', 'P': 'Put'})
         
-        # Clean Style (A -> American, E -> European)
         if 'Style' in df.columns:
             df['Style'] = df['Style'].str.upper().str.strip().replace({'A': 'American', 'E': 'European'})
         else:
-            df['Style'] = 'American' # Default
+            df['Style'] = 'American'
             
-        # Numerics
         df['Strike'] = pd.to_numeric(df['Strike'].str.replace(',', '').str.replace('$', ''), errors='coerce')
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
-        # Volatility (Handle "64.78%" -> 64.78)
         if 'Vol' in df.columns:
             df['Vol'] = df['Vol'].str.replace('%', '').astype(float)
-            # Ensure it is percentage (e.g. 30.0 not 0.30)
-            # If values are small (< 1.5), assume decimal and convert to %
-            # If values are > 1.5 (like 64.78), assume %
-            # Safe logic: if mean is < 1, multiply by 100.
-            # Per row check:
-            mask = df['Vol'] <= 1.0 # Assuming IV is rarely < 1% literally
+            mask = df['Vol'] <= 1.0 
             df.loc[mask, 'Vol'] = df.loc[mask, 'Vol'] * 100
         else:
             df['Vol'] = 30.0
             
-        # Settlement
         if 'Settlement' in df.columns:
             df['Settlement'] = pd.to_numeric(df['Settlement'].str.replace('$', ''), errors='coerce')
         else:
@@ -139,7 +124,7 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- 4. MATH ENGINE (Discrete Dividend + Am/Eu) ---
+# --- 4. MATH ENGINE ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
@@ -153,9 +138,6 @@ def black_scholes_european(S, K, T, r, sigma, option_type):
         return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
 
 def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
-    # Approximation: American Option Value >= European Value on Adjusted Spot
-    # For a web calculator, max(European, Intrinsic) is a robust safe floor
-    # Real BS approx is complex, but this handles the "Dividends drop the price" logic correctly via the Adjusted S input
     bs_price = black_scholes_european(S, K, T, r, sigma, option_type)
     if option_type == 'Call':
         return bs_price 
@@ -171,27 +153,20 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct, rat
         S = float(spot)
         K = float(strike)
         
-        # --- DISCRETE DIVIDEND LOGIC ---
-        # 1. Get Dividend Info
+        # Discrete Dividend Logic
         div_data = st.session_state.div_info
-        
-        # 2. Adjust Spot if Div is before Expiry
         if div_data and div_data['date']:
             days_to_div = (div_data['date'] - datetime.now()).days
-            
-            # Subtract PV of dividend if it occurs before expiry
             if 0 <= days_to_div < time_days:
                 t_div = days_to_div / 365.0
                 div_pv = div_data['amount'] * math.exp(-r * t_div)
-                S = max(0.01, S - div_pv) # S_adj
+                S = max(0.01, S - div_pv)
         
-        # --- PRICING ---
         if style.upper() == 'EUROPEAN':
             price = black_scholes_european(S, K, T, r, v, kind)
         else:
             price = bjerksund_stensland_american(S, K, T, r, v, kind)
             
-        # --- DELTA ---
         d1 = (math.log(S / K) + (r + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
         if kind == 'Call':
             delta = norm_cdf(d1)
@@ -216,28 +191,23 @@ st.session_state.is_market_open = check_market_hours()
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
     sym = f"{clean}.AX"
-    
     div_info = None
     spot = 0.0
     
-    # Manual Spot Override Logic
     if st.session_state.manual_spot:
         spot = st.session_state.spot_price
-        # Attempt to fetch dividends even in manual mode
         try:
             tk = yf.Ticker(sym)
             info = tk.info
             if 'exDividendDate' in info and info['exDividendDate']:
                 ex_ts = info['exDividendDate']
                 ex_date = datetime.fromtimestamp(ex_ts)
-                # Ensure we have a dividend amount
                 amt = info.get('lastDividendValue', info.get('dividendRate', 0)/2)
                 if ex_date > datetime.now():
                     div_info = {'amount': amt, 'date': ex_date}
         except: pass
         return "MANUAL", spot, div_info
 
-    # Live Fetch
     try:
         tk = yf.Ticker(sym)
         hist = tk.history(period="1d")
@@ -246,7 +216,6 @@ def fetch_data(t):
         else:
             return "ERROR", 0.0, None
             
-        # Fetch Dividends
         try:
             info = tk.info
             if 'exDividendDate' in info and info['exDividendDate']:
@@ -278,7 +247,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v6.2</div>
+                <div class="header-sub">Option Strategy Builder v6.3</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -311,12 +280,9 @@ with c3:
             st.session_state.ticker = query.upper()
             with st.spinner("Fetching Market Data..."):
                 source, px, div_data = fetch_data(st.session_state.ticker)
-                
                 if not st.session_state.manual_spot: st.session_state.spot_price = px
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
-                
-                # Reload sheet to ensure filtering by new ticker works
                 data, msg = load_sheet(RAW_SHEET_URL)
                 st.session_state.ref_data = data
                 st.session_state.sheet_msg = msg
@@ -344,7 +310,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         if current_exp:
             target_dt = exp_map[current_exp]
             days_diff = (target_dt - today).days
-            
             day_chain = subset[subset['Expiry'] == target_dt].copy()
             
             def calc_row_metrics(row):
@@ -352,14 +317,10 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
                 style = row.get('Style', 'American')
                 
                 if st.session_state.is_market_open:
-                    # Calc Fair Value
                     px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
                 else:
-                    # Use Settlement
                     px = float(row['Settlement']) if pd.notna(row['Settlement']) else 0.0
-                    # Recalc delta for consistency
                     _, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
-                
                 return pd.Series([px, delta, vol])
 
             metrics = day_chain.apply(calc_row_metrics, axis=1)
@@ -433,12 +394,6 @@ if not df_view.empty and current_exp:
         
         def add(side, kind, px, code_hint, delta_val, qty_val):
             final_qty = qty_val if side == "Buy" else -qty_val
-            
-            # Fetch style from dataframe for this specific leg
-            # Need to find the source row in day_chain to get Style
-            # Simplify: Assume American as default if not easily retrievable here, 
-            # OR pass it through the UI table (hidden col).
-            # For now, let's just grab Vol which IS in the UI table. 
             row_vol = row['C_Vol'] if kind == 'Call' else row['P_Vol']
             
             st.session_state.legs.append({
@@ -476,9 +431,8 @@ if st.session_state.legs:
         
         live_legs = []
         for leg in st.session_state.legs:
-            # We need to know Style for accurate recalc. Default American if missing.
-            style = 'American' # Ideally store this in leg object too
-            new_theo, new_delta = calculate_price_and_delta(style, leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
+            # Recalculate using specific leg volatility
+            new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
             
             l = leg.copy()
             l['Theo (Unit)'] = new_theo
@@ -520,14 +474,9 @@ if st.session_state.legs:
 
         event = st.dataframe(
             df_display[cols].style.apply(highlight_total, axis=1).format({
-                'Entry': '${:,.3f}', 'Theo (Unit)': '${:,.2f}', 
-                'Net Delta': '{:,.2f}', 'Premium': '${:,.2f}'
+                'Entry': '${:,.3f}', 'Theo (Unit)': '${:,.2f}', 'Net Delta': '{:,.2f}', 'Premium': '${:,.2f}'
             }),
-            column_config=column_config,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="multi-row"
+            column_config=column_config, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="multi-row"
         )
         
         if event.selection.rows:
