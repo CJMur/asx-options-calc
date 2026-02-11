@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 5.7 (Bold Strikes & Blank Footer)
+# VERSION: 6.1 (Discrete Dividends Enabled)
 # ==========================================
 
 import streamlit as st
@@ -8,11 +8,12 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+import pytz
 import math
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v5.7")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v6.1")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -32,7 +33,6 @@ st.markdown("""
         font-size: 12px; font-family: monospace;
     }
     
-    /* Button Overrides */
     div[data-testid="stButton"] button[kind="primary"] {
         background-color: #15803d !important; border: none;
     }
@@ -52,10 +52,9 @@ if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.05
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
-if 'data_source' not in st.session_state: st.session_state.data_source = "None"
-if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 33.5
-if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
 if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
+if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
+if 'div_info' not in st.session_state: st.session_state.div_info = None # Stores {amount: 1.5, date: datetime}
 
 # --- 3. DATA ENGINE ---
 @st.cache_data(ttl=600)
@@ -67,14 +66,39 @@ def load_sheet(raw_url):
         else:
             csv_url = raw_url
 
-        df = pd.read_csv(csv_url, usecols=[2, 3, 4, 5, 6], on_bad_lines='skip', dtype=str)
-        df.columns = ['Code', 'Ticker', 'Type', 'Expiry', 'Strike']
+        df = pd.read_csv(csv_url, on_bad_lines='skip', dtype=str)
+        df.columns = [c.strip().upper() for c in df.columns]
         
+        col_map = {
+            'CODE': 'Code', 'TICKER': 'Ticker', 'TYPE': 'Type', 'EXPIRY': 'Expiry', 'STRIKE': 'Strike',
+            'LOOKUP KEY': 'LookupKey', 'STYLE': 'Style', 'VOLATILITY': 'Vol', 'SETTLEMENT': 'Settlement'
+        }
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+        
+        required = ['Code', 'Ticker', 'Strike', 'Expiry']
+        if not all(col in df.columns for col in required):
+            return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
+
         df['Ticker'] = df['Ticker'].str.upper().str.strip()
         df['Type'] = df['Type'].str.upper().str.strip().replace({'C': 'Call', 'P': 'Put'})
         df['Strike'] = pd.to_numeric(df['Strike'].str.replace(',', '').str.replace('$', ''), errors='coerce')
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
+        if 'Vol' in df.columns:
+            df['Vol'] = df['Vol'].str.replace('%', '').astype(float)
+            mask = df['Vol'] < 1.0
+            df.loc[mask, 'Vol'] = df.loc[mask, 'Vol'] * 100
+        else:
+            df['Vol'] = 30.0
+            
+        if 'Settlement' in df.columns:
+            df['Settlement'] = pd.to_numeric(df['Settlement'].str.replace('$', '').str.replace(',', ''), errors='coerce')
+        else:
+            df['Settlement'] = 0.0
+
+        if 'Style' not in df.columns:
+            df['Style'] = 'American'
+
         df = df.dropna(subset=['Code', 'Ticker', 'Strike', 'Expiry'])
         return df, f"success|{len(df)} Codes Loaded"
     except Exception as e:
@@ -85,86 +109,156 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- 4. MATH ENGINE ---
+# --- 4. MATH ENGINE (DISCRETE DIVIDENDS) ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
-def black_scholes(S, K, T, r, sigma, option_type='Call'):
+def black_scholes_european(S, K, T, r, sigma, option_type):
+    if T <= 0: return max(0, S - K) if option_type == 'Call' else max(0, K - S)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    if option_type == 'Call':
+        return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+    else:
+        return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
+
+def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
+    # Approximation: American price on adjusted spot (S - PV)
+    # This handles the price drop. For strict American early exercise, 
+    # sophisticated models check the step before ex-date, but S-PV is standard for web apps.
+    bs_price = black_scholes_european(S, K, T, r, sigma, option_type)
+    if option_type == 'Call':
+        return bs_price 
+    else:
+        intrinsic = max(0, K - S)
+        return max(bs_price, intrinsic)
+
+def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
     try:
-        if T <= 0: return max(0, S - K) if option_type == 'Call' else max(0, K - S)
-        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-        d2 = d1 - sigma * math.sqrt(T)
-        if option_type == 'Call':
-            return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+        T = max(0.001, time_days / 365.0)
+        v = vol_pct / 100.0
+        r = rate_pct / 100.0
+        S = float(spot)
+        K = float(strike)
+        
+        # --- DISCRETE DIVIDEND ADJUSTMENT ---
+        # If we have a dividend coming up BEFORE expiry, subtract its Present Value from Spot
+        div_data = st.session_state.div_info
+        if div_data and div_data['date']:
+            # Calculate days until ex-div
+            days_to_div = (div_data['date'] - datetime.now()).days
+            
+            # Only subtract if dividend is in the future AND before option expiry
+            if 0 <= days_to_div < time_days:
+                t_div = days_to_div / 365.0
+                div_pv = div_data['amount'] * math.exp(-r * t_div)
+                S = max(0.01, S - div_pv) # Adjusted Spot
+        
+        # --- PRICING ---
+        if style.upper() == 'EUROPEAN':
+            price = black_scholes_european(S, K, T, r, v, kind)
         else:
-            return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
-    except: return 0.0
+            price = bjerksund_stensland_american(S, K, T, r, v, kind)
+            
+        # --- DELTA ---
+        d1 = (math.log(S / K) + (r + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
+        if kind == 'Call':
+            delta = norm_cdf(d1)
+        else:
+            delta = norm_cdf(d1) - 1
+            
+        return price, delta
+    except:
+        return 0.0, 0.0
 
-def calculate_delta(S, K, T, r, sigma, option_type='Call'):
-    try:
-        if T <= 0: return 0.0
-        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-        return norm_cdf(d1) if option_type == 'Call' else norm_cdf(d1) - 1
-    except: return 0.0
+def check_market_hours():
+    sydney_tz = pytz.timezone('Australia/Sydney')
+    now = datetime.now(sydney_tz)
+    market_start = time(10, 0)
+    market_end = time(16, 10)
+    if now.weekday() >= 5: return False
+    current_time = now.time()
+    return market_start <= current_time <= market_end
 
-def get_bs_price(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
-    T = max(0.001, time_days / 365.0)
-    v = vol_pct / 100.0
-    r = rate_pct / 100.0
-    return black_scholes(float(spot), float(strike), T, r, v, kind)
-
-def get_greeks(kind, spot, strike, time_days, vol_pct, rate_pct=4.0):
-    T = max(0.001, time_days / 365.0)
-    v = vol_pct / 100.0
-    r = rate_pct / 100.0
-    delta = calculate_delta(float(spot), float(strike), T, r, v, kind)
-    return {'delta': delta}
-
-# --- 5. SMART VOLATILITY ---
-def calculate_smart_volatility(ticker_symbol):
-    try:
-        tk = yf.Ticker(ticker_symbol)
-        hist = tk.history(period="3mo")
-        if hist.empty: return None
-        
-        hist['Log_Ret'] = np.log(hist['Close'] / hist['Close'].shift(1))
-        std_vol = hist['Log_Ret'].std() * np.sqrt(252) * 100
-        
-        hl_ratio_sq = np.log(hist['High'] / hist['Low']) ** 2
-        parkinson_vol = np.sqrt(1 / (4 * np.log(2)) * hl_ratio_sq.mean()) * np.sqrt(252) * 100
-        
-        final_vol = max(std_vol, parkinson_vol)
-        return round(final_vol, 1)
-    except: return None
+st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
     sym = f"{clean}.AX"
     
-    auto_vol = calculate_smart_volatility(sym)
-    if auto_vol and auto_vol > 0:
-        st.session_state.vol_manual = auto_vol
-        st.toast(f"✅ Volatility Set: {auto_vol}%")
-
-    if st.session_state.manual_spot:
-        return "MANUAL", st.session_state.spot_price, None
-
+    div_info = None
     spot = 0.0
+    
+    if st.session_state.manual_spot:
+        spot = st.session_state.spot_price
+        # Still fetch dividends even if spot is manual
+        try:
+            tk = yf.Ticker(sym)
+            dividends = tk.dividends
+            if not dividends.empty:
+                # Find next dividend (approximated by last one + 6 months if no future date found, 
+                # or simplified: just grab 'exDividendDate' from info if available)
+                # Note: yfinance .info is often slow/limited. 
+                # Robust method: Check calendar or use last known.
+                # For this version, let's try the .info object.
+                info = tk.info
+                if 'exDividendDate' in info and info['exDividendDate']:
+                    ex_ts = info['exDividendDate']
+                    ex_date = datetime.fromtimestamp(ex_ts)
+                    div_rate = info.get('dividendRate', 0)
+                    # Often rate is annual, we need quarterly/semi. 
+                    # Let's trust 'lastDividendValue' if available or assume rate/2
+                    # To be safe for Australia (usually semi-annual):
+                    amt = info.get('lastDividendValue', div_rate/2)
+                    
+                    if ex_date > datetime.now():
+                        div_info = {'amount': amt, 'date': ex_date}
+        except: pass
+        return "MANUAL", spot, div_info
+
     try:
         tk = yf.Ticker(sym)
+        
+        # 1. Spot
         hist = tk.history(period="1d")
         if not hist.empty:
             spot = float(hist['Close'].iloc[-1])
         else:
             return "ERROR", 0.0, None
+            
+        # 2. Dividends
+        # We try to find a future ex-div date
+        try:
+            # Calendar often has upcoming dates
+            cal = tk.calendar
+            if cal is not None and not cal.empty:
+                # Structure varies by yfinance version, usually 'Ex-Dividend Date' is a row or col
+                # Robust fallback: Use info
+                info = tk.info
+                if 'exDividendDate' in info and info['exDividendDate']:
+                    ex_ts = info['exDividendDate']
+                    ex_date = datetime.fromtimestamp(ex_ts)
+                    if ex_date > datetime.now():
+                        # Amount?
+                        amt = info.get('lastDividendValue', 0)
+                        if amt == 0: amt = info.get('dividendRate', 0) / 2 # Guess semi-annual
+                        div_info = {'amount': amt, 'date': ex_date}
+        except: pass
         
-        if tk.options: return "YAHOO", spot, tk
-        else: return "SHEET", spot, None
+        return "YAHOO", spot, div_info
     except: return "ERROR", 0.0, None
 
 # --- 6. HEADER ---
 status_parts = st.session_state.sheet_msg.split("|")
 status_txt = status_parts[1] if len(status_parts) > 1 else status_parts[0]
+mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
+
+# Dividend String
+div_txt = ""
+if st.session_state.div_info:
+    d = st.session_state.div_info
+    d_date = d['date'].strftime("%d %b")
+    div_txt = f" | 💰 Next Div: ${d['amount']:.2f} on {d_date}"
 
 with st.container():
     st.markdown(f"""
@@ -172,19 +266,19 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v5.7</div>
+                <div class="header-sub">Option Strategy Builder v6.1</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
                 <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
-                <span class="status-tag">{status_txt}</span>
+                <span class="status-tag">{mkt_status}{div_txt}</span>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
 # --- 7. CONTROLS ---
-c1, c2, c3, c4 = st.columns([1, 1, 2, 1], gap="medium")
+c1, c2, c3 = st.columns([1, 1, 2], gap="medium")
 with c1: 
     query = st.text_input("Ticker", value=st.session_state.ticker, placeholder="Enter Stock Code")
 
@@ -193,9 +287,8 @@ with c2:
     if new_spot != st.session_state.spot_price:
         st.session_state.spot_price = new_spot
         st.session_state.manual_spot = True
+        
 with c3:
-    st.session_state.vol_manual = st.slider("Volatility Estimate %", 10.0, 100.0, st.session_state.vol_manual, 0.5)
-with c4:
     st.write("") 
     st.write("")
     if st.button("Load Chain", type="primary", use_container_width=True) or (query and query.upper() != st.session_state.ticker):
@@ -204,14 +297,17 @@ with c4:
         else:
             if query.upper() != st.session_state.ticker: st.session_state.manual_spot = False
             st.session_state.ticker = query.upper()
-            with st.spinner("Fetching Data..."):
-                source, px, obj = fetch_data(st.session_state.ticker)
+            with st.spinner("Fetching Market Data..."):
+                source, px, div_data = fetch_data(st.session_state.ticker)
+                
                 if not st.session_state.manual_spot: st.session_state.spot_price = px
-                st.session_state.chain_obj = obj
+                st.session_state.div_info = div_data
+                
                 st.session_state.data_source = source
                 data, msg = load_sheet(RAW_SHEET_URL)
                 st.session_state.ref_data = data
                 st.session_state.sheet_msg = msg
+                st.session_state.is_market_open = check_market_hours()
                 st.rerun()
 
 # --- 9. TABLE DISPLAY ---
@@ -236,30 +332,40 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             target_dt = exp_map[current_exp]
             days_diff = (target_dt - today).days
             
-            day_chain = subset[subset['Expiry'] == target_dt]
-            calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')['Code']
-            puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')['Code']
+            day_chain = subset[subset['Expiry'] == target_dt].copy()
+            
+            def calc_row_metrics(row):
+                vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
+                
+                if st.session_state.is_market_open:
+                    style = row.get('Style', 'American')
+                    px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
+                else:
+                    px = float(row['Settlement']) if pd.notna(row['Settlement']) else 0.0
+                    style = row.get('Style', 'American')
+                    _, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
+                
+                return pd.Series([px, delta, vol])
+
+            metrics = day_chain.apply(calc_row_metrics, axis=1)
+            metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol']
+            day_chain = pd.concat([day_chain, metrics], axis=1)
+            
+            calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')
+            puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')
             
             all_strikes = sorted(list(set(calls.index) | set(puts.index)))
             df_view = pd.DataFrame({'STRIKE': all_strikes})
-            df_view['C_Code'] = df_view['STRIKE'].map(calls)
-            df_view['P_Code'] = df_view['STRIKE'].map(puts)
             
-            spot = st.session_state.spot_price
-            vol = st.session_state.vol_manual
+            df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
+            df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
+            df_view['C_Delta'] = df_view['STRIKE'].map(calls['Calc_Delta'])
+            df_view['C_Vol'] = df_view['STRIKE'].map(calls['Calc_Vol'])
             
-            # Batch Calculation
-            c_px = [get_bs_price('Call', spot, s, days_diff, vol) for s in df_view['STRIKE']]
-            c_delta = [get_greeks('Call', spot, s, days_diff, vol)['delta'] for s in df_view['STRIKE']]
-            p_px = [get_bs_price('Put', spot, s, days_diff, vol) for s in df_view['STRIKE']]
-            p_delta = [get_greeks('Put', spot, s, days_diff, vol)['delta'] for s in df_view['STRIKE']]
-                
-            df_view['C_Price'] = c_px
-            df_view['C_Delta'] = c_delta
-            df_view['C_Vol'] = vol
-            df_view['P_Price'] = p_px
-            df_view['P_Delta'] = p_delta
-            df_view['P_Vol'] = vol
+            df_view['P_Code'] = df_view['STRIKE'].map(puts['Code'])
+            df_view['P_Price'] = df_view['STRIKE'].map(puts['Calc_Price'])
+            df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
+            df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
 
 if not df_view.empty and current_exp:
     center = st.session_state.spot_price
@@ -274,8 +380,6 @@ if not df_view.empty and current_exp:
     
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
-    # --- STYLE: BOLD STRIKE COLUMN ---
-    # We apply a style to the STRIKE column to make it stand out
     styled_disp = disp.style.applymap(
         lambda x: "font-weight: bold; background-color: rgba(255,255,255,0.05);", 
         subset=['STRIKE']
@@ -289,12 +393,12 @@ if not df_view.empty and current_exp:
         styled_disp,
         column_config={
             "C_Code": st.column_config.TextColumn("Call Code"),
-            "C_Price": st.column_config.NumberColumn("Fair Value", format="%.3f"),
-            "C_Vol": st.column_config.NumberColumn("Hist Vol", format="%.1f"),
+            "C_Price": st.column_config.NumberColumn("Price", format="%.3f"),
+            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f"),
             "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
             "STRIKE": st.column_config.NumberColumn("Strike", format="%.2f"),
-            "P_Price": st.column_config.NumberColumn("Fair Value", format="%.3f"),
-            "P_Vol": st.column_config.NumberColumn("Hist Vol", format="%.1f"),
+            "P_Price": st.column_config.NumberColumn("Price", format="%.3f"),
+            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f"),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
             "P_Code": st.column_config.TextColumn("Put Code"),
         },
@@ -314,17 +418,12 @@ if not df_view.empty and current_exp:
         
         def add(side, kind, px, code_hint, delta_val, qty_val):
             final_qty = qty_val if side == "Buy" else -qty_val
+            row_vol = row['C_Vol'] if kind == 'Call' else row['P_Vol']
             
             st.session_state.legs.append({
-                "Qty": final_qty, 
-                "Type": kind, 
-                "Strike": row['STRIKE'], 
-                "Expiry": days_diff, 
-                "Vol": st.session_state.vol_manual, 
-                "Entry": px, 
-                "Code": code_hint,
-                "Delta": delta_val,
-                "Remove": False 
+                "Qty": final_qty, "Type": kind, "Strike": row['STRIKE'], 
+                "Expiry": days_diff, "Vol": row_vol, "Entry": px, 
+                "Code": code_hint, "Delta": delta_val, "Remove": False 
             })
             st.rerun()
             
@@ -354,45 +453,31 @@ if st.session_state.legs:
     with c_port:
         st.subheader("Legs (Select row to delete)")
         
-        # --- RECALC ---
         live_legs = []
         for leg in st.session_state.legs:
-            new_theo = get_bs_price(leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], st.session_state.vol_manual)
-            new_greeks = get_greeks(leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], st.session_state.vol_manual)
-            
+            new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
             l = leg.copy()
             l['Theo (Unit)'] = new_theo
-            l['Delta'] = new_greeks['delta']
-            l['Net Delta'] = leg['Qty'] * new_greeks['delta'] * 100
+            l['Delta'] = new_delta
+            l['Net Delta'] = leg['Qty'] * new_delta * 100
             l['Premium'] = -(leg['Qty'] * leg['Entry'] * 100)
             live_legs.append(l)
             
         df_port = pd.DataFrame(live_legs)
         
-        # --- TOTALS ROW ---
         if not df_port.empty:
             total_delta = df_port['Net Delta'].sum()
             total_premium = df_port['Premium'].sum()
             total_theo = (df_port['Qty'] * df_port['Theo (Unit)'] * 100).sum()
             
-            # Use np.nan for blank numeric cells
             total_row = pd.DataFrame([{
-                'Qty': np.nan, 
-                'Type': '', 
-                'Strike': np.nan, 
-                'Expiry': None, 
-                'Entry': np.nan, 
-                'Code': 'TOTAL', 
-                'Theo (Unit)': total_theo, 
-                'Net Delta': total_delta,
-                'Premium': total_premium
+                'Qty': np.nan, 'Type': '', 'Strike': np.nan, 'Expiry': None, 'Entry': np.nan, 
+                'Code': 'TOTAL', 'Theo (Unit)': total_theo, 'Net Delta': total_delta, 'Premium': total_premium
             }])
-            
             df_display = pd.concat([df_port, total_row], ignore_index=True)
         else:
             df_display = df_port
 
-        # --- DISPLAY WITH DARK MODE COMPATIBLE STYLE ---
         column_config = {
             "Code": st.column_config.TextColumn("Code"),
             "Entry": st.column_config.NumberColumn("Entry", format="$%.3f"),
@@ -411,14 +496,9 @@ if st.session_state.legs:
 
         event = st.dataframe(
             df_display[cols].style.apply(highlight_total, axis=1).format({
-                'Entry': '${:,.3f}', 'Theo (Unit)': '${:,.2f}', 
-                'Net Delta': '{:,.2f}', 'Premium': '${:,.2f}'
+                'Entry': '${:,.3f}', 'Theo (Unit)': '${:,.2f}', 'Net Delta': '{:,.2f}', 'Premium': '${:,.2f}'
             }),
-            column_config=column_config,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="multi-row"
+            column_config=column_config, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="multi-row"
         )
         
         if event.selection.rows:
@@ -455,7 +535,7 @@ if st.session_state.legs:
             for leg in st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
-                exit_px = get_bs_price(leg['Type'], p, leg['Strike'], rem_days, sim_vol)
+                exit_px, _ = calculate_price_and_delta('American', leg['Type'], p, leg['Strike'], rem_days, sim_vol)
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * 100
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
@@ -475,7 +555,7 @@ if st.session_state.legs:
         val_tF = 0
         for leg in st.session_state.legs:
             # T+0
-            price_t0 = get_bs_price(leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
+            price_t0, _ = calculate_price_and_delta('American', leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
             val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * 100
             # Expiry
             price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
