@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 8.1 (Matrix Height Tuned)
+# VERSION: 8.2 (Scenario Margin Logic)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v8.1")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v8.2")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -48,24 +48,12 @@ st.markdown("""
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
     
-    /* --- SLIDER COLOR FIX (Deep Override) --- */
-    div[data-baseweb="slider"] > div > div > div {
-        background-color: #0050FF !important;
-    }
-    div[role="slider"] {
-        background-color: #0050FF !important;
-        box-shadow: none !important; 
-    }
-    div[data-testid="stSlider"] svg path {
-        fill: #0050FF !important;
-        stroke: #0050FF !important;
-    }
-    div[data-testid="stSlider"] p {
-        color: white !important;
-    }
-    input[type=range] {
-        accent-color: #0050FF !important;
-    }
+    /* --- SLIDER COLOR FIX --- */
+    div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
+    div[role="slider"] { background-color: #0050FF !important; box-shadow: none !important; }
+    div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
+    div[data-testid="stSlider"] p { color: white !important; }
+    input[type=range] { accent-color: #0050FF !important; }
     
     .stDataFrame { border: none !important; }
 
@@ -110,6 +98,7 @@ def load_sheet(raw_url):
 
         df = pd.read_csv(csv_url, on_bad_lines='skip', dtype=str)
         
+        # Standard Headers
         header_map = {
             'ASXCode': 'Code', 'Underlying': 'Ticker', 'OptType': 'Type', 
             'ExpDate': 'Expiry', 'Strike': 'Strike', 'Volatility': 'Vol', 
@@ -143,6 +132,21 @@ def load_sheet(raw_url):
             df['Settlement'] = pd.to_numeric(df['Settlement'].str.replace('$', ''), errors='coerce')
         else:
             df['Settlement'] = 0.0
+
+        # --- MARGIN SCENARIO LOGIC (1-16) ---
+        # Identify Scenario Columns
+        scen_cols = [c for c in df.columns if 'Scenario' in c]
+        
+        # If we have scenario columns, calculate the min
+        if scen_cols:
+            # Convert all scenario columns to numeric, coercing errors to NaN
+            scen_df = df[scen_cols].apply(lambda x: pd.to_numeric(x.astype(str).str.replace('$', '').str.replace(',', ''), errors='coerce'))
+            
+            # Calculate Row Minimum (ignoring NaNs)
+            # We assume 0 if all are empty/nan to be safe
+            df['UnitMargin'] = scen_df.min(axis=1).fillna(0.0)
+        else:
+            df['UnitMargin'] = 0.0
 
         df = df.dropna(subset=['Code', 'Ticker', 'Strike', 'Expiry'])
         return df, f"success|{len(df)} Codes Loaded"
@@ -267,7 +271,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v8.1</div>
+                <div class="header-sub">Option Strategy Builder v8.2</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -338,16 +342,19 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             def calc_row_metrics(row):
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
+                # Grab UnitMargin from row (calculated in load_sheet)
+                margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
                 if st.session_state.is_market_open:
                     px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
                 else:
                     px = float(row['Settlement']) if pd.notna(row['Settlement']) else 0.0
                     _, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
-                return pd.Series([px, delta, vol])
+                
+                return pd.Series([px, delta, vol, margin])
 
             metrics = day_chain.apply(calc_row_metrics, axis=1)
-            metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol']
+            metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
             calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')
@@ -360,11 +367,13 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
             df_view['C_Vol'] = df_view['STRIKE'].map(calls['Calc_Vol'])
             df_view['C_Delta'] = df_view['STRIKE'].map(calls['Calc_Delta'])
+            df_view['C_Margin'] = df_view['STRIKE'].map(calls['Calc_Margin'])
             
             df_view['P_Code'] = df_view['STRIKE'].map(puts['Code'])
             df_view['P_Price'] = df_view['STRIKE'].map(puts['Calc_Price'])
             df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
             df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
+            df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
 
 if not df_view.empty and current_exp:
     center = st.session_state.spot_price
@@ -409,7 +418,7 @@ if not df_view.empty and current_exp:
     
     if selection.selection['rows']:
         idx = selection.selection['rows'][0]
-        row = disp.iloc[idx]
+        row = df_view.iloc[idx] # Grab from df_view to get Margin data
         days_diff = (datetime.strptime(current_exp, "%Y-%m-%d") - datetime.now()).days
         
         q_col, _ = st.columns([1, 5])
@@ -418,10 +427,13 @@ if not df_view.empty and current_exp:
         def add(side, kind, px, code_hint, delta_val, qty_val):
             final_qty = qty_val if side == "Buy" else -qty_val
             row_vol = row['C_Vol'] if kind == 'Call' else row['P_Vol']
+            # FETCH MARGIN FROM ROW
+            row_margin = row['C_Margin'] if kind == 'Call' else row['P_Margin']
+            
             st.session_state.legs.append({
                 "Qty": final_qty, "Type": kind, "Strike": row['STRIKE'], 
                 "Expiry": days_diff, "Vol": row_vol, "Entry": px, 
-                "Code": code_hint, "Delta": delta_val
+                "Code": code_hint, "Delta": delta_val, "MarginUnit": row_margin
             })
             st.rerun()
             
@@ -434,14 +446,15 @@ if not df_view.empty and current_exp:
         if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
-# --- 10. STRATEGY (ALIGNED FOOTER) ---
+# --- 10. STRATEGY (UPDATED WITH MARGIN) ---
 if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
-    # Column Headers
-    h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 0.5]
-    h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(h_col_spec)
+    # Column Headers (Add Margin Col)
+    # 1=Qty, 2=Code, 1=Type, 1=Strike, 1=Entry, 1=Theo, 1=Delta, 1=Margin, 1=Premium
+    h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 1, 0.5]
+    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(h_col_spec)
     with h1: st.markdown('<div class="trade-header">Qty</div>', unsafe_allow_html=True)
     with h2: st.markdown('<div class="trade-header">Code</div>', unsafe_allow_html=True)
     with h3: st.markdown('<div class="trade-header">Type</div>', unsafe_allow_html=True)
@@ -449,13 +462,15 @@ if st.session_state.legs:
     with h5: st.markdown('<div class="trade-header">Entry</div>', unsafe_allow_html=True)
     with h6: st.markdown('<div class="trade-header">Theo</div>', unsafe_allow_html=True)
     with h7: st.markdown('<div class="trade-header">Delta</div>', unsafe_allow_html=True)
-    with h8: st.markdown('<div class="trade-header">Premium</div>', unsafe_allow_html=True)
+    with h8: st.markdown('<div class="trade-header">Margin</div>', unsafe_allow_html=True)
+    with h9: st.markdown('<div class="trade-header">Premium</div>', unsafe_allow_html=True)
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
     total_delta = 0
     total_premium = 0
     total_theo = 0
+    total_margin = 0
     
     # Rows
     for i, leg in enumerate(st.session_state.legs):
@@ -464,14 +479,27 @@ if st.session_state.legs:
         premium = -(leg['Qty'] * leg['Entry'] * 100)
         theo_val = leg['Qty'] * new_theo * 100
         
+        # MARGIN CALCULATION (Unit Margin * Qty)
+        # Margin is usually a negative number representing cost/risk
+        unit_margin = leg.get('MarginUnit', 0.0)
+        # Assuming sheet has values like -74.66. If buying, it might be 0, but user said "check scenarios".
+        # We will apply it raw: lowest scenario * Qty.
+        # Note: If buying options (Qty > 0), margin is usually limited to premium.
+        # But per user request: "multiply it by the trade quantity".
+        row_margin = unit_margin * abs(leg['Qty']) # Or simply leg['Qty']? Usually worst case scales with size.
+        # If the sheet value is negative (loss), then 10x contracts = 10x loss.
+        # So we multiply by ABS(Qty) if the value implies "per contract risk".
+        row_margin = unit_margin * abs(leg['Qty']) 
+        
         total_delta += net_delta
         total_premium += premium
         total_theo += theo_val
+        total_margin += row_margin
         
         type_color = "#4ade80" if leg['Type'] == 'Call' else "#f87171"
         type_text = f"<span style='color:{type_color}; font-weight:600'>{leg['Type']}</span>"
         
-        c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(h_col_spec)
+        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns(h_col_spec)
         with c1: st.write(f"**{leg['Qty']}**")
         with c2: st.write(f"{leg['Code']}")
         with c3: st.markdown(type_text, unsafe_allow_html=True)
@@ -479,8 +507,9 @@ if st.session_state.legs:
         with c5: st.write(f"${leg['Entry']:.3f}")
         with c6: st.write(f"${new_theo:.3f}")
         with c7: st.write(f"{net_delta:.2f}")
-        with c8: st.write(f"${premium:.2f}")
-        with c9:
+        with c8: st.write(f"${row_margin:.2f}")
+        with c9: st.write(f"${premium:.2f}")
+        with c10:
             if st.button("✕", key=f"d_{i}"):
                 st.session_state.legs.pop(i)
                 st.rerun()
@@ -488,11 +517,12 @@ if st.session_state.legs:
 
     # --- ALIGNED FOOTER ROW ---
     with st.container():
-        f1, f2, f3, f4, f5, f6, f7, f8, f9 = st.columns(h_col_spec)
+        f1, f2, f3, f4, f5, f6, f7, f8, f9, f10 = st.columns(h_col_spec)
         with f2: st.markdown("**TOTAL STRATEGY**")
         with f6: st.markdown(f"**${total_theo:,.2f}**")
         with f7: st.markdown(f"**{total_delta:,.2f}**")
-        with f8: 
+        with f8: st.markdown(f"**${total_margin:,.2f}**")
+        with f9: 
             p_color = '#4ade80' if total_premium > 0 else '#f87171'
             st.markdown(f"<span style='color:{p_color}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
 
@@ -530,7 +560,6 @@ if st.session_state.legs:
         matrix_data.append(row)
         
     df_mx = pd.DataFrame(matrix_data).set_index("Price")
-    # HEIGHT FIXED TO 460px (Optimized for 12 rows)
     st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True, height=460)
 
     # CHART
