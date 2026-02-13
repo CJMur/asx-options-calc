@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 8.3 (Margin Column Moved & Styled)
+# VERSION: 8.4 (Consistent Negative/Red Formatting)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v8.3")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v8.4")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -261,7 +261,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v8.3</div>
+                <div class="header-sub">Option Strategy Builder v8.4</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -436,12 +436,12 @@ if not df_view.empty and current_exp:
         if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
-# --- 10. STRATEGY (MARGIN MOVED TO RIGHT) ---
+# --- 10. STRATEGY (CONSISTENT COLORS) ---
 if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
-    # Headers - Margin moved to end
+    # Headers
     h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 1, 0.5]
     h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(h_col_spec)
     with h1: st.markdown('<div class="trade-header">Qty</div>', unsafe_allow_html=True)
@@ -478,8 +478,9 @@ if st.session_state.legs:
         type_color = "#4ade80" if leg['Type'] == 'Call' else "#f87171"
         type_text = f"<span style='color:{type_color}; font-weight:600'>{leg['Type']}</span>"
         
-        # Color logic for Margin
-        m_color = '#4ade80' if row_margin > 0 else '#f87171'
+        # Color Logic
+        p_color = '#4ade80' if premium >= 0 else '#f87171'
+        m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
         c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns(h_col_spec)
         with c1: st.write(f"**{leg['Qty']}**")
@@ -489,7 +490,8 @@ if st.session_state.legs:
         with c5: st.write(f"${leg['Entry']:.3f}")
         with c6: st.write(f"${new_theo:.3f}")
         with c7: st.write(f"{net_delta:.2f}")
-        with c8: st.write(f"${premium:.2f}")
+        # Apply color to premium and margin columns
+        with c8: st.markdown(f"<span style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
         with c9: st.markdown(f"<span style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
         with c10:
             if st.button("✕", key=f"d_{i}"):
@@ -504,10 +506,10 @@ if st.session_state.legs:
         with f6: st.markdown(f"**${total_theo:,.2f}**")
         with f7: st.markdown(f"**{total_delta:,.2f}**")
         with f8: 
-            p_color = '#4ade80' if total_premium > 0 else '#f87171'
+            p_color = '#4ade80' if total_premium >= 0 else '#f87171'
             st.markdown(f"<span style='color:{p_color}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
         with f9:
-            tm_color = '#4ade80' if total_margin > 0 else '#f87171'
+            tm_color = '#4ade80' if total_margin >= 0 else '#f87171'
             st.markdown(f"<span style='color:{tm_color}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
 
     # --- MATRIX ---
