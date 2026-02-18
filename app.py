@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 8.4 (Consistent Negative/Red Formatting)
+# VERSION: 8.5 (Title & Header Fixes)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v8.4")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v8.5")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -260,8 +260,8 @@ with st.container():
     <div class="header-box">
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-                <div class="header-title">TradersCircle <span style="font-weight: 300;">PRO</span></div>
-                <div class="header-sub">Option Strategy Builder v8.4</div>
+                <div class="header-title">TradersCircle Options Calculator</div>
+                <div class="header-sub">Option Strategy Builder v8.5</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -391,11 +391,11 @@ if not df_view.empty and current_exp:
         styled_disp,
         column_config={
             "C_Code": st.column_config.TextColumn("Call Code"),
-            "C_Price": st.column_config.NumberColumn("Price", format="%.3f"),
+            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f"),
             "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f"),
             "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
             "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f"),
-            "P_Price": st.column_config.NumberColumn("Price", format="%.3f"),
+            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f"),
             "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f"),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
             "P_Code": st.column_config.TextColumn("Put Code"),
@@ -490,7 +490,6 @@ if st.session_state.legs:
         with c5: st.write(f"${leg['Entry']:.3f}")
         with c6: st.write(f"${new_theo:.3f}")
         with c7: st.write(f"{net_delta:.2f}")
-        # Apply color to premium and margin columns
         with c8: st.markdown(f"<span style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
         with c9: st.markdown(f"<span style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
         with c10:
