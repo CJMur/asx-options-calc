@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 8.7 (Final Polish & IV Buttons)
+# VERSION: 8.8 (Tooltips Added)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v8.7")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v8.8")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -60,7 +60,7 @@ st.markdown("""
     /* Clean Table Headers */
     .trade-header {
         font-weight: 700; color: #94a3b8; font-size: 12px; text-transform: uppercase;
-        margin-bottom: 5px;
+        margin-bottom: 5px; cursor: help; /* Cursor hint for tooltip */
     }
     
     /* Delete Button Styling */
@@ -85,6 +85,18 @@ if 'is_market_open' not in st.session_state: st.session_state.is_market_open = T
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
 if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 30.0
+
+# --- TOOLTIP DEFINITIONS ---
+TOOLTIPS = {
+    "Theo": "The theoretical fair value of the option calculated using the Black-Scholes (European) or Bjerksund-Stensland (American) pricing model.",
+    "IV": "Implied Volatility: The market's forecast of a likely movement in the security's price. Higher IV means more expensive options.",
+    "Delta": "The rate of change of the option price with respect to the underlying asset's price. A delta of 0.50 means the option moves $0.50 for every $1.00 move in the stock.",
+    "Strike": "The set price at which the option contract can be exercised (bought or sold).",
+    "Code": "The unique ASX exchange ticker symbol for this specific option contract.",
+    "Entry": "The price you entered the trade at (or current market price).",
+    "Premium": "The total cost or credit for the trade. Calculated as Price × Quantity × 100.",
+    "Margin": "The estimated collateral required to hold this position, calculated based on the worst-case scenario from the exchange's risk analysis."
+}
 
 # --- 3. DATA ENGINE ---
 @st.cache_data(ttl=600)
@@ -261,7 +273,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle Options Calculator</div>
-                <div class="header-sub">Option Strategy Builder v8.7</div>
+                <div class="header-sub">Option Strategy Builder v8.8</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -332,6 +344,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             def calc_row_metrics(row):
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
+                # Grab UnitMargin from row
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
                 if st.session_state.is_market_open:
@@ -386,18 +399,19 @@ if not df_view.empty and current_exp:
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
+    # CONFIG WITH TOOLTIPS
     selection = st.dataframe(
         styled_disp,
         column_config={
-            "C_Code": st.column_config.TextColumn("Call Code"),
-            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f"),
-            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f"),
-            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
-            "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f"),
-            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f"),
-            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f"),
-            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f"),
-            "P_Code": st.column_config.TextColumn("Put Code"),
+            "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
+            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
+            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
+            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
+            "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f", help=TOOLTIPS["Strike"]),
+            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
+            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
+            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
+            "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
         },
         hide_index=True,
         use_container_width=True,
@@ -430,26 +444,28 @@ if not df_view.empty and current_exp:
         
         b1, b2, b3, b4, _ = st.columns([1, 1, 1, 1, 6]) 
         if b1.button(f"Buy Call"): add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
-        if b2.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
-        if b3.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
+        if b2.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
+        if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
-# --- 10. STRATEGY (CONSISTENT COLORS) ---
+# --- 10. STRATEGY (WITH TOOLTIPS) ---
 if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
+    # Headers with HTML Title Attribute
     h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 1, 0.5]
     h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(h_col_spec)
-    with h1: st.markdown('<div class="trade-header">Qty</div>', unsafe_allow_html=True)
-    with h2: st.markdown('<div class="trade-header">Code</div>', unsafe_allow_html=True)
-    with h3: st.markdown('<div class="trade-header">Type</div>', unsafe_allow_html=True)
-    with h4: st.markdown('<div class="trade-header">Strike</div>', unsafe_allow_html=True)
-    with h5: st.markdown('<div class="trade-header">Entry</div>', unsafe_allow_html=True)
-    with h6: st.markdown('<div class="trade-header">Theo</div>', unsafe_allow_html=True)
-    with h7: st.markdown('<div class="trade-header">Delta</div>', unsafe_allow_html=True)
-    with h8: st.markdown('<div class="trade-header">Premium</div>', unsafe_allow_html=True)
-    with h9: st.markdown('<div class="trade-header">Margin</div>', unsafe_allow_html=True)
+    
+    with h1: st.markdown('<div class="trade-header" title="Quantity">Qty</div>', unsafe_allow_html=True)
+    with h2: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
+    with h3: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
+    with h4: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Strike"]}">Strike</div>', unsafe_allow_html=True)
+    with h5: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
+    with h6: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
+    with h7: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
+    with h8: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
+    with h9: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Margin</div>', unsafe_allow_html=True)
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
