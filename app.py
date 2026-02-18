@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 8.5 (Title & Header Fixes)
+# VERSION: 8.7 (Final Polish & IV Buttons)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v8.5")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v8.7")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -261,7 +261,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle Options Calculator</div>
-                <div class="header-sub">Option Strategy Builder v8.5</div>
+                <div class="header-sub">Option Strategy Builder v8.7</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -332,7 +332,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             def calc_row_metrics(row):
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
-                # Grab UnitMargin from row
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
                 if st.session_state.is_market_open:
@@ -417,7 +416,6 @@ if not df_view.empty and current_exp:
         def add(side, kind, px, code_hint, delta_val, qty_val):
             final_qty = qty_val if side == "Buy" else -qty_val
             row_vol = row['C_Vol'] if kind == 'Call' else row['P_Vol']
-            # FETCH MARGIN
             row_margin = row['C_Margin'] if kind == 'Call' else row['P_Margin']
             
             st.session_state.legs.append({
@@ -432,8 +430,8 @@ if not df_view.empty and current_exp:
         
         b1, b2, b3, b4, _ = st.columns([1, 1, 1, 1, 6]) 
         if b1.button(f"Buy Call"): add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
-        if b2.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
-        if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
+        if b2.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
+        if b3.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
 # --- 10. STRATEGY (CONSISTENT COLORS) ---
@@ -441,7 +439,6 @@ if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
-    # Headers
     h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 1, 0.5]
     h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(h_col_spec)
     with h1: st.markdown('<div class="trade-header">Qty</div>', unsafe_allow_html=True)
@@ -478,7 +475,6 @@ if st.session_state.legs:
         type_color = "#4ade80" if leg['Type'] == 'Call' else "#f87171"
         type_text = f"<span style='color:{type_color}; font-weight:600'>{leg['Type']}</span>"
         
-        # Color Logic
         p_color = '#4ade80' if premium >= 0 else '#f87171'
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
@@ -498,7 +494,6 @@ if st.session_state.legs:
                 st.rerun()
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
-    # --- ALIGNED FOOTER ROW ---
     with st.container():
         f1, f2, f3, f4, f5, f6, f7, f8, f9, f10 = st.columns(h_col_spec)
         with f2: st.markdown("**TOTAL STRATEGY**")
@@ -516,17 +511,18 @@ if st.session_state.legs:
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
     time_step = m1.slider("Step (Days)", 1, 30, 7)
-    range_pct = m2.select_slider("Range", options=[0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%")
+    range_pct = m2.select_slider("Price Range", options=[0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%")
     
     with m1:
+        st.caption("Simulate Volatility Shift:")
         c_v1, c_v2, c_v3 = st.columns(3)
-        if c_v1.button("-10%"): st.session_state.matrix_vol_mod -= 10
-        if c_v2.button("Flat"): st.session_state.matrix_vol_mod = 0
-        if c_v3.button("+10%"): st.session_state.matrix_vol_mod += 10
-        st.caption(f"Vol Mod: {st.session_state.matrix_vol_mod:+}%")
+        if c_v1.button("IV -10%"): st.session_state.matrix_vol_mod -= 10
+        if c_v2.button("IV Flat"): st.session_state.matrix_vol_mod = 0
+        if c_v3.button("IV +10%"): st.session_state.matrix_vol_mod += 10
+        st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
 
     spot = st.session_state.spot_price
-    prices = np.linspace(spot * (1 - range_pct), spot * (1 + range_pct), 12)
+    prices = np.linspace(spot * (1 + range_pct), spot * (1 - range_pct), 12)
     dates = [0, time_step, time_step*2, time_step*3, time_step*4]
     
     matrix_data = []
