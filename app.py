@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 9.7 (ASX Code Decryptor / Type Fix)
+# VERSION: 9.8 (Bulletproof Data Parsing)
 # ==========================================
 
 import streamlit as st
@@ -120,41 +120,36 @@ def load_sheet(raw_url):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
         df['Code'] = df['Code'].astype(str).str.upper().str.strip()
         
-        # --- BULLETPROOF TYPE PARSING (ASX Code Decryptor) ---
+        # --- BULLETPROOF TYPE PARSING ---
+        # Checks if the string starts with 'C' (handles "C", "Call", "CALL", etc.)
         if 'Type' in df.columns:
-            t_col = df['Type'].astype(str).str.upper()
+            t_col = df['Type'].fillna('').astype(str).str.upper().str.strip()
+            df['Type'] = np.where(t_col.str.startswith('C'), 'Call', 'Put')
         else:
-            t_col = pd.Series([''] * len(df))
+            # Fallback: Read 4th character of ASX code (A-L = Call, M-X = Put)
+            is_call = df['Code'].str.slice(3, 4).isin(list('ABCDEFGHIJKL'))
+            df['Type'] = np.where(is_call, 'Call', 'Put')
             
-        # The 4th character of an ASX option code dictates Call vs Put
-        char4 = df['Code'].str.slice(3, 4)
-        is_call_code = char4.isin(list('ABCDEFGHIJKL'))
-        is_put_code = char4.isin(list('MNOPQRSTUVWX'))
-        
-        # Priority: 1. Column contains 'C', 2. Column contains 'P', 3. Code contains Call letter, 4. Code contains Put letter
-        df['Type'] = np.where(t_col.str.contains('C', na=False), 'Call',
-                     np.where(t_col.str.contains('P', na=False), 'Put',
-                     np.where(is_call_code, 'Call',
-                     np.where(is_put_code, 'Put', 'Call'))))
-        
         # --- BULLETPROOF STYLE PARSING ---
         if 'Style' in df.columns:
-            s_col = df['Style'].astype(str).str.upper()
-            df['Style'] = np.where(s_col.str.contains('E', na=False), 'European', 'American')
+            s_col = df['Style'].fillna('').astype(str).str.upper().str.strip()
+            df['Style'] = np.where(s_col.str.startswith('E'), 'European', 'American')
         else:
             df['Style'] = 'American'
             
-        df['Strike'] = pd.to_numeric(df['Strike'].str.replace(',', '').str.replace('$', ''), errors='coerce')
+        # --- ROBUST NUMERIC PARSING ---
+        # Added .round(3) to Strike so floating point differences don't break the chain mapping
+        df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(',', '').str.replace('$', ''), errors='coerce').round(3)
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
         if 'Vol' in df.columns:
-            df['Vol'] = df['Vol'].str.replace('%', '').astype(float)
+            df['Vol'] = df['Vol'].astype(str).str.replace('%', '').astype(float)
             mask = df['Vol'] <= 1.0 
             df.loc[mask, 'Vol'] = df.loc[mask, 'Vol'] * 100
         else:
             df['Vol'] = 30.0
             
-        df['Settlement'] = pd.to_numeric(df['Settlement'].str.replace('$', ''), errors='coerce') if 'Settlement' in df.columns else 0.0
+        df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace('$', ''), errors='coerce') if 'Settlement' in df.columns else 0.0
 
         scen_cols = [c for c in df.columns if 'Scenario' in c]
         if scen_cols:
@@ -251,8 +246,10 @@ def fetch_data(t):
         tk = yf.Ticker(sym)
         info = tk.info
         
+        # Robust fetch: try multiple fields
         spot = float(info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose', 0.0))))
         
+        # Fallback to history if info fails
         if spot == 0.0:
             hist = tk.history(period="1d")
             if not hist.empty: 
@@ -280,7 +277,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v9.7</div>
+            <div class="header-sub">Option Strategy Builder v9.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -394,7 +391,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
-            # --- DUPLICATE SAFETY NET ---
+            # --- EXTRACT CALLS AND PUTS (Strict Type Match) ---
             calls = day_chain[day_chain['Type'] == 'Call'].drop_duplicates(subset=['Strike']).set_index('Strike')
             puts = day_chain[day_chain['Type'] == 'Put'].drop_duplicates(subset=['Strike']).set_index('Strike')
             
