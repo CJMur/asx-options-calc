@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 8.9 (Smart Option Code Search)
+# VERSION: 9.0 (Smart Search Extraction & Slider Fix)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v8.9")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v9.0")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -48,12 +48,17 @@ st.markdown("""
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
     
-    /* --- SLIDER COLOR FIX --- */
-    div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
-    div[role="slider"] { background-color: #0050FF !important; box-shadow: none !important; }
-    div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
+    /* --- SAFE SLIDER COLOR FIX --- */
+    div[data-testid="stSlider"] div[role="slider"] {
+        background-color: #0050FF !important;
+        border-color: #0050FF !important;
+        box-shadow: none !important;
+    }
+    /* Target only the filled track portion safely */
+    div[data-testid="stSlider"] div[data-baseweb="slider"] > div:first-child > div:first-child {
+        background-color: #0050FF !important;
+    }
     div[data-testid="stSlider"] p { color: white !important; }
-    input[type=range] { accent-color: #0050FF !important; }
     
     .stDataFrame { border: none !important; }
 
@@ -84,7 +89,6 @@ if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
-if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 30.0
 
 # Smart Search States
 if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
@@ -278,7 +282,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle Options Calculator</div>
-                <div class="header-sub">Option Strategy Builder v8.9</div>
+                <div class="header-sub">Option Strategy Builder v9.0</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -292,7 +296,6 @@ with st.container():
 # --- 7. CONTROLS ---
 c1, c2, c3 = st.columns([1, 1, 2], gap="medium")
 with c1: 
-    # Use preselect_code if available, else standard ticker
     display_val = st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker
     query = st.text_input("Ticker or Option Code", value=display_val, placeholder="e.g., BHP or BHPJ84")
 
@@ -315,25 +318,35 @@ with c3:
             query_upper = query.upper().strip()
             st.session_state.manual_spot = False
             
-            # --- SMART SEARCH LOGIC ---
+            # --- SMART SEARCH EXTRACTION LOGIC ---
             ref = st.session_state.ref_data
+            ticker_to_fetch = query_upper # Fallback
+            
             if ref is not None:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
-                    # Target found: Extract underlying data
-                    actual_ticker = match.iloc[0]['Ticker']
+                    # Found exact option code in sheet
+                    ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
                     st.session_state.preselect_strike = float(match.iloc[0]['Strike'])
                     st.session_state.preselect_code = query_upper
-                    ticker_to_fetch = actual_ticker
                 else:
-                    # Regular ticker search
-                    st.session_state.preselect_expiry = None
-                    st.session_state.preselect_strike = None
-                    st.session_state.preselect_code = None
-                    ticker_to_fetch = query_upper
-            else:
-                ticker_to_fetch = query_upper
+                    # Not found directly. Does it look like an Option Code (starts with a known ticker)?
+                    tickers = ref['Ticker'].unique()
+                    possible_matches = [t for t in tickers if query_upper.startswith(t)]
+                    if possible_matches:
+                        best_match = max(possible_matches, key=len) # e.g. "BHP" from "BHPJ84"
+                        if len(query_upper) > len(best_match):
+                            # It's an option code (has suffix)
+                            ticker_to_fetch = best_match
+                            st.session_state.preselect_code = query_upper
+                            st.session_state.preselect_expiry = None
+                            st.session_state.preselect_strike = None
+                    else:
+                        # Reset if it's just a regular stock ticker query
+                        st.session_state.preselect_expiry = None
+                        st.session_state.preselect_strike = None
+                        st.session_state.preselect_code = None
 
             st.session_state.ticker = ticker_to_fetch
 
@@ -365,7 +378,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         exp_map = {d.strftime("%Y-%m-%d"): d for d in valid_exps}
         exp_list = list(exp_map.keys())
         
-        # Auto-Select Expiry Dropdown
         default_idx = None
         if st.session_state.preselect_expiry in exp_list:
             default_idx = exp_list.index(st.session_state.preselect_expiry)
@@ -414,9 +426,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
 
 if not df_view.empty and current_exp:
     
-    # Auto-Center Logic
     center = st.session_state.spot_price
-    # Only center on specific strike if the preselected expiry is currently active
     if st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry:
         center = st.session_state.preselect_strike
         
@@ -431,7 +441,6 @@ if not df_view.empty and current_exp:
     
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
-    # Custom Styler for Highlight
     def style_target_code(val):
         if st.session_state.preselect_code and str(val) == str(st.session_state.preselect_code):
             return "background-color: rgba(29, 191, 210, 0.4); color: white; border: 1px solid #1DBFD2;"
@@ -496,7 +505,7 @@ if not df_view.empty and current_exp:
         if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
         if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
 
-# --- 10. STRATEGY (WITH TOOLTIPS) ---
+# --- 10. STRATEGY ---
 if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
