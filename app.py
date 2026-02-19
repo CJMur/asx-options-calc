@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 9.5 (Reverted to 9.3 state)
+# VERSION: 9.6 (Bulletproof Data Parsing)
 # ==========================================
 
 import streamlit as st
@@ -117,10 +117,23 @@ def load_sheet(raw_url):
         if not all(col in df.columns for col in required):
             return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
 
-        df['Ticker'] = df['Ticker'].str.upper().str.strip()
-        df['Code'] = df['Code'].str.upper().str.strip()
-        df['Type'] = df['Type'].str.upper().str.strip().replace({'C': 'Call', 'P': 'Put'})
-        df['Style'] = df['Style'].str.upper().str.strip().replace({'A': 'American', 'E': 'European'}) if 'Style' in df.columns else 'American'
+        df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
+        df['Code'] = df['Code'].astype(str).str.upper().str.strip()
+        
+        # --- ROBUST TYPE PARSING ---
+        # Ensures "C", "Call", "CALL", etc. all perfectly map to "Call"
+        df['Type'] = df['Type'].astype(str).str.upper().str.strip()
+        df.loc[df['Type'].str.startswith('C'), 'Type'] = 'Call'
+        df.loc[df['Type'].str.startswith('P'), 'Type'] = 'Put'
+        
+        # --- ROBUST STYLE PARSING ---
+        if 'Style' in df.columns:
+            df['Style'] = df['Style'].astype(str).str.upper().str.strip()
+            df.loc[df['Style'].str.startswith('A'), 'Style'] = 'American'
+            df.loc[df['Style'].str.startswith('E'), 'Style'] = 'European'
+        else:
+            df['Style'] = 'American'
+            
         df['Strike'] = pd.to_numeric(df['Strike'].str.replace(',', '').str.replace('$', ''), errors='coerce')
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
@@ -259,7 +272,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v9.5</div>
+            <div class="header-sub">Option Strategy Builder v9.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -367,7 +380,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
                 style = row.get('Style', 'American')
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
-                # ALWAYS CALCULATE THEO (Removed Settlement override)
                 px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
                 
                 return pd.Series([px, delta, vol, margin])
@@ -376,8 +388,9 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
-            calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')
-            puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')
+            # --- DUPLICATE SAFETY NET ---
+            calls = day_chain[day_chain['Type'] == 'Call'].drop_duplicates(subset=['Strike']).set_index('Strike')
+            puts = day_chain[day_chain['Type'] == 'Put'].drop_duplicates(subset=['Strike']).set_index('Strike')
             
             all_strikes = sorted(list(set(calls.index) | set(puts.index)))
             df_view = pd.DataFrame({'STRIKE': all_strikes})
