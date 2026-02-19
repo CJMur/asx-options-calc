@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.2 (XJO Index Ticker Fix)
+# VERSION: 10.3 (XJO Index Math & Multipliers)
 # ==========================================
 
 import streamlit as st
@@ -95,7 +95,7 @@ TOOLTIPS = {
     "Strike": "The set price at which the option contract can be exercised.",
     "Code": "The unique ASX exchange ticker symbol for this specific option contract.",
     "Entry": "The price you entered the trade at (or current market price).",
-    "Premium": "The total cost or credit for the trade. Calculated as Price × Quantity × 100.",
+    "Premium": "The total cost or credit for the trade. Calculated as Price × Quantity × Contract Multiplier.",
     "Margin": "The estimated collateral required to hold this position."
 }
 
@@ -152,13 +152,8 @@ def load_sheet(raw_url):
         if scen_cols:
             scen_df = df[scen_cols].copy()
             for col in scen_cols:
-                # Strip out everything except numbers, decimals, and negative signs
                 clean_str = scen_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
-                # Convert to pure numeric, turn blanks/errors into safe NaNs
                 scen_df[col] = pd.to_numeric(clean_str, errors='coerce')
-            
-            # Find the min across all scenarios, intentionally skipping missing ones (NaNs). 
-            # If a row has absolutely no scenario data, it fills it with 0.0
             df['UnitMargin'] = scen_df.min(axis=1, skipna=True).fillna(0.0)
         else:
             df['UnitMargin'] = 0.0
@@ -177,17 +172,17 @@ if st.session_state.ref_data is None:
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
-def black_scholes_european(S, K, T, r, sigma, option_type):
+def black_scholes_european(S, K, T, r, sigma, option_type, q=0.0):
     if T <= 0: return max(0, S - K) if option_type == 'Call' else max(0, K - S)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d1 = (math.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
     if option_type == 'Call':
-        return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+        return S * math.exp(-q * T) * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
     else:
-        return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
+        return K * math.exp(-r * T) * norm_cdf(-d2) - S * math.exp(-q * T) * norm_cdf(-d1)
 
 def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
-    bs_price = black_scholes_european(S, K, T, r, sigma, option_type)
+    bs_price = black_scholes_european(S, K, T, r, sigma, option_type, q=0.0)
     if option_type == 'Call': return bs_price 
     else: return max(bs_price, max(0, K - S))
 
@@ -196,13 +191,19 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
         return 0.0, 0.0
         
     r = 0.04 
+    q = 0.0
+    is_xjo = (st.session_state.ticker == 'XJO')
+    
     try:
         T = max(0.001, time_days / 365.0)
         v = vol_pct / 100.0
         S = float(spot)
         K = float(strike)
         
-        if st.session_state.div_info:
+        if is_xjo:
+            q = 0.04 # 4% Continuous dividend yield for ASX 200
+            style = 'EUROPEAN' # Force European execution for Index
+        elif st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
                 days_to_div = (d_info['date'] - datetime.now()).days
@@ -212,12 +213,17 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
                     S = max(0.01, S - div_pv)
         
         if style.upper() == 'EUROPEAN':
-            price = black_scholes_european(S, K, T, r, v, kind)
+            price = black_scholes_european(S, K, T, r, v, kind, q)
         else:
             price = bjerksund_stensland_american(S, K, T, r, v, kind)
             
-        d1 = (math.log(S / K) + (r + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
-        delta = norm_cdf(d1) if kind == 'Call' else norm_cdf(d1) - 1
+        d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
+        
+        if kind == 'Call':
+            delta = math.exp(-q * T) * norm_cdf(d1)
+        else:
+            delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
+            
         return price, delta
     except: 
         return 0.0, 0.0
@@ -232,7 +238,6 @@ st.session_state.is_market_open = check_market_hours()
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
     
-    # Check for ASX 200 Index Override
     if clean == "XJO":
         sym = "^AXJO"
     else:
@@ -257,10 +262,8 @@ def fetch_data(t):
         tk = yf.Ticker(sym)
         info = tk.info
         
-        # Robust fetch: try multiple fields
         spot = float(info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose', 0.0))))
         
-        # Fallback to history if info fails
         if spot == 0.0:
             hist = tk.history(period="1d")
             if not hist.empty: 
@@ -281,14 +284,20 @@ def fetch_data(t):
 
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
-div_display_txt = f" | 💰 Auto Div: ${st.session_state.div_info['amount']:.2f}" if st.session_state.div_info else ""
+
+if st.session_state.ticker == 'XJO':
+    div_display_txt = " | 💰 Index Yield: 4.0%"
+elif st.session_state.div_info:
+    div_display_txt = f" | 💰 Auto Div: ${st.session_state.div_info['amount']:.2f}"
+else:
+    div_display_txt = ""
 
 st.markdown(f"""
 <div class="header-box">
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.2</div>
+            <div class="header-sub">Option Strategy Builder v10.3</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -320,7 +329,6 @@ with c3:
         else:
             query_upper = query.upper().strip()
             
-            # --- SMART SEARCH LOGIC ---
             ref = st.session_state.ref_data
             ticker_to_fetch = query_upper
             
@@ -351,7 +359,6 @@ with c3:
             with st.spinner("Fetching Market Data..."):
                 source, px, div_data = fetch_data(st.session_state.ticker)
                 
-                # Protect Spot Price from being overwritten by $0.00
                 if px > 0:
                     st.session_state.spot_price = px
                     st.session_state.manual_spot = False
@@ -491,6 +498,8 @@ if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
+    contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
+    
     h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 1, 0.5]
     h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(h_col_spec)
     with h1: st.markdown('<div class="trade-header" title="Quantity">Qty</div>', unsafe_allow_html=True)
@@ -501,7 +510,6 @@ if st.session_state.legs:
     with h6: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
     with h7: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
     with h8: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
-    # Changed header title to Expected Margin
     with h9: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
@@ -510,9 +518,9 @@ if st.session_state.legs:
     
     for i, leg in enumerate(st.session_state.legs):
         new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
-        net_delta = leg['Qty'] * new_delta * 100
-        premium = -(leg['Qty'] * leg['Entry'] * 100)
-        theo_val = leg['Qty'] * new_theo * 100
+        net_delta = leg['Qty'] * new_delta * contract_multiplier
+        premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
+        theo_val = leg['Qty'] * new_theo * contract_multiplier
         row_margin = leg.get('MarginUnit', 0.0) * abs(leg['Qty']) 
         
         total_delta += net_delta
@@ -543,7 +551,6 @@ if st.session_state.legs:
     with st.container():
         f1, f2, f3, f4, f5, f6, f7, f8, f9, f10 = st.columns(h_col_spec)
         with f2: st.markdown("<span class='strategy-text'>**TOTAL STRATEGY**</span>", unsafe_allow_html=True)
-        # Left f6 empty to remove the total theo text as requested
         with f6: st.write("") 
         with f7: st.markdown(f"<span class='strategy-text'>**{total_delta:,.2f}**</span>", unsafe_allow_html=True)
         with f8: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
@@ -577,7 +584,7 @@ if st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
                 exit_px, _ = calculate_price_and_delta('American', leg['Type'], p, leg['Strike'], rem_days, sim_vol)
-                pnl += (exit_px - leg['Entry']) * leg['Qty'] * 100
+                pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
             row[col_name] = pnl
@@ -596,9 +603,9 @@ if st.session_state.legs:
         val_tF = 0
         for leg in st.session_state.legs:
             price_t0, _ = calculate_price_and_delta('American', leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
-            val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * 100
+            val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
             price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
-            val_tF += (price_tf - leg['Entry']) * leg['Qty'] * 100
+            val_tF += (price_tf - leg['Entry']) * leg['Qty'] * contract_multiplier
         pnl_today.append(val_t0)
         pnl_expiry.append(val_tF)
         
