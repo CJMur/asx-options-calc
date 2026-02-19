@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.1 (Expected Margin & Theo Total Fix)
+# VERSION: 10.2 (XJO Index Ticker Fix)
 # ==========================================
 
 import streamlit as st
@@ -231,7 +231,13 @@ st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
-    sym = f"{clean}.AX"
+    
+    # Check for ASX 200 Index Override
+    if clean == "XJO":
+        sym = "^AXJO"
+    else:
+        sym = f"{clean}.AX"
+        
     div_info, spot = None, 0.0
     
     if st.session_state.manual_spot:
@@ -282,7 +288,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.1</div>
+            <div class="header-sub">Option Strategy Builder v10.2</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
