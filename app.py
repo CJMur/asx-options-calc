@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 9.3 (Text Parsing Fix & Stable Baseline)
+# VERSION: 10.0 (Bulletproof Scenario Fix)
 # ==========================================
 
 import streamlit as st
@@ -117,14 +117,14 @@ def load_sheet(raw_url):
         if not all(col in df.columns for col in required):
             return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
 
-        df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
-        df['Code'] = df['Code'].astype(str).str.upper().str.strip()
+        # Strip blanks from required text fields
+        df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
+        df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
         # --- IRON-CLAD TYPE PARSING ---
         if 'Type' in df.columns:
             raw_type = df['Type'].astype(str).str.strip().str.upper()
-            df['Type'] = np.where(raw_type.str.startswith('C'), 'Call', 
-                         np.where(raw_type.str.startswith('P'), 'Put', 'Call'))
+            df['Type'] = np.where(raw_type.str.startswith('C'), 'Call', 'Put')
         else:
             df['Type'] = 'Call'
             
@@ -134,22 +134,32 @@ def load_sheet(raw_url):
         else:
             df['Style'] = 'American'
             
-        df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(',', '').str.replace('$', ''), errors='coerce')
+        # Strip all currency formatting from numbers
+        df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
         if 'Vol' in df.columns:
-            df['Vol'] = df['Vol'].astype(str).str.replace('%', '').astype(float)
+            df['Vol'] = pd.to_numeric(df['Vol'].astype(str).str.replace('%', ''), errors='coerce')
             mask = df['Vol'] <= 1.0 
             df.loc[mask, 'Vol'] = df.loc[mask, 'Vol'] * 100
         else:
             df['Vol'] = 30.0
             
-        df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace('$', ''), errors='coerce') if 'Settlement' in df.columns else 0.0
+        df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce') if 'Settlement' in df.columns else 0.0
 
-        scen_cols = [c for c in df.columns if 'Scenario' in c]
+        # --- BULLETPROOF SCENARIO PARSING ---
+        scen_cols = [c for c in df.columns if 'Scenario' in str(c)]
         if scen_cols:
-            scen_df = df[scen_cols].apply(lambda x: pd.to_numeric(x.astype(str).str.replace('$', '').str.replace(',', ''), errors='coerce'))
-            df['UnitMargin'] = scen_df.min(axis=1).fillna(0.0)
+            scen_df = df[scen_cols].copy()
+            for col in scen_cols:
+                # Strip out everything except numbers, decimals, and negative signs
+                clean_str = scen_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
+                # Convert to pure numeric, turn blanks/errors into safe NaNs
+                scen_df[col] = pd.to_numeric(clean_str, errors='coerce')
+            
+            # Find the min across all scenarios, intentionally skipping missing ones (NaNs). 
+            # If a row has absolutely no scenario data, it fills it with 0.0
+            df['UnitMargin'] = scen_df.min(axis=1, skipna=True).fillna(0.0)
         else:
             df['UnitMargin'] = 0.0
 
@@ -241,8 +251,10 @@ def fetch_data(t):
         tk = yf.Ticker(sym)
         info = tk.info
         
+        # Robust fetch: try multiple fields
         spot = float(info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose', 0.0))))
         
+        # Fallback to history if info fails
         if spot == 0.0:
             hist = tk.history(period="1d")
             if not hist.empty: 
@@ -270,7 +282,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v9.3</div>
+            <div class="header-sub">Option Strategy Builder v10.0</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -302,6 +314,7 @@ with c3:
         else:
             query_upper = query.upper().strip()
             
+            # --- SMART SEARCH LOGIC ---
             ref = st.session_state.ref_data
             ticker_to_fetch = query_upper
             
@@ -332,6 +345,7 @@ with c3:
             with st.spinner("Fetching Market Data..."):
                 source, px, div_data = fetch_data(st.session_state.ticker)
                 
+                # Protect Spot Price from being overwritten by $0.00
                 if px > 0:
                     st.session_state.spot_price = px
                     st.session_state.manual_spot = False
