@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 9.3 (Spot Price & Theo Override Fix)
+# VERSION: 9.3 (Text Parsing Fix & Stable Baseline)
 # ==========================================
 
 import streamlit as st
@@ -117,21 +117,34 @@ def load_sheet(raw_url):
         if not all(col in df.columns for col in required):
             return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
 
-        df['Ticker'] = df['Ticker'].str.upper().str.strip()
-        df['Code'] = df['Code'].str.upper().str.strip()
-        df['Type'] = df['Type'].str.upper().str.strip().replace({'C': 'Call', 'P': 'Put'})
-        df['Style'] = df['Style'].str.upper().str.strip().replace({'A': 'American', 'E': 'European'}) if 'Style' in df.columns else 'American'
-        df['Strike'] = pd.to_numeric(df['Strike'].str.replace(',', '').str.replace('$', ''), errors='coerce')
+        df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
+        df['Code'] = df['Code'].astype(str).str.upper().str.strip()
+        
+        # --- IRON-CLAD TYPE PARSING ---
+        if 'Type' in df.columns:
+            raw_type = df['Type'].astype(str).str.strip().str.upper()
+            df['Type'] = np.where(raw_type.str.startswith('C'), 'Call', 
+                         np.where(raw_type.str.startswith('P'), 'Put', 'Call'))
+        else:
+            df['Type'] = 'Call'
+            
+        if 'Style' in df.columns:
+            raw_style = df['Style'].astype(str).str.strip().str.upper()
+            df['Style'] = np.where(raw_style.str.startswith('E'), 'European', 'American')
+        else:
+            df['Style'] = 'American'
+            
+        df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(',', '').str.replace('$', ''), errors='coerce')
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
         if 'Vol' in df.columns:
-            df['Vol'] = df['Vol'].str.replace('%', '').astype(float)
+            df['Vol'] = df['Vol'].astype(str).str.replace('%', '').astype(float)
             mask = df['Vol'] <= 1.0 
             df.loc[mask, 'Vol'] = df.loc[mask, 'Vol'] * 100
         else:
             df['Vol'] = 30.0
             
-        df['Settlement'] = pd.to_numeric(df['Settlement'].str.replace('$', ''), errors='coerce') if 'Settlement' in df.columns else 0.0
+        df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace('$', ''), errors='coerce') if 'Settlement' in df.columns else 0.0
 
         scen_cols = [c for c in df.columns if 'Scenario' in c]
         if scen_cols:
@@ -228,10 +241,8 @@ def fetch_data(t):
         tk = yf.Ticker(sym)
         info = tk.info
         
-        # Robust fetch: try multiple fields
         spot = float(info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose', 0.0))))
         
-        # Fallback to history if info fails
         if spot == 0.0:
             hist = tk.history(period="1d")
             if not hist.empty: 
@@ -291,7 +302,6 @@ with c3:
         else:
             query_upper = query.upper().strip()
             
-            # --- SMART SEARCH LOGIC ---
             ref = st.session_state.ref_data
             ticker_to_fetch = query_upper
             
@@ -322,7 +332,6 @@ with c3:
             with st.spinner("Fetching Market Data..."):
                 source, px, div_data = fetch_data(st.session_state.ticker)
                 
-                # Protect Spot Price from being overwritten by $0.00
                 if px > 0:
                     st.session_state.spot_price = px
                     st.session_state.manual_spot = False
@@ -367,7 +376,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
                 style = row.get('Style', 'American')
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
-                # ALWAYS CALCULATE THEO (Removed Settlement override)
                 px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
                 
                 return pd.Series([px, delta, vol, margin])
