@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 9.6 (Bulletproof Data Parsing)
+# VERSION: 9.7 (ASX Code Decryptor / Type Fix)
 # ==========================================
 
 import streamlit as st
@@ -120,17 +120,27 @@ def load_sheet(raw_url):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
         df['Code'] = df['Code'].astype(str).str.upper().str.strip()
         
-        # --- ROBUST TYPE PARSING ---
-        # Ensures "C", "Call", "CALL", etc. all perfectly map to "Call"
-        df['Type'] = df['Type'].astype(str).str.upper().str.strip()
-        df.loc[df['Type'].str.startswith('C'), 'Type'] = 'Call'
-        df.loc[df['Type'].str.startswith('P'), 'Type'] = 'Put'
+        # --- BULLETPROOF TYPE PARSING (ASX Code Decryptor) ---
+        if 'Type' in df.columns:
+            t_col = df['Type'].astype(str).str.upper()
+        else:
+            t_col = pd.Series([''] * len(df))
+            
+        # The 4th character of an ASX option code dictates Call vs Put
+        char4 = df['Code'].str.slice(3, 4)
+        is_call_code = char4.isin(list('ABCDEFGHIJKL'))
+        is_put_code = char4.isin(list('MNOPQRSTUVWX'))
         
-        # --- ROBUST STYLE PARSING ---
+        # Priority: 1. Column contains 'C', 2. Column contains 'P', 3. Code contains Call letter, 4. Code contains Put letter
+        df['Type'] = np.where(t_col.str.contains('C', na=False), 'Call',
+                     np.where(t_col.str.contains('P', na=False), 'Put',
+                     np.where(is_call_code, 'Call',
+                     np.where(is_put_code, 'Put', 'Call'))))
+        
+        # --- BULLETPROOF STYLE PARSING ---
         if 'Style' in df.columns:
-            df['Style'] = df['Style'].astype(str).str.upper().str.strip()
-            df.loc[df['Style'].str.startswith('A'), 'Style'] = 'American'
-            df.loc[df['Style'].str.startswith('E'), 'Style'] = 'European'
+            s_col = df['Style'].astype(str).str.upper()
+            df['Style'] = np.where(s_col.str.contains('E', na=False), 'European', 'American')
         else:
             df['Style'] = 'American'
             
@@ -241,10 +251,8 @@ def fetch_data(t):
         tk = yf.Ticker(sym)
         info = tk.info
         
-        # Robust fetch: try multiple fields
         spot = float(info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose', 0.0))))
         
-        # Fallback to history if info fails
         if spot == 0.0:
             hist = tk.history(period="1d")
             if not hist.empty: 
@@ -272,7 +280,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v9.6</div>
+            <div class="header-sub">Option Strategy Builder v9.7</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -379,9 +387,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
-                
                 px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
-                
                 return pd.Series([px, delta, vol, margin])
 
             metrics = day_chain.apply(calc_row_metrics, axis=1)
