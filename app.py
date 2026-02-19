@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 9.8 (Bulletproof Data Parsing)
+# VERSION: 9.3 (Spot Price & Theo Override Fix)
 # ==========================================
 
 import streamlit as st
@@ -117,39 +117,21 @@ def load_sheet(raw_url):
         if not all(col in df.columns for col in required):
             return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
 
-        df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip()
-        df['Code'] = df['Code'].astype(str).str.upper().str.strip()
-        
-        # --- BULLETPROOF TYPE PARSING ---
-        # Checks if the string starts with 'C' (handles "C", "Call", "CALL", etc.)
-        if 'Type' in df.columns:
-            t_col = df['Type'].fillna('').astype(str).str.upper().str.strip()
-            df['Type'] = np.where(t_col.str.startswith('C'), 'Call', 'Put')
-        else:
-            # Fallback: Read 4th character of ASX code (A-L = Call, M-X = Put)
-            is_call = df['Code'].str.slice(3, 4).isin(list('ABCDEFGHIJKL'))
-            df['Type'] = np.where(is_call, 'Call', 'Put')
-            
-        # --- BULLETPROOF STYLE PARSING ---
-        if 'Style' in df.columns:
-            s_col = df['Style'].fillna('').astype(str).str.upper().str.strip()
-            df['Style'] = np.where(s_col.str.startswith('E'), 'European', 'American')
-        else:
-            df['Style'] = 'American'
-            
-        # --- ROBUST NUMERIC PARSING ---
-        # Added .round(3) to Strike so floating point differences don't break the chain mapping
-        df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(',', '').str.replace('$', ''), errors='coerce').round(3)
+        df['Ticker'] = df['Ticker'].str.upper().str.strip()
+        df['Code'] = df['Code'].str.upper().str.strip()
+        df['Type'] = df['Type'].str.upper().str.strip().replace({'C': 'Call', 'P': 'Put'})
+        df['Style'] = df['Style'].str.upper().str.strip().replace({'A': 'American', 'E': 'European'}) if 'Style' in df.columns else 'American'
+        df['Strike'] = pd.to_numeric(df['Strike'].str.replace(',', '').str.replace('$', ''), errors='coerce')
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
         if 'Vol' in df.columns:
-            df['Vol'] = df['Vol'].astype(str).str.replace('%', '').astype(float)
+            df['Vol'] = df['Vol'].str.replace('%', '').astype(float)
             mask = df['Vol'] <= 1.0 
             df.loc[mask, 'Vol'] = df.loc[mask, 'Vol'] * 100
         else:
             df['Vol'] = 30.0
             
-        df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace('$', ''), errors='coerce') if 'Settlement' in df.columns else 0.0
+        df['Settlement'] = pd.to_numeric(df['Settlement'].str.replace('$', ''), errors='coerce') if 'Settlement' in df.columns else 0.0
 
         scen_cols = [c for c in df.columns if 'Scenario' in c]
         if scen_cols:
@@ -277,7 +259,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v9.8</div>
+            <div class="header-sub">Option Strategy Builder v9.3</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -384,16 +366,18 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
+                
+                # ALWAYS CALCULATE THEO (Removed Settlement override)
                 px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
+                
                 return pd.Series([px, delta, vol, margin])
 
             metrics = day_chain.apply(calc_row_metrics, axis=1)
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
-            # --- EXTRACT CALLS AND PUTS (Strict Type Match) ---
-            calls = day_chain[day_chain['Type'] == 'Call'].drop_duplicates(subset=['Strike']).set_index('Strike')
-            puts = day_chain[day_chain['Type'] == 'Put'].drop_duplicates(subset=['Strike']).set_index('Strike')
+            calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')
+            puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')
             
             all_strikes = sorted(list(set(calls.index) | set(puts.index)))
             df_view = pd.DataFrame({'STRIKE': all_strikes})
