@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 8.8 (Tooltips Added)
+# VERSION: 8.9 (Smart Option Code Search)
 # ==========================================
 
 import streamlit as st
@@ -13,7 +13,7 @@ import pytz
 import math
 
 # --- 1. CONFIGURATION & THEME ---
-st.set_page_config(layout="wide", page_title="TradersCircle Options v8.8")
+st.set_page_config(layout="wide", page_title="TradersCircle Options v8.9")
 RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
 
 # --- CSS STYLING ---
@@ -60,7 +60,7 @@ st.markdown("""
     /* Clean Table Headers */
     .trade-header {
         font-weight: 700; color: #94a3b8; font-size: 12px; text-transform: uppercase;
-        margin-bottom: 5px; cursor: help; /* Cursor hint for tooltip */
+        margin-bottom: 5px; cursor: help;
     }
     
     /* Delete Button Styling */
@@ -85,6 +85,11 @@ if 'is_market_open' not in st.session_state: st.session_state.is_market_open = T
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
 if 'vol_manual' not in st.session_state: st.session_state.vol_manual = 30.0
+
+# Smart Search States
+if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
+if 'preselect_expiry' not in st.session_state: st.session_state.preselect_expiry = None
+if 'preselect_strike' not in st.session_state: st.session_state.preselect_strike = None
 
 # --- TOOLTIP DEFINITIONS ---
 TOOLTIPS = {
@@ -122,6 +127,7 @@ def load_sheet(raw_url):
             return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
 
         df['Ticker'] = df['Ticker'].str.upper().str.strip()
+        df['Code'] = df['Code'].str.upper().str.strip()
         df['Type'] = df['Type'].str.upper().str.strip().replace({'C': 'Call', 'P': 'Put'})
         
         if 'Style' in df.columns:
@@ -144,7 +150,6 @@ def load_sheet(raw_url):
         else:
             df['Settlement'] = 0.0
 
-        # Margin Scenarios
         scen_cols = [c for c in df.columns if 'Scenario' in c]
         if scen_cols:
             scen_df = df[scen_cols].apply(lambda x: pd.to_numeric(x.astype(str).str.replace('$', '').str.replace(',', ''), errors='coerce'))
@@ -273,7 +278,7 @@ with st.container():
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <div class="header-title">TradersCircle Options Calculator</div>
-                <div class="header-sub">Option Strategy Builder v8.8</div>
+                <div class="header-sub">Option Strategy Builder v8.9</div>
             </div>
             <div style="text-align: right;">
                 <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -287,7 +292,9 @@ with st.container():
 # --- 7. CONTROLS ---
 c1, c2, c3 = st.columns([1, 1, 2], gap="medium")
 with c1: 
-    query = st.text_input("Ticker", value=st.session_state.ticker, placeholder="Enter Stock Code")
+    # Use preselect_code if available, else standard ticker
+    display_val = st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker
+    query = st.text_input("Ticker or Option Code", value=display_val, placeholder="e.g., BHP or BHPJ84")
 
 with c2:
     if st.session_state.ticker:
@@ -301,12 +308,35 @@ with c2:
 with c3:
     st.write("") 
     st.write("")
-    if st.button("LOAD OPTIONS", type="primary", use_container_width=True) or (query and query.upper() != st.session_state.ticker):
+    if st.button("LOAD OPTIONS", type="primary", use_container_width=True) or (query and query.upper() != display_val):
         if not query:
-            st.warning("Please enter a ticker symbol.")
+            st.warning("Please enter a ticker or option code.")
         else:
-            if query.upper() != st.session_state.ticker: st.session_state.manual_spot = False
-            st.session_state.ticker = query.upper()
+            query_upper = query.upper().strip()
+            st.session_state.manual_spot = False
+            
+            # --- SMART SEARCH LOGIC ---
+            ref = st.session_state.ref_data
+            if ref is not None:
+                match = ref[ref['Code'] == query_upper]
+                if not match.empty:
+                    # Target found: Extract underlying data
+                    actual_ticker = match.iloc[0]['Ticker']
+                    st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
+                    st.session_state.preselect_strike = float(match.iloc[0]['Strike'])
+                    st.session_state.preselect_code = query_upper
+                    ticker_to_fetch = actual_ticker
+                else:
+                    # Regular ticker search
+                    st.session_state.preselect_expiry = None
+                    st.session_state.preselect_strike = None
+                    st.session_state.preselect_code = None
+                    ticker_to_fetch = query_upper
+            else:
+                ticker_to_fetch = query_upper
+
+            st.session_state.ticker = ticker_to_fetch
+
             with st.spinner("Fetching Market Data..."):
                 source, px, div_data = fetch_data(st.session_state.ticker)
                 if not st.session_state.manual_spot: st.session_state.spot_price = px
@@ -333,8 +363,14 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
     if not subset.empty:
         valid_exps = sorted(subset['Expiry'].unique())
         exp_map = {d.strftime("%Y-%m-%d"): d for d in valid_exps}
+        exp_list = list(exp_map.keys())
         
-        current_exp = st.selectbox("Expiry", list(exp_map.keys()), index=None, placeholder="Select Expiry")
+        # Auto-Select Expiry Dropdown
+        default_idx = None
+        if st.session_state.preselect_expiry in exp_list:
+            default_idx = exp_list.index(st.session_state.preselect_expiry)
+        
+        current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
         
         if current_exp:
             target_dt = exp_map[current_exp]
@@ -344,7 +380,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             def calc_row_metrics(row):
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
-                # Grab UnitMargin from row
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
                 if st.session_state.is_market_open:
@@ -378,7 +413,13 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
 
 if not df_view.empty and current_exp:
+    
+    # Auto-Center Logic
     center = st.session_state.spot_price
+    # Only center on specific strike if the preselected expiry is currently active
+    if st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry:
+        center = st.session_state.preselect_strike
+        
     if center > 0:
         df_view['Diff'] = abs(df_view['STRIKE'] - center)
         atm_idx = df_view['Diff'].idxmin()
@@ -390,16 +431,23 @@ if not df_view.empty and current_exp:
     
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
+    # Custom Styler for Highlight
+    def style_target_code(val):
+        if st.session_state.preselect_code and str(val) == str(st.session_state.preselect_code):
+            return "background-color: rgba(29, 191, 210, 0.4); color: white; border: 1px solid #1DBFD2;"
+        return ""
+
     styled_disp = disp.style.applymap(
         lambda x: "font-weight: bold; background-color: rgba(255,255,255,0.05);", 
         subset=['STRIKE']
+    ).applymap(
+        style_target_code, subset=['C_Code', 'P_Code']
     ).format({
         'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}',
         'STRIKE': '{:.3f}',
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
-    # CONFIG WITH TOOLTIPS
     selection = st.dataframe(
         styled_disp,
         column_config={
@@ -453,10 +501,8 @@ if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
-    # Headers with HTML Title Attribute
     h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 1, 0.5]
     h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(h_col_spec)
-    
     with h1: st.markdown('<div class="trade-header" title="Quantity">Qty</div>', unsafe_allow_html=True)
     with h2: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
     with h3: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
