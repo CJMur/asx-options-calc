@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 9.2 (Complete Code & Safe UI)
+# VERSION: 9.4 (Always-Visible Sliders & Matrix Tooltips)
 # ==========================================
 
 import streamlit as st
@@ -43,18 +43,37 @@ st.markdown("""
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
     }
     
-    /* --- SLIDER COLOR FIX (Electric Blue) --- */
+    /* --- SLIDER COLOR FIX (Electric Blue) & VISIBLE TICK VALUES --- */
     div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
     div[role="slider"] { background-color: #0050FF !important; border: none !important; box-shadow: none !important; }
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
     div[data-testid="stSlider"] p { color: white !important; }
+    
+    /* Force min/max tick values under the slider to stay permanently visible */
+    div[data-testid="stTickBar"], 
+    div[data-testid="stSliderTickBarMin"], 
+    div[data-testid="stSliderTickBarMax"],
+    div[data-testid="stSlider"] [data-baseweb="slider"] ~ div { 
+        opacity: 1 !important; 
+        color: #cbd5e1 !important; /* Light grey text */
+    }
     input[type=range] { accent-color: #0050FF !important; }
+    
+    /* Dataframe Row Selection Highlight (Teal) */
+    [data-testid="stDataFrame"] [aria-selected="true"] > div {
+        background-color: rgba(29, 191, 210, 0.4) !important;
+        color: white !important;
+    }
     
     .stDataFrame { border: none !important; }
     .trade-header {
         font-weight: 700; color: #94a3b8; font-size: 12px; text-transform: uppercase;
         margin-bottom: 5px; cursor: help; user-select: none;
     }
+    
+    /* Prevent accidental text highlighting in Strategy Table */
+    .strategy-text { user-select: none; }
+    
     button[kind="secondary"] {
         padding: 0rem 0.5rem !important; min-height: 0px !important; height: 32px !important;
     }
@@ -159,6 +178,9 @@ def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
     else: return max(bs_price, max(0, K - S))
 
 def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
+    if spot <= 0 or strike <= 0 or time_days < 0:
+        return 0.0, 0.0
+        
     r = 0.04 
     try:
         T = max(0.001, time_days / 365.0)
@@ -183,7 +205,8 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
         d1 = (math.log(S / K) + (r + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
         delta = norm_cdf(d1) if kind == 'Call' else norm_cdf(d1) - 1
         return price, delta
-    except: return 0.0, 0.0
+    except: 
+        return 0.0, 0.0
 
 def check_market_hours():
     sydney_tz = pytz.timezone('Australia/Sydney')
@@ -202,28 +225,37 @@ def fetch_data(t):
         try:
             info = yf.Ticker(sym).info
             if 'exDividendDate' in info and info['exDividendDate']:
-                ex_date = datetime.fromtimestamp(info['exDividendDate'])
-                amt = info.get('lastDividendValue', info.get('dividendRate', 0)/2)
-                if ex_date > datetime.now(): div_info = {'amount': amt, 'date': ex_date}
+                ex_ts = info['exDividendDate']
+                if isinstance(ex_ts, (int, float)):
+                    ex_date = datetime.fromtimestamp(ex_ts)
+                    amt = info.get('lastDividendValue', info.get('dividendRate', 0)/2)
+                    if ex_date > datetime.now(): div_info = {'amount': amt, 'date': ex_date}
         except: pass
         return "MANUAL", spot, div_info
 
     try:
         tk = yf.Ticker(sym)
-        hist = tk.history(period="1d")
-        if not hist.empty: spot = float(hist['Close'].iloc[-1])
-        else: return "ERROR", 0.0, None
+        info = tk.info
+        
+        spot = float(info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose', 0.0))))
+        
+        if spot == 0.0:
+            hist = tk.history(period="1d")
+            if not hist.empty: 
+                spot = float(hist['Close'].iloc[-1])
             
-        try:
-            info = tk.info
-            if 'exDividendDate' in info and info['exDividendDate']:
-                ex_date = datetime.fromtimestamp(info['exDividendDate'])
+        if 'exDividendDate' in info and info['exDividendDate']:
+            ex_ts = info['exDividendDate']
+            if isinstance(ex_ts, (int, float)):
+                ex_date = datetime.fromtimestamp(ex_ts)
                 if ex_date > datetime.now():
-                    amt = info.get('lastDividendValue', info.get('dividendRate', 0) / 2)
+                    amt = info.get('lastDividendValue', 0)
+                    if amt == 0: amt = info.get('dividendRate', 0) / 2
                     div_info = {'amount': amt, 'date': ex_date}
-        except: pass
+                    
         return "YAHOO", spot, div_info
-    except: return "ERROR", 0.0, None
+    except: 
+        return "ERROR", 0.0, None
 
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
@@ -234,7 +266,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v9.2</div>
+            <div class="header-sub">Option Strategy Builder v9.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -265,7 +297,7 @@ with c3:
         if not query: st.warning("Please enter a ticker or option code.")
         else:
             query_upper = query.upper().strip()
-            st.session_state.manual_spot = False
+            
             ref = st.session_state.ref_data
             ticker_to_fetch = query_upper
             
@@ -295,7 +327,13 @@ with c3:
 
             with st.spinner("Fetching Market Data..."):
                 source, px, div_data = fetch_data(st.session_state.ticker)
-                if not st.session_state.manual_spot: st.session_state.spot_price = px
+                
+                if px > 0:
+                    st.session_state.spot_price = px
+                    st.session_state.manual_spot = False
+                elif not st.session_state.manual_spot:
+                    st.warning(f"Could not fetch live price for {st.session_state.ticker}. Please enter it manually.")
+                
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
                 data, msg = load_sheet(RAW_SHEET_URL)
@@ -333,13 +371,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
-                
-                if st.session_state.is_market_open:
-                    px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
-                else:
-                    px = float(row['Settlement']) if pd.notna(row['Settlement']) else 0.0
-                    _, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
-                
+                px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
                 return pd.Series([px, delta, vol, margin])
 
             metrics = day_chain.apply(calc_row_metrics, axis=1)
@@ -466,15 +498,15 @@ if st.session_state.legs:
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
         c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns(h_col_spec)
-        with c1: st.write(f"**{leg['Qty']}**")
-        with c2: st.write(f"{leg['Code']}")
-        with c3: st.markdown(f"<span style='color:{type_color}; font-weight:600'>{leg['Type']}</span>", unsafe_allow_html=True)
-        with c4: st.write(f"{leg['Strike']:.3f}")
-        with c5: st.write(f"${leg['Entry']:.3f}")
-        with c6: st.write(f"${new_theo:.3f}")
-        with c7: st.write(f"{net_delta:.2f}")
-        with c8: st.markdown(f"<span style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
-        with c9: st.markdown(f"<span style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
+        with c1: st.markdown(f"<span class='strategy-text'>**{leg['Qty']}**</span>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<span class='strategy-text'>{leg['Code']}</span>", unsafe_allow_html=True)
+        with c3: st.markdown(f"<span class='strategy-text' style='color:{type_color}; font-weight:600'>{leg['Type']}</span>", unsafe_allow_html=True)
+        with c4: st.markdown(f"<span class='strategy-text'>{leg['Strike']:.3f}</span>", unsafe_allow_html=True)
+        with c5: st.markdown(f"<span class='strategy-text'>${leg['Entry']:.3f}</span>", unsafe_allow_html=True)
+        with c6: st.markdown(f"<span class='strategy-text'>${new_theo:.3f}</span>", unsafe_allow_html=True)
+        with c7: st.markdown(f"<span class='strategy-text'>{net_delta:.2f}</span>", unsafe_allow_html=True)
+        with c8: st.markdown(f"<span class='strategy-text' style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
+        with c9: st.markdown(f"<span class='strategy-text' style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
         with c10:
             if st.button("✕", key=f"d_{i}"):
                 st.session_state.legs.pop(i)
@@ -483,21 +515,33 @@ if st.session_state.legs:
 
     with st.container():
         f1, f2, f3, f4, f5, f6, f7, f8, f9, f10 = st.columns(h_col_spec)
-        with f2: st.markdown("**TOTAL STRATEGY**")
-        with f6: st.markdown(f"**${total_theo:,.2f}**")
-        with f7: st.markdown(f"**{total_delta:,.2f}**")
-        with f8: st.markdown(f"<span style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
-        with f9: st.markdown(f"<span style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
+        with f2: st.markdown("<span class='strategy-text'>**TOTAL STRATEGY**</span>", unsafe_allow_html=True)
+        with f6: st.markdown(f"<span class='strategy-text'>**${total_theo:,.2f}**</span>", unsafe_allow_html=True)
+        with f7: st.markdown(f"<span class='strategy-text'>**{total_delta:,.2f}**</span>", unsafe_allow_html=True)
+        with f8: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
+        with f9: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
 
     # --- MATRIX ---
     st.markdown("---")
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
-    time_step = m1.slider("Step (Days)", 1, 30, 7)
-    range_pct = m2.select_slider("Price Range", options=[0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%")
+    
+    # Sliders with 'help' tooltips
+    time_step = m1.slider(
+        "Step (Days)", 1, 30, 7, 
+        help="Adjusts the number of days forward for each column in the Payoff Matrix."
+    )
+    range_pct = m2.select_slider(
+        "Price Range", options=[0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%",
+        help="Sets the upper and lower percentage stock price boundaries for the Matrix and Chart."
+    )
     
     with m1:
-        st.caption("Simulate Volatility Shift:")
+        # Custom HTML heading with title attribute to mimic standard tooltip
+        st.markdown(
+            '<div title="Simulates a market-wide increase or decrease in Implied Volatility (IV) to see the impact on theoretical option prices." style="font-size: 13px; margin-bottom: 5px; color: #cbd5e1; cursor: help; user-select: none;">Simulate Volatility Shift: ❔</div>', 
+            unsafe_allow_html=True
+        )
         c_v1, c_v2, c_v3 = st.columns(3)
         if c_v1.button("IV -10%"): st.session_state.matrix_vol_mod -= 10
         if c_v2.button("IV Flat"): st.session_state.matrix_vol_mod = 0
