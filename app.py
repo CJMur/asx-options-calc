@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.0 (Bulletproof Scenario Fix)
+# VERSION: 10.1 (Expected Margin & Theo Total Fix)
 # ==========================================
 
 import streamlit as st
@@ -282,7 +282,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.0</div>
+            <div class="header-sub">Option Strategy Builder v10.1</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -495,7 +495,8 @@ if st.session_state.legs:
     with h6: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
     with h7: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
     with h8: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
-    with h9: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Margin</div>', unsafe_allow_html=True)
+    # Changed header title to Expected Margin
+    with h9: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
@@ -536,7 +537,8 @@ if st.session_state.legs:
     with st.container():
         f1, f2, f3, f4, f5, f6, f7, f8, f9, f10 = st.columns(h_col_spec)
         with f2: st.markdown("<span class='strategy-text'>**TOTAL STRATEGY**</span>", unsafe_allow_html=True)
-        with f6: st.markdown(f"<span class='strategy-text'>**${total_theo:,.2f}**</span>", unsafe_allow_html=True)
+        # Left f6 empty to remove the total theo text as requested
+        with f6: st.write("") 
         with f7: st.markdown(f"<span class='strategy-text'>**{total_delta:,.2f}**</span>", unsafe_allow_html=True)
         with f8: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
         with f9: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
