@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.7 (Smart Step Strike Buttons)
+# VERSION: 10.8 (Compact Strike Buttons & Style Columns)
 # ==========================================
 
 import streamlit as st
@@ -295,7 +295,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.7</div>
+            <div class="header-sub">Option Strategy Builder v10.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -416,12 +416,16 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             df_view = pd.DataFrame({'STRIKE': all_strikes})
             
             df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
+            df_view['C_Style'] = df_view['STRIKE'].map(calls['Style']).str[0].fillna('-')
+            df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
             df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
             df_view['C_Vol'] = df_view['STRIKE'].map(calls['Calc_Vol'])
             df_view['C_Delta'] = df_view['STRIKE'].map(calls['Calc_Delta'])
             df_view['C_Margin'] = df_view['STRIKE'].map(calls['Calc_Margin'])
             
             df_view['P_Code'] = df_view['STRIKE'].map(puts['Code'])
+            df_view['P_Style'] = df_view['STRIKE'].map(puts['Style']).str[0].fillna('-')
+            df_view['P_Style_Full'] = df_view['STRIKE'].map(puts['Style']).fillna('American')
             df_view['P_Price'] = df_view['STRIKE'].map(puts['Calc_Price'])
             df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
             df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
@@ -436,7 +440,7 @@ if not df_view.empty and current_exp:
         df_view = df_view.iloc[max(0, atm_idx - 12):min(len(df_view), atm_idx + 13)].drop(columns=['Diff'])
     
     st.markdown(f"**Chain: {current_exp}**")
-    disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
+    disp = df_view[['C_Code', 'C_Style', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Style', 'P_Code']].copy()
     
     def highlight_itm(row):
         spot = st.session_state.spot_price
@@ -446,9 +450,9 @@ if not df_view.empty and current_exp:
         styles = []
         for col in row.index:
             s = ""
-            if col in ['C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
+            if col in ['C_Code', 'C_Style', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
-            elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta'] and strike > spot:
+            elif col in ['P_Code', 'P_Style', 'P_Price', 'P_Vol', 'P_Delta'] and strike > spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
             
             if col == 'STRIKE':
@@ -469,6 +473,7 @@ if not df_view.empty and current_exp:
         styled_disp,
         column_config={
             "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
+            "C_Style": st.column_config.TextColumn("Style", help="A = American, E = European"),
             "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
             "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
             "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
@@ -476,6 +481,7 @@ if not df_view.empty and current_exp:
             "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
             "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
+            "P_Style": st.column_config.TextColumn("Style", help="A = American, E = European"),
             "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
         },
         hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row"
@@ -489,11 +495,12 @@ if not df_view.empty and current_exp:
         q_col, _ = st.columns([1, 5])
         trade_qty = q_col.number_input("Trade Quantity", min_value=1, value=1, step=1)
         
-        def add(side, kind, px, code_hint, delta_val, qty_val):
+        def add(side, kind, px, code_hint, delta_val, qty_val, style_full):
             st.session_state.legs.append({
                 "id": str(uuid.uuid4()),
                 "Qty": qty_val if side == "Buy" else -qty_val, 
                 "Type": kind, 
+                "Style": str(style_full),
                 "Strike": float(row['STRIKE']), 
                 "Expiry": days_diff, 
                 "ExpDateStr": current_exp, 
@@ -507,12 +514,14 @@ if not df_view.empty and current_exp:
             
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
         p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
+        c_s = str(row['C_Style_Full'])
+        p_s = str(row['P_Style_Full'])
         
         b1, b2, b3, b4, _ = st.columns([1, 1, 1, 1, 6]) 
-        if b1.button(f"Buy Call"): add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
-        if b2.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty)
-        if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
-        if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty)
+        if b1.button(f"Buy Call"): add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
+        if b2.button(f"Sell Call"): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
+        if b3.button(f"Buy Put"): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
+        if b4.button(f"Sell Put"): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
 
 # --- 10. STRATEGY ---
 if st.session_state.legs:
@@ -521,21 +530,21 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    # Custom spacing to fit the Smart Step buttons
-    h_col_spec = [1.2, 1.5, 1, 1.5, 2.0, 1, 1, 1, 1, 1.2, 1.5, 0.5]
-    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12 = st.columns(h_col_spec)
+    h_col_spec = [1.2, 1.5, 0.6, 1.0, 1.3, 2.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
+    cols_header = st.columns(h_col_spec)
     
-    with h1: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
-    with h2: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
-    with h3: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
-    with h4: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
-    with h5: st.markdown(f'<div class="trade-header" title="Smart Step Strike" style="text-align:center;">Strike</div>', unsafe_allow_html=True)
-    with h6: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["IV"]}">Vol</div>', unsafe_allow_html=True)
-    with h7: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
-    with h8: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
-    with h9: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
-    with h10: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
-    with h11: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
+    with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
+    with cols_header[1]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
+    with cols_header[2]: st.markdown('<div class="trade-header" title="American or European">Sty</div>', unsafe_allow_html=True)
+    with cols_header[3]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
+    with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
+    with cols_header[5]: st.markdown(f'<div class="trade-header" title="Smart Step Strike">Strike</div>', unsafe_allow_html=True)
+    with cols_header[6]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["IV"]}">Vol</div>', unsafe_allow_html=True)
+    with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
+    with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
+    with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
+    with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
+    with cols_header[11]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
@@ -543,9 +552,10 @@ if st.session_state.legs:
     
     for i, leg in enumerate(st.session_state.legs):
         if 'id' not in leg: leg['id'] = str(uuid.uuid4())
+        if 'Style' not in leg: leg['Style'] = 'American'
         if 'ExpDateStr' not in leg: leg['ExpDateStr'] = (datetime.now() + timedelta(days=leg['Expiry'])).strftime("%Y-%m-%d")
         
-        new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
+        new_theo, new_delta = calculate_price_and_delta(leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
         theo_val = leg['Qty'] * new_theo * contract_multiplier
@@ -560,20 +570,20 @@ if st.session_state.legs:
         p_color = '#4ade80' if premium >= 0 else '#f87171'
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
-        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12 = st.columns(h_col_spec)
+        c = st.columns(h_col_spec)
         
-        with c1: 
+        with c[0]: 
             new_qty = st.number_input("Qty", value=int(leg['Qty']), step=1, key=f"qty_{leg['id']}", label_visibility="collapsed")
             if new_qty != leg['Qty']:
                 st.session_state.legs[i]['Qty'] = new_qty
                 st.rerun()
                 
-        with c2: st.markdown(f"<span class='strategy-text'>{leg['Code']}</span>", unsafe_allow_html=True)
-        with c3: st.markdown(f"<span class='strategy-text' style='color:{type_color}; font-weight:600'>{leg['Type']}</span>", unsafe_allow_html=True)
-        with c4: st.markdown(f"<span class='strategy-text'>{leg['ExpDateStr']}</span>", unsafe_allow_html=True)
+        with c[1]: st.markdown(f"<span class='strategy-text'>{leg['Code']}</span>", unsafe_allow_html=True)
+        with c[2]: st.markdown(f"<span class='strategy-text'>{str(leg['Style'])[0]}</span>", unsafe_allow_html=True)
+        with c[3]: st.markdown(f"<span class='strategy-text' style='color:{type_color}; font-weight:600'>{leg['Type']}</span>", unsafe_allow_html=True)
+        with c[4]: st.markdown(f"<span class='strategy-text'>{leg['ExpDateStr']}</span>", unsafe_allow_html=True)
         
-        with c5: 
-            # Smart Step Interface
+        with c[5]: 
             tkr = st.session_state.ticker.replace(".AX", "")
             subset = st.session_state.ref_data[
                 (st.session_state.ref_data['Ticker'] == tkr) & 
@@ -596,12 +606,11 @@ if st.session_state.legs:
                 
             current_idx = available_strikes.index(current_strike)
             
-            # The Custom Buttons
-            sc1, sc2, sc3 = st.columns([1, 1.8, 1], gap="small")
+            sc1, sc2, sc3 = st.columns([1.5, 0.7, 0.7], gap="small")
             with sc1:
-                dec = st.button("▼", key=f"dn_{leg['id']}", use_container_width=True)
+                st.markdown(f"<span class='strategy-text'>{current_strike:.2f}</span>", unsafe_allow_html=True)
             with sc2:
-                st.markdown(f"<div style='text-align:center; font-weight:600; padding-top: 6px;'>{current_strike:.2f}</div>", unsafe_allow_html=True)
+                dec = st.button("▼", key=f"dn_{leg['id']}", use_container_width=True)
             with sc3:
                 inc = st.button("▲", key=f"up_{leg['id']}", use_container_width=True)
                 
@@ -616,24 +625,26 @@ if st.session_state.legs:
                 match = subset[subset['Strike'] == new_strike]
                 if not match.empty:
                     new_vol = float(match.iloc[0]['Vol'])
+                    new_style = match.iloc[0].get('Style', 'American')
+                    
                     st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
                     st.session_state.legs[i]['Vol'] = new_vol
+                    st.session_state.legs[i]['Style'] = new_style
                     st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
                     
-                    new_style = match.iloc[0].get('Style', 'American')
                     matched_theo, _ = calculate_price_and_delta(new_style, leg['Type'], st.session_state.spot_price, new_strike, leg['Expiry'], new_vol)
                     st.session_state.legs[i]['Entry'] = matched_theo
                 else:
                     st.session_state.legs[i]['Code'] = "N/A"
                 st.rerun()
                 
-        with c6: st.markdown(f"<span class='strategy-text'>{leg['Vol']:.1f}%</span>", unsafe_allow_html=True)
-        with c7: st.markdown(f"<span class='strategy-text'>${leg['Entry']:.3f}</span>", unsafe_allow_html=True)
-        with c8: st.markdown(f"<span class='strategy-text'>${new_theo:.3f}</span>", unsafe_allow_html=True)
-        with c9: st.markdown(f"<span class='strategy-text'>{net_delta:.2f}</span>", unsafe_allow_html=True)
-        with c10: st.markdown(f"<span class='strategy-text' style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
-        with c11: st.markdown(f"<span class='strategy-text' style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
-        with c12:
+        with c[6]: st.markdown(f"<span class='strategy-text'>{leg['Vol']:.1f}%</span>", unsafe_allow_html=True)
+        with c[7]: st.markdown(f"<span class='strategy-text'>${leg['Entry']:.3f}</span>", unsafe_allow_html=True)
+        with c[8]: st.markdown(f"<span class='strategy-text'>${new_theo:.3f}</span>", unsafe_allow_html=True)
+        with c[9]: st.markdown(f"<span class='strategy-text'>{net_delta:.2f}</span>", unsafe_allow_html=True)
+        with c[10]: st.markdown(f"<span class='strategy-text' style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
+        with c[11]: st.markdown(f"<span class='strategy-text' style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
+        with c[12]:
             if st.button("✕", key=f"d_{leg['id']}"):
                 st.session_state.legs.pop(i)
                 st.rerun()
@@ -641,11 +652,11 @@ if st.session_state.legs:
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
     with st.container():
-        f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12 = st.columns(h_col_spec)
-        with f2: st.markdown("<span class='strategy-text'>**TOTAL STRATEGY**</span>", unsafe_allow_html=True)
-        with f9: st.markdown(f"<span class='strategy-text'>**{total_delta:,.2f}**</span>", unsafe_allow_html=True)
-        with f10: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
-        with f11: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
+        f = st.columns(h_col_spec)
+        with f[1]: st.markdown("<span class='strategy-text'>**TOTAL STRATEGY**</span>", unsafe_allow_html=True)
+        with f[9]: st.markdown(f"<span class='strategy-text'>**{total_delta:,.2f}**</span>", unsafe_allow_html=True)
+        with f[10]: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
+        with f[11]: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
 
     # --- MATRIX ---
     st.markdown("---")
