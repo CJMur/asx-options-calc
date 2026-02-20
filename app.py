@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.13 (Action Bar Alignment Fix)
+# VERSION: 10.14 (Long/Short Strategy Formatting)
 # ==========================================
 
 import streamlit as st
@@ -298,7 +298,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.13</div>
+            <div class="header-sub">Option Strategy Builder v10.14</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -582,7 +582,8 @@ if st.session_state.legs:
         p_color = '#4ade80' if premium >= 0 else '#f87171'
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
-        row_bg = "rgba(74, 222, 128, 0.10)" if leg['Type'] == 'Call' else "rgba(248, 113, 113, 0.10)"
+        # Determine background shade based on positive vs negative quantity
+        row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
         
         c = st.columns(h_col_spec)
         
