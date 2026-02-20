@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.5 (Smart Strike Mapping & Expiry Format)
+# VERSION: 10.6 (Smart Strike Dropdowns)
 # ==========================================
 
 import streamlit as st
@@ -294,7 +294,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.5</div>
+            <div class="header-sub">Option Strategy Builder v10.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -437,7 +437,6 @@ if not df_view.empty and current_exp:
     st.markdown(f"**Chain: {current_exp}**")
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
-    # ITM Highlighting Logic
     def highlight_itm(row):
         spot = st.session_state.spot_price
         strike = row['STRIKE']
@@ -541,7 +540,6 @@ if st.session_state.legs:
     total_delta, total_premium, total_theo, total_margin = 0, 0, 0, 0
     
     for i, leg in enumerate(st.session_state.legs):
-        # Backwards compatibility for active session state
         if 'id' not in leg: leg['id'] = str(uuid.uuid4())
         if 'ExpDateStr' not in leg: leg['ExpDateStr'] = (datetime.now() + timedelta(days=leg['Expiry'])).strftime("%Y-%m-%d")
         
@@ -573,27 +571,40 @@ if st.session_state.legs:
         with c4: st.markdown(f"<span class='strategy-text'>{leg['ExpDateStr']}</span>", unsafe_allow_html=True)
         
         with c5: 
-            new_strike = st.number_input("Strike", value=float(leg['Strike']), step=0.50, format="%.3f", key=f"strike_{leg['id']}", label_visibility="collapsed")
-            if new_strike != leg['Strike']:
+            tkr = st.session_state.ticker.replace(".AX", "")
+            subset = st.session_state.ref_data[
+                (st.session_state.ref_data['Ticker'] == tkr) & 
+                (st.session_state.ref_data['Type'] == leg['Type']) & 
+                (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+            ]
+            
+            available_strikes = sorted(subset['Strike'].unique().tolist())
+            current_strike = float(leg['Strike'])
+            
+            if available_strikes:
+                closest_strike = min(available_strikes, key=lambda x: abs(x - current_strike))
+                if abs(closest_strike - current_strike) < 0.01:
+                    current_strike = closest_strike
+                elif current_strike not in available_strikes:
+                    available_strikes.append(current_strike)
+                    available_strikes = sorted(available_strikes)
+            else:
+                available_strikes = [current_strike]
+                
+            current_idx = available_strikes.index(current_strike)
+            
+            new_strike = st.selectbox("Strike", options=available_strikes, index=current_idx, format_func=lambda x: f"{x:.3f}", key=f"strike_{leg['id']}", label_visibility="collapsed")
+            
+            if new_strike != current_strike:
                 st.session_state.legs[i]['Strike'] = new_strike
                 
-                # Smart Match Logic: Search the database for the newly adjusted strike
-                tkr = st.session_state.ticker.replace(".AX", "")
-                subset = st.session_state.ref_data[
-                    (st.session_state.ref_data['Ticker'] == tkr) & 
-                    (st.session_state.ref_data['Type'] == leg['Type']) & 
-                    (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-                ]
                 match = subset[subset['Strike'] == new_strike]
-                
                 if not match.empty:
-                    # Update code, volatility, and margin to match the real option
                     new_vol = float(match.iloc[0]['Vol'])
                     st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
                     st.session_state.legs[i]['Vol'] = new_vol
                     st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
                     
-                    # Recalculate Entry Price so strategy reflects the correct new option premium
                     new_style = match.iloc[0].get('Style', 'American')
                     matched_theo, _ = calculate_price_and_delta(new_style, leg['Type'], st.session_state.spot_price, new_strike, leg['Expiry'], new_vol)
                     st.session_state.legs[i]['Entry'] = matched_theo
