@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.6 (Smart Strike Dropdowns)
+# VERSION: 10.7 (Smart Step Strike Buttons)
 # ==========================================
 
 import streamlit as st
@@ -71,6 +71,7 @@ st.markdown("""
         min-height: 40px; 
     }
     
+    /* Shrink the +/- buttons so rows stay slim */
     button[kind="secondary"] {
         padding: 0rem 0.5rem !important; min-height: 0px !important; height: 32px !important;
     }
@@ -294,7 +295,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.6</div>
+            <div class="header-sub">Option Strategy Builder v10.7</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -520,14 +521,15 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    h_col_spec = [1.2, 1.5, 1, 1.5, 1.5, 1, 1, 1, 1, 1.2, 1.5, 0.5]
+    # Custom spacing to fit the Smart Step buttons
+    h_col_spec = [1.2, 1.5, 1, 1.5, 2.0, 1, 1, 1, 1, 1.2, 1.5, 0.5]
     h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12 = st.columns(h_col_spec)
     
     with h1: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
     with h2: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
     with h3: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
     with h4: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
-    with h5: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
+    with h5: st.markdown(f'<div class="trade-header" title="Smart Step Strike" style="text-align:center;">Strike</div>', unsafe_allow_html=True)
     with h6: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["IV"]}">Vol</div>', unsafe_allow_html=True)
     with h7: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
     with h8: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
@@ -571,6 +573,7 @@ if st.session_state.legs:
         with c4: st.markdown(f"<span class='strategy-text'>{leg['ExpDateStr']}</span>", unsafe_allow_html=True)
         
         with c5: 
+            # Smart Step Interface
             tkr = st.session_state.ticker.replace(".AX", "")
             subset = st.session_state.ref_data[
                 (st.session_state.ref_data['Ticker'] == tkr) & 
@@ -593,11 +596,23 @@ if st.session_state.legs:
                 
             current_idx = available_strikes.index(current_strike)
             
-            new_strike = st.selectbox("Strike", options=available_strikes, index=current_idx, format_func=lambda x: f"{x:.3f}", key=f"strike_{leg['id']}", label_visibility="collapsed")
-            
-            if new_strike != current_strike:
-                st.session_state.legs[i]['Strike'] = new_strike
+            # The Custom Buttons
+            sc1, sc2, sc3 = st.columns([1, 1.8, 1], gap="small")
+            with sc1:
+                dec = st.button("▼", key=f"dn_{leg['id']}", use_container_width=True)
+            with sc2:
+                st.markdown(f"<div style='text-align:center; font-weight:600; padding-top: 6px;'>{current_strike:.2f}</div>", unsafe_allow_html=True)
+            with sc3:
+                inc = st.button("▲", key=f"up_{leg['id']}", use_container_width=True)
                 
+            new_strike = None
+            if dec and current_idx > 0:
+                new_strike = available_strikes[current_idx - 1]
+            elif inc and current_idx < len(available_strikes) - 1:
+                new_strike = available_strikes[current_idx + 1]
+                
+            if new_strike is not None and new_strike != current_strike:
+                st.session_state.legs[i]['Strike'] = new_strike
                 match = subset[subset['Strike'] == new_strike]
                 if not match.empty:
                     new_vol = float(match.iloc[0]['Vol'])
@@ -610,7 +625,6 @@ if st.session_state.legs:
                     st.session_state.legs[i]['Entry'] = matched_theo
                 else:
                     st.session_state.legs[i]['Code'] = "N/A"
-                    
                 st.rerun()
                 
         with c6: st.markdown(f"<span class='strategy-text'>{leg['Vol']:.1f}%</span>", unsafe_allow_html=True)
