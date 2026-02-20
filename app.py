@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.4 (Interactive Strategy & ITM Highlight)
+# VERSION: 10.5 (Smart Strike Mapping & Expiry Format)
 # ==========================================
 
 import streamlit as st
@@ -294,7 +294,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.4</div>
+            <div class="header-sub">Option Strategy Builder v10.5</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -446,17 +446,14 @@ if not df_view.empty and current_exp:
         styles = []
         for col in row.index:
             s = ""
-            # Apply institutional green background to ITM options
             if col in ['C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
             elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta'] and strike > spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
             
-            # Format the central strike column
             if col == 'STRIKE':
                 s += "font-weight: bold; background-color: rgba(255,255,255,0.05); "
             
-            # Ensure searched Target Codes still light up teal
             if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
                 s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
                 
@@ -494,10 +491,17 @@ if not df_view.empty and current_exp:
         
         def add(side, kind, px, code_hint, delta_val, qty_val):
             st.session_state.legs.append({
-                "id": str(uuid.uuid4()), # Generate unique ID so UI sliders don't cross wires
-                "Qty": qty_val if side == "Buy" else -qty_val, "Type": kind, "Strike": row['STRIKE'], 
-                "Expiry": days_diff, "Vol": row['C_Vol'] if kind == 'Call' else row['P_Vol'], "Entry": px, 
-                "Code": code_hint, "Delta": delta_val, "MarginUnit": row['C_Margin'] if kind == 'Call' else row['P_Margin']
+                "id": str(uuid.uuid4()),
+                "Qty": qty_val if side == "Buy" else -qty_val, 
+                "Type": kind, 
+                "Strike": float(row['STRIKE']), 
+                "Expiry": days_diff, 
+                "ExpDateStr": current_exp, 
+                "Vol": float(row['C_Vol'] if kind == 'Call' else row['P_Vol']), 
+                "Entry": float(px), 
+                "Code": str(code_hint), 
+                "Delta": float(delta_val), 
+                "MarginUnit": float(row['C_Margin'] if kind == 'Call' else row['P_Margin'])
             })
             st.rerun()
             
@@ -517,14 +521,13 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    # Expanded columns to fit Expiry & Vol
-    h_col_spec = [1.2, 1.8, 1, 1, 1.5, 1, 1, 1, 1, 1.2, 1.5, 0.5]
+    h_col_spec = [1.2, 1.5, 1, 1.5, 1.5, 1, 1, 1, 1, 1.2, 1.5, 0.5]
     h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12 = st.columns(h_col_spec)
     
     with h1: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
     with h2: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
     with h3: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
-    with h4: st.markdown('<div class="trade-header" title="Days to Expiry">Expiry</div>', unsafe_allow_html=True)
+    with h4: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
     with h5: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
     with h6: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["IV"]}">Vol</div>', unsafe_allow_html=True)
     with h7: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
@@ -538,8 +541,9 @@ if st.session_state.legs:
     total_delta, total_premium, total_theo, total_margin = 0, 0, 0, 0
     
     for i, leg in enumerate(st.session_state.legs):
-        # Guarantee backwards compatibility for legs added before unique UUIDs were implemented
+        # Backwards compatibility for active session state
         if 'id' not in leg: leg['id'] = str(uuid.uuid4())
+        if 'ExpDateStr' not in leg: leg['ExpDateStr'] = (datetime.now() + timedelta(days=leg['Expiry'])).strftime("%Y-%m-%d")
         
         new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
         net_delta = leg['Qty'] * new_delta * contract_multiplier
@@ -559,7 +563,6 @@ if st.session_state.legs:
         c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12 = st.columns(h_col_spec)
         
         with c1: 
-            # Editable Quantity
             new_qty = st.number_input("Qty", value=int(leg['Qty']), step=1, key=f"qty_{leg['id']}", label_visibility="collapsed")
             if new_qty != leg['Qty']:
                 st.session_state.legs[i]['Qty'] = new_qty
@@ -567,13 +570,36 @@ if st.session_state.legs:
                 
         with c2: st.markdown(f"<span class='strategy-text'>{leg['Code']}</span>", unsafe_allow_html=True)
         with c3: st.markdown(f"<span class='strategy-text' style='color:{type_color}; font-weight:600'>{leg['Type']}</span>", unsafe_allow_html=True)
-        with c4: st.markdown(f"<span class='strategy-text'>{leg['Expiry']}d</span>", unsafe_allow_html=True)
+        with c4: st.markdown(f"<span class='strategy-text'>{leg['ExpDateStr']}</span>", unsafe_allow_html=True)
         
         with c5: 
-            # Editable Strike
-            new_strike = st.number_input("Strike", value=float(leg['Strike']), step=0.50, format="%.2f", key=f"strike_{leg['id']}", label_visibility="collapsed")
+            new_strike = st.number_input("Strike", value=float(leg['Strike']), step=0.50, format="%.3f", key=f"strike_{leg['id']}", label_visibility="collapsed")
             if new_strike != leg['Strike']:
                 st.session_state.legs[i]['Strike'] = new_strike
+                
+                # Smart Match Logic: Search the database for the newly adjusted strike
+                tkr = st.session_state.ticker.replace(".AX", "")
+                subset = st.session_state.ref_data[
+                    (st.session_state.ref_data['Ticker'] == tkr) & 
+                    (st.session_state.ref_data['Type'] == leg['Type']) & 
+                    (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+                ]
+                match = subset[subset['Strike'] == new_strike]
+                
+                if not match.empty:
+                    # Update code, volatility, and margin to match the real option
+                    new_vol = float(match.iloc[0]['Vol'])
+                    st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
+                    st.session_state.legs[i]['Vol'] = new_vol
+                    st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
+                    
+                    # Recalculate Entry Price so strategy reflects the correct new option premium
+                    new_style = match.iloc[0].get('Style', 'American')
+                    matched_theo, _ = calculate_price_and_delta(new_style, leg['Type'], st.session_state.spot_price, new_strike, leg['Expiry'], new_vol)
+                    st.session_state.legs[i]['Entry'] = matched_theo
+                else:
+                    st.session_state.legs[i]['Code'] = "N/A"
+                    
                 st.rerun()
                 
         with c6: st.markdown(f"<span class='strategy-text'>{leg['Vol']:.1f}%</span>", unsafe_allow_html=True)
