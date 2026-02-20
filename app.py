@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.12 (Aesthetic Action Bar)
+# VERSION: 10.13 (Action Bar Alignment Fix)
 # ==========================================
 
 import streamlit as st
@@ -298,7 +298,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.12</div>
+            <div class="header-sub">Option Strategy Builder v10.13</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -493,13 +493,10 @@ if not df_view.empty and current_exp:
         days_diff = (datetime.strptime(current_exp, "%Y-%m-%d") - datetime.now()).days
         
         st.write("")
-        # NEW AESTHETIC ACTION BAR
-        # Columns: [Quantity Input] [Buy C] [Sell C] [Buy P] [Sell P] [Spacer]
         q_c, b1_c, b2_c, b3_c, b4_c, _ = st.columns([1.5, 1, 1, 1, 1, 3], gap="small")
 
         with q_c:
-            # Use collapsed label for perfect vertical alignment with buttons
-            trade_qty = st.number_input("Qty", min_value=1, value=1, step=1, label_visibility="collapsed")
+            trade_qty = st.number_input("Trade Quantity", min_value=1, value=1, step=1)
         
         def add(side, kind, px, code_hint, delta_val, qty_val, style_full):
             st.session_state.legs.append({
@@ -523,14 +520,19 @@ if not df_view.empty and current_exp:
         c_s = str(row['C_Style_Full'])
         p_s = str(row['P_Style_Full'])
         
-        # Use container width so buttons fill their columns evenly
+        btn_spacer = "<div style='height: 28px;'></div>"
+        
         with b1_c:
+             st.markdown(btn_spacer, unsafe_allow_html=True)
              if st.button(f"Buy Call", use_container_width=True): add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
         with b2_c:
+             st.markdown(btn_spacer, unsafe_allow_html=True)
              if st.button(f"Sell Call", use_container_width=True): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
         with b3_c:
+             st.markdown(btn_spacer, unsafe_allow_html=True)
              if st.button(f"Buy Put", use_container_width=True): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
         with b4_c:
+             st.markdown(btn_spacer, unsafe_allow_html=True)
              if st.button(f"Sell Put", use_container_width=True): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
 
 # --- 10. STRATEGY ---
