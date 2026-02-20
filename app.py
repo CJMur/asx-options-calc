@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.14 (Long/Short Strategy Formatting)
+# VERSION: 10.15 (Net Strategy Theo Price Fix)
 # ==========================================
 
 import streamlit as st
@@ -298,7 +298,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.14</div>
+            <div class="header-sub">Option Strategy Builder v10.15</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -560,7 +560,8 @@ if st.session_state.legs:
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
-    total_delta, total_premium, total_theo, total_margin = 0, 0, 0, 0
+    total_delta, total_premium, raw_theo_sum, total_margin = 0, 0, 0, 0
+    max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
     
     for i, leg in enumerate(st.session_state.legs):
         if 'id' not in leg: leg['id'] = str(uuid.uuid4())
@@ -568,21 +569,22 @@ if st.session_state.legs:
         if 'ExpDateStr' not in leg: leg['ExpDateStr'] = (datetime.now() + timedelta(days=leg['Expiry'])).strftime("%Y-%m-%d")
         
         new_theo, new_delta = calculate_price_and_delta(leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
+        
+        # Calculate positional metrics
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
-        theo_val = leg['Qty'] * new_theo * contract_multiplier
         row_margin = leg.get('MarginUnit', 0.0) * abs(leg['Qty']) 
         
+        # Accumulate strategy totals
         total_delta += net_delta
         total_premium += premium
-        total_theo += theo_val
         total_margin += row_margin
+        raw_theo_sum += leg['Qty'] * new_theo  # Accumulate the raw fractional prices
         
         type_color = "#4ade80" if leg['Type'] == 'Call' else "#f87171"
         p_color = '#4ade80' if premium >= 0 else '#f87171'
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
-        # Determine background shade based on positive vs negative quantity
         row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
         
         c = st.columns(h_col_spec)
@@ -666,10 +668,13 @@ if st.session_state.legs:
                 
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
+    # Normalize the strategy theoretical price by dividing by the primary quantity
+    strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
+
     with st.container():
         f = st.columns(h_col_spec)
         with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
-        with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>${total_theo:,.2f}</div>", unsafe_allow_html=True)
+        with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>${strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
         with f[9]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
         with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
         with f[11]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
@@ -701,7 +706,7 @@ if st.session_state.legs:
             for leg in st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
-                exit_px, _ = calculate_price_and_delta('American', leg['Type'], p, leg['Strike'], rem_days, sim_vol)
+                exit_px, _ = calculate_price_and_delta(leg['Style'], leg['Type'], p, leg['Strike'], rem_days, sim_vol)
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
@@ -720,7 +725,7 @@ if st.session_state.legs:
         val_t0 = 0
         val_tF = 0
         for leg in st.session_state.legs:
-            price_t0, _ = calculate_price_and_delta('American', leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
+            price_t0, _ = calculate_price_and_delta(leg['Style'], leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
             val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
             price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
             val_tF += (price_tf - leg['Entry']) * leg['Qty'] * contract_multiplier
