@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.10 (Chain Clean-Up & Strategy Row Shading)
+# VERSION: 10.11 (Total Theo Added & Asterisk Fix)
 # ==========================================
 
 import streamlit as st
@@ -298,7 +298,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.10</div>
+            <div class="header-sub">Option Strategy Builder v10.11</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -442,7 +442,6 @@ if not df_view.empty and current_exp:
     
     st.markdown(f"**Chain: {current_exp}**")
     
-    # Clean disp without Style columns for the UI
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
     def highlight_itm(row):
@@ -571,7 +570,6 @@ if st.session_state.legs:
         p_color = '#4ade80' if premium >= 0 else '#f87171'
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
-        # Determine background shade for the row
         row_bg = "rgba(74, 222, 128, 0.10)" if leg['Type'] == 'Call' else "rgba(248, 113, 113, 0.10)"
         
         c = st.columns(h_col_spec)
@@ -657,8 +655,9 @@ if st.session_state.legs:
 
     with st.container():
         f = st.columns(h_col_spec)
-        with f[1]: st.markdown("<div class='strategy-text'>**TOTAL STRATEGY**</div>", unsafe_allow_html=True)
-        with f[9]: st.markdown(f"<div class='strategy-text'>**{total_delta:,.2f}**</div>", unsafe_allow_html=True)
+        with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
+        with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>${total_theo:,.2f}</div>", unsafe_allow_html=True)
+        with f[9]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
         with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
         with f[11]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
