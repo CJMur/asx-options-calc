@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.9 (Strike Button Alignment & Style Header)
+# VERSION: 10.10 (Chain Clean-Up & Strategy Row Shading)
 # ==========================================
 
 import streamlit as st
@@ -63,12 +63,15 @@ st.markdown("""
         margin-bottom: 5px; cursor: help; user-select: none;
     }
     
-    /* Center align markdown text with the new input boxes in the Strategy table */
+    /* Center align markdown text and allow background shading */
     .strategy-text { 
         user-select: none; 
         display: flex; 
         align-items: center; 
         min-height: 40px; 
+        padding: 0 8px;
+        border-radius: 4px;
+        width: 100%;
     }
     
     /* Shrink the +/- buttons so rows stay slim */
@@ -295,7 +298,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.9</div>
+            <div class="header-sub">Option Strategy Builder v10.10</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -416,7 +419,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             df_view = pd.DataFrame({'STRIKE': all_strikes})
             
             df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
-            df_view['C_Style'] = df_view['STRIKE'].map(calls['Style']).str[0].fillna('-')
             df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
             df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
             df_view['C_Vol'] = df_view['STRIKE'].map(calls['Calc_Vol'])
@@ -424,7 +426,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             df_view['C_Margin'] = df_view['STRIKE'].map(calls['Calc_Margin'])
             
             df_view['P_Code'] = df_view['STRIKE'].map(puts['Code'])
-            df_view['P_Style'] = df_view['STRIKE'].map(puts['Style']).str[0].fillna('-')
             df_view['P_Style_Full'] = df_view['STRIKE'].map(puts['Style']).fillna('American')
             df_view['P_Price'] = df_view['STRIKE'].map(puts['Calc_Price'])
             df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
@@ -440,7 +441,9 @@ if not df_view.empty and current_exp:
         df_view = df_view.iloc[max(0, atm_idx - 12):min(len(df_view), atm_idx + 13)].drop(columns=['Diff'])
     
     st.markdown(f"**Chain: {current_exp}**")
-    disp = df_view[['C_Code', 'C_Style', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Style', 'P_Code']].copy()
+    
+    # Clean disp without Style columns for the UI
+    disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
     def highlight_itm(row):
         spot = st.session_state.spot_price
@@ -450,9 +453,9 @@ if not df_view.empty and current_exp:
         styles = []
         for col in row.index:
             s = ""
-            if col in ['C_Code', 'C_Style', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
+            if col in ['C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
-            elif col in ['P_Code', 'P_Style', 'P_Price', 'P_Vol', 'P_Delta'] and strike > spot:
+            elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta'] and strike > spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
             
             if col == 'STRIKE':
@@ -473,7 +476,6 @@ if not df_view.empty and current_exp:
         styled_disp,
         column_config={
             "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
-            "C_Style": st.column_config.TextColumn("Style", help="A = American, E = European"),
             "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
             "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
             "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
@@ -481,7 +483,6 @@ if not df_view.empty and current_exp:
             "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
             "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
-            "P_Style": st.column_config.TextColumn("Style", help="A = American, E = European"),
             "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
         },
         hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row"
@@ -530,7 +531,6 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    # Adjusted column specs to widen 'Style' and handle tight Strike layout
     h_col_spec = [1.2, 1.5, 0.8, 1.0, 1.3, 2.2, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
     cols_header = st.columns(h_col_spec)
     
@@ -571,6 +571,9 @@ if st.session_state.legs:
         p_color = '#4ade80' if premium >= 0 else '#f87171'
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
+        # Determine background shade for the row
+        row_bg = "rgba(74, 222, 128, 0.10)" if leg['Type'] == 'Call' else "rgba(248, 113, 113, 0.10)"
+        
         c = st.columns(h_col_spec)
         
         with c[0]: 
@@ -579,10 +582,10 @@ if st.session_state.legs:
                 st.session_state.legs[i]['Qty'] = new_qty
                 st.rerun()
                 
-        with c[1]: st.markdown(f"<span class='strategy-text'>{leg['Code']}</span>", unsafe_allow_html=True)
-        with c[2]: st.markdown(f"<span class='strategy-text'>{str(leg['Style'])[0]}</span>", unsafe_allow_html=True)
-        with c[3]: st.markdown(f"<span class='strategy-text' style='color:{type_color}; font-weight:600'>{leg['Type']}</span>", unsafe_allow_html=True)
-        with c[4]: st.markdown(f"<span class='strategy-text'>{leg['ExpDateStr']}</span>", unsafe_allow_html=True)
+        with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
+        with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
+        with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{type_color}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
+        with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
             tkr = st.session_state.ticker.replace(".AX", "")
@@ -607,10 +610,9 @@ if st.session_state.legs:
                 
             current_idx = available_strikes.index(current_strike)
             
-            # Sub-columns with an invisible right-spacer so buttons stick to the text
             sc1, sc2, sc3, _ = st.columns([1.2, 0.6, 0.6, 1.0], gap="small")
             with sc1:
-                st.markdown(f"<span class='strategy-text'>{current_strike:.2f}</span>", unsafe_allow_html=True)
+                st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{current_strike:.2f}</div>", unsafe_allow_html=True)
             with sc2:
                 dec = st.button("▼", key=f"dn_{leg['id']}", use_container_width=True)
             with sc3:
@@ -640,12 +642,12 @@ if st.session_state.legs:
                     st.session_state.legs[i]['Code'] = "N/A"
                 st.rerun()
                 
-        with c[6]: st.markdown(f"<span class='strategy-text'>{leg['Vol']:.1f}%</span>", unsafe_allow_html=True)
-        with c[7]: st.markdown(f"<span class='strategy-text'>${leg['Entry']:.3f}</span>", unsafe_allow_html=True)
-        with c[8]: st.markdown(f"<span class='strategy-text'>${new_theo:.3f}</span>", unsafe_allow_html=True)
-        with c[9]: st.markdown(f"<span class='strategy-text'>{net_delta:.2f}</span>", unsafe_allow_html=True)
-        with c[10]: st.markdown(f"<span class='strategy-text' style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
-        with c[11]: st.markdown(f"<span class='strategy-text' style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
+        with c[6]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Vol']:.1f}%</div>", unsafe_allow_html=True)
+        with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>${leg['Entry']:.3f}</div>", unsafe_allow_html=True)
+        with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>${new_theo:.3f}</div>", unsafe_allow_html=True)
+        with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
+        with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
+        with c[11]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
         with c[12]:
             if st.button("✕", key=f"d_{leg['id']}"):
                 st.session_state.legs.pop(i)
@@ -655,10 +657,10 @@ if st.session_state.legs:
 
     with st.container():
         f = st.columns(h_col_spec)
-        with f[1]: st.markdown("<span class='strategy-text'>**TOTAL STRATEGY**</span>", unsafe_allow_html=True)
-        with f[9]: st.markdown(f"<span class='strategy-text'>**{total_delta:,.2f}**</span>", unsafe_allow_html=True)
-        with f[10]: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
-        with f[11]: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
+        with f[1]: st.markdown("<div class='strategy-text'>**TOTAL STRATEGY**</div>", unsafe_allow_html=True)
+        with f[9]: st.markdown(f"<div class='strategy-text'>**{total_delta:,.2f}**</div>", unsafe_allow_html=True)
+        with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+        with f[11]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
     # --- MATRIX ---
     st.markdown("---")
