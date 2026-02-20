@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.3 (XJO Index Math & Multipliers)
+# VERSION: 10.4 (Interactive Strategy & ITM Highlight)
 # ==========================================
 
 import streamlit as st
@@ -11,6 +11,7 @@ import yfinance as yf
 from datetime import datetime, time, timedelta
 import pytz
 import math
+import uuid
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -62,8 +63,13 @@ st.markdown("""
         margin-bottom: 5px; cursor: help; user-select: none;
     }
     
-    /* Prevent accidental text highlighting in Strategy Table */
-    .strategy-text { user-select: none; }
+    /* Center align markdown text with the new input boxes in the Strategy table */
+    .strategy-text { 
+        user-select: none; 
+        display: flex; 
+        align-items: center; 
+        min-height: 40px; 
+    }
     
     button[kind="secondary"] {
         padding: 0rem 0.5rem !important; min-height: 0px !important; height: 32px !important;
@@ -117,11 +123,9 @@ def load_sheet(raw_url):
         if not all(col in df.columns for col in required):
             return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
 
-        # Strip blanks from required text fields
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
-        # --- IRON-CLAD TYPE PARSING ---
         if 'Type' in df.columns:
             raw_type = df['Type'].astype(str).str.strip().str.upper()
             df['Type'] = np.where(raw_type.str.startswith('C'), 'Call', 'Put')
@@ -134,7 +138,6 @@ def load_sheet(raw_url):
         else:
             df['Style'] = 'American'
             
-        # Strip all currency formatting from numbers
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
         
@@ -147,7 +150,6 @@ def load_sheet(raw_url):
             
         df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce') if 'Settlement' in df.columns else 0.0
 
-        # --- BULLETPROOF SCENARIO PARSING ---
         scen_cols = [c for c in df.columns if 'Scenario' in str(c)]
         if scen_cols:
             scen_df = df[scen_cols].copy()
@@ -201,8 +203,8 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
         K = float(strike)
         
         if is_xjo:
-            q = 0.04 # 4% Continuous dividend yield for ASX 200
-            style = 'EUROPEAN' # Force European execution for Index
+            q = 0.04 
+            style = 'EUROPEAN' 
         elif st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
@@ -237,12 +239,7 @@ st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
-    
-    if clean == "XJO":
-        sym = "^AXJO"
-    else:
-        sym = f"{clean}.AX"
-        
+    sym = "^AXJO" if clean == "XJO" else f"{clean}.AX"
     div_info, spot = None, 0.0
     
     if st.session_state.manual_spot:
@@ -297,7 +294,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.3</div>
+            <div class="header-sub">Option Strategy Builder v10.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -440,14 +437,33 @@ if not df_view.empty and current_exp:
     st.markdown(f"**Chain: {current_exp}**")
     disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
     
-    def style_target_code(val):
-        if st.session_state.preselect_code and str(val) == str(st.session_state.preselect_code):
-            return "background-color: rgba(29, 191, 210, 0.4); color: white; border: 1px solid #1DBFD2;"
-        return ""
+    # ITM Highlighting Logic
+    def highlight_itm(row):
+        spot = st.session_state.spot_price
+        strike = row['STRIKE']
+        target_code = str(st.session_state.preselect_code)
+        
+        styles = []
+        for col in row.index:
+            s = ""
+            # Apply institutional green background to ITM options
+            if col in ['C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
+                s += "background-color: rgba(74, 222, 128, 0.10); "
+            elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta'] and strike > spot:
+                s += "background-color: rgba(74, 222, 128, 0.10); "
+            
+            # Format the central strike column
+            if col == 'STRIKE':
+                s += "font-weight: bold; background-color: rgba(255,255,255,0.05); "
+            
+            # Ensure searched Target Codes still light up teal
+            if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
+                s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
+                
+            styles.append(s)
+        return styles
 
-    styled_disp = disp.style.applymap(
-        lambda x: "font-weight: bold; background-color: rgba(255,255,255,0.05);", subset=['STRIKE']
-    ).applymap(style_target_code, subset=['C_Code', 'P_Code']).format({
+    styled_disp = disp.style.apply(highlight_itm, axis=1).format({
         'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}', 'STRIKE': '{:.3f}',
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
@@ -478,6 +494,7 @@ if not df_view.empty and current_exp:
         
         def add(side, kind, px, code_hint, delta_val, qty_val):
             st.session_state.legs.append({
+                "id": str(uuid.uuid4()), # Generate unique ID so UI sliders don't cross wires
                 "Qty": qty_val if side == "Buy" else -qty_val, "Type": kind, "Strike": row['STRIKE'], 
                 "Expiry": days_diff, "Vol": row['C_Vol'] if kind == 'Call' else row['P_Vol'], "Entry": px, 
                 "Code": code_hint, "Delta": delta_val, "MarginUnit": row['C_Margin'] if kind == 'Call' else row['P_Margin']
@@ -500,23 +517,30 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    h_col_spec = [1, 2, 1, 1, 1, 1, 1, 1, 1, 0.5]
-    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(h_col_spec)
-    with h1: st.markdown('<div class="trade-header" title="Quantity">Qty</div>', unsafe_allow_html=True)
+    # Expanded columns to fit Expiry & Vol
+    h_col_spec = [1.2, 1.8, 1, 1, 1.5, 1, 1, 1, 1, 1.2, 1.5, 0.5]
+    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12 = st.columns(h_col_spec)
+    
+    with h1: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
     with h2: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
     with h3: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
-    with h4: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Strike"]}">Strike</div>', unsafe_allow_html=True)
-    with h5: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
-    with h6: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
-    with h7: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
-    with h8: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
-    with h9: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
+    with h4: st.markdown('<div class="trade-header" title="Days to Expiry">Expiry</div>', unsafe_allow_html=True)
+    with h5: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
+    with h6: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["IV"]}">Vol</div>', unsafe_allow_html=True)
+    with h7: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
+    with h8: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
+    with h9: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
+    with h10: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
+    with h11: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
     total_delta, total_premium, total_theo, total_margin = 0, 0, 0, 0
     
     for i, leg in enumerate(st.session_state.legs):
+        # Guarantee backwards compatibility for legs added before unique UUIDs were implemented
+        if 'id' not in leg: leg['id'] = str(uuid.uuid4())
+        
         new_theo, new_delta = calculate_price_and_delta('American', leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
@@ -532,29 +556,45 @@ if st.session_state.legs:
         p_color = '#4ade80' if premium >= 0 else '#f87171'
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
-        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns(h_col_spec)
-        with c1: st.markdown(f"<span class='strategy-text'>**{leg['Qty']}**</span>", unsafe_allow_html=True)
+        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12 = st.columns(h_col_spec)
+        
+        with c1: 
+            # Editable Quantity
+            new_qty = st.number_input("Qty", value=int(leg['Qty']), step=1, key=f"qty_{leg['id']}", label_visibility="collapsed")
+            if new_qty != leg['Qty']:
+                st.session_state.legs[i]['Qty'] = new_qty
+                st.rerun()
+                
         with c2: st.markdown(f"<span class='strategy-text'>{leg['Code']}</span>", unsafe_allow_html=True)
         with c3: st.markdown(f"<span class='strategy-text' style='color:{type_color}; font-weight:600'>{leg['Type']}</span>", unsafe_allow_html=True)
-        with c4: st.markdown(f"<span class='strategy-text'>{leg['Strike']:.3f}</span>", unsafe_allow_html=True)
-        with c5: st.markdown(f"<span class='strategy-text'>${leg['Entry']:.3f}</span>", unsafe_allow_html=True)
-        with c6: st.markdown(f"<span class='strategy-text'>${new_theo:.3f}</span>", unsafe_allow_html=True)
-        with c7: st.markdown(f"<span class='strategy-text'>{net_delta:.2f}</span>", unsafe_allow_html=True)
-        with c8: st.markdown(f"<span class='strategy-text' style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
-        with c9: st.markdown(f"<span class='strategy-text' style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
-        with c10:
-            if st.button("✕", key=f"d_{i}"):
+        with c4: st.markdown(f"<span class='strategy-text'>{leg['Expiry']}d</span>", unsafe_allow_html=True)
+        
+        with c5: 
+            # Editable Strike
+            new_strike = st.number_input("Strike", value=float(leg['Strike']), step=0.50, format="%.2f", key=f"strike_{leg['id']}", label_visibility="collapsed")
+            if new_strike != leg['Strike']:
+                st.session_state.legs[i]['Strike'] = new_strike
+                st.rerun()
+                
+        with c6: st.markdown(f"<span class='strategy-text'>{leg['Vol']:.1f}%</span>", unsafe_allow_html=True)
+        with c7: st.markdown(f"<span class='strategy-text'>${leg['Entry']:.3f}</span>", unsafe_allow_html=True)
+        with c8: st.markdown(f"<span class='strategy-text'>${new_theo:.3f}</span>", unsafe_allow_html=True)
+        with c9: st.markdown(f"<span class='strategy-text'>{net_delta:.2f}</span>", unsafe_allow_html=True)
+        with c10: st.markdown(f"<span class='strategy-text' style='color:{p_color}'>${premium:.2f}</span>", unsafe_allow_html=True)
+        with c11: st.markdown(f"<span class='strategy-text' style='color:{m_color}'>${row_margin:.2f}</span>", unsafe_allow_html=True)
+        with c12:
+            if st.button("✕", key=f"d_{leg['id']}"):
                 st.session_state.legs.pop(i)
                 st.rerun()
+                
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
     with st.container():
-        f1, f2, f3, f4, f5, f6, f7, f8, f9, f10 = st.columns(h_col_spec)
+        f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12 = st.columns(h_col_spec)
         with f2: st.markdown("<span class='strategy-text'>**TOTAL STRATEGY**</span>", unsafe_allow_html=True)
-        with f6: st.write("") 
-        with f7: st.markdown(f"<span class='strategy-text'>**{total_delta:,.2f}**</span>", unsafe_allow_html=True)
-        with f8: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
-        with f9: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
+        with f9: st.markdown(f"<span class='strategy-text'>**{total_delta:,.2f}**</span>", unsafe_allow_html=True)
+        with f10: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</span>", unsafe_allow_html=True)
+        with f11: st.markdown(f"<span class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</span>", unsafe_allow_html=True)
 
     # --- MATRIX ---
     st.markdown("---")
