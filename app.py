@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.8 (Compact Strike Buttons & Style Columns)
+# VERSION: 10.9 (Strike Button Alignment & Style Header)
 # ==========================================
 
 import streamlit as st
@@ -295,7 +295,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.8</div>
+            <div class="header-sub">Option Strategy Builder v10.9</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -530,12 +530,13 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    h_col_spec = [1.2, 1.5, 0.6, 1.0, 1.3, 2.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
+    # Adjusted column specs to widen 'Style' and handle tight Strike layout
+    h_col_spec = [1.2, 1.5, 0.8, 1.0, 1.3, 2.2, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
     cols_header = st.columns(h_col_spec)
     
     with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
     with cols_header[1]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
-    with cols_header[2]: st.markdown('<div class="trade-header" title="American or European">Sty</div>', unsafe_allow_html=True)
+    with cols_header[2]: st.markdown('<div class="trade-header" title="American or European">Style</div>', unsafe_allow_html=True)
     with cols_header[3]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
     with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
     with cols_header[5]: st.markdown(f'<div class="trade-header" title="Smart Step Strike">Strike</div>', unsafe_allow_html=True)
@@ -606,7 +607,8 @@ if st.session_state.legs:
                 
             current_idx = available_strikes.index(current_strike)
             
-            sc1, sc2, sc3 = st.columns([1.5, 0.7, 0.7], gap="small")
+            # Sub-columns with an invisible right-spacer so buttons stick to the text
+            sc1, sc2, sc3, _ = st.columns([1.2, 0.6, 0.6, 1.0], gap="small")
             with sc1:
                 st.markdown(f"<span class='strategy-text'>{current_strike:.2f}</span>", unsafe_allow_html=True)
             with sc2:
