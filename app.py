@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.21 (Editable Volatility Calibration)
+# VERSION: 10.22 (Forward Curve & Live RBA Rate)
 # ==========================================
 
 import streamlit as st
@@ -12,6 +12,8 @@ from datetime import datetime, time, timedelta
 import pytz
 import math
 import uuid
+import requests
+import re
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -85,7 +87,7 @@ st.markdown("""
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
-if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.01
+if 'forward_price' not in st.session_state: st.session_state.forward_price = 0.0
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
@@ -110,6 +112,19 @@ TOOLTIPS = {
 }
 
 # --- 3. DATA ENGINE ---
+@st.cache_data(ttl=86400)
+def fetch_rba_cash_rate():
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get("https://www.rba.gov.au/", headers=headers, timeout=5)
+        match = re.search(r'Cash rate target.*?(\d+\.\d+)\s*%', res.text, re.IGNORECASE | re.DOTALL)
+        if match: return float(match.group(1))
+        return 3.85
+    except:
+        return 3.85
+
+global_rba_rate = fetch_rba_cash_rate()
+
 @st.cache_data(ttl=600)
 def load_sheet(raw_url):
     try:
@@ -192,20 +207,20 @@ def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
     if option_type == 'Call': return bs_price 
     else: return max(bs_price, max(0, K - S))
 
-def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
-    if spot <= 0 or strike <= 0 or time_days < 0:
+def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vol_pct, current_spot, forward_override):
+    if simulated_spot <= 0 or strike <= 0 or time_days < 0:
         return 0.0, 0.0
         
-    r = 0.04 
+    r = global_rba_rate / 100.0
     q = 0.0
     is_xjo = (st.session_state.ticker == 'XJO')
     
     try:
-        S = float(spot)
+        S = float(simulated_spot)
         K = float(strike)
         T = time_days / 365.0
         
-        # Bypass Black-Scholes entirely if the option has expired to provide pure intrinsic value
+        # Hard expiry value logic
         if T <= 0.0:
             price = max(0.0, S - K) if kind == 'Call' else max(0.0, K - S)
             delta = 0.0
@@ -216,8 +231,13 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
         v = vol_pct / 100.0
         
         if is_xjo:
-            q = 0.04 
             style = 'EUROPEAN' 
+            # If user provided a forward price, back-calculate the implied dividend yield (q)
+            if forward_override and forward_override > 0 and current_spot > 0:
+                implied_q = r - (math.log(forward_override / current_spot) / T)
+                q = implied_q
+            else:
+                q = 0.04 # Fallback generic 4% yield
         elif st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
@@ -296,7 +316,7 @@ def fetch_data(t):
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 
 if st.session_state.ticker == 'XJO':
-    div_display_txt = " | 💰 Index Yield: 4.0%"
+    div_display_txt = f" | 🏦 RBA Rate: {global_rba_rate}%"
 elif st.session_state.div_info:
     div_display_txt = f" | 💰 Auto Div: ${st.session_state.div_info['amount']:.2f}"
 else:
@@ -307,7 +327,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.21</div>
+            <div class="header-sub">Option Strategy Builder v10.22</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -326,10 +346,15 @@ with c1:
 
 with c2:
     if st.session_state.ticker:
-        new_spot = st.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
+        # Layout Spot and Forward Inputs
+        s1, s2 = st.columns(2)
+        new_spot = s1.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
         if new_spot != st.session_state.spot_price:
             st.session_state.spot_price = new_spot
             st.session_state.manual_spot = True
+            
+        new_fwd = s2.number_input("Fwd Price (Opt)", value=float(st.session_state.forward_price), format="%.2f", step=1.0)
+        st.session_state.forward_price = new_fwd
     else: st.write("")
 
 with c3:
@@ -413,7 +438,10 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
                 style = row.get('Style', 'American')
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
-                px, delta = calculate_price_and_delta(style, row['Type'], st.session_state.spot_price, row['Strike'], days_diff, vol)
+                px, delta = calculate_price_and_delta(
+                    style, row['Type'], st.session_state.spot_price, row['Strike'], 
+                    days_diff, vol, st.session_state.spot_price, st.session_state.forward_price
+                )
                 
                 return pd.Series([px, delta, vol, margin])
 
@@ -551,7 +579,6 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    # Adjusted column specs to allocate slightly more space for the editable Vol input box
     h_col_spec = [0.8, 1.0, 0.7, 0.9, 1.2, 2.7, 1.2, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
     cols_header = st.columns(h_col_spec)
     
@@ -578,7 +605,10 @@ if st.session_state.legs:
         if 'Style' not in leg: leg['Style'] = 'American'
         if 'ExpDateStr' not in leg: leg['ExpDateStr'] = (datetime.now() + timedelta(days=leg['Expiry'])).strftime("%Y-%m-%d")
         
-        new_theo, new_delta = calculate_price_and_delta(leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
+        new_theo, new_delta = calculate_price_and_delta(
+            leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+            leg['Expiry'], leg['Vol'], st.session_state.spot_price, st.session_state.forward_price
+        )
         
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
@@ -656,19 +686,23 @@ if st.session_state.legs:
                     st.session_state.legs[i]['Style'] = new_style
                     st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
                     
-                    matched_theo, _ = calculate_price_and_delta(new_style, leg['Type'], st.session_state.spot_price, new_strike, leg['Expiry'], new_vol)
+                    matched_theo, _ = calculate_price_and_delta(
+                        new_style, leg['Type'], st.session_state.spot_price, new_strike, 
+                        leg['Expiry'], new_vol, st.session_state.spot_price, st.session_state.forward_price
+                    )
                     st.session_state.legs[i]['Entry'] = matched_theo
                 else:
                     st.session_state.legs[i]['Code'] = "N/A"
                 st.rerun()
                 
         with c[6]: 
-            # Editable Volatility Override
             new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"vol_{leg['id']}", label_visibility="collapsed")
             if new_vol_input != leg['Vol']:
                 st.session_state.legs[i]['Vol'] = new_vol_input
-                # Update Entry price immediately to reflect the newly calibrated Theo cost
-                calibrated_theo, _ = calculate_price_and_delta(leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], new_vol_input)
+                calibrated_theo, _ = calculate_price_and_delta(
+                    leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+                    leg['Expiry'], new_vol_input, st.session_state.spot_price, st.session_state.forward_price
+                )
                 st.session_state.legs[i]['Entry'] = calibrated_theo
                 st.rerun()
                 
@@ -724,7 +758,10 @@ if st.session_state.legs:
             for leg in st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 rem_days = max(0, leg['Expiry'] - d)
-                exit_px, _ = calculate_price_and_delta(leg['Style'], leg['Type'], p, leg['Strike'], rem_days, sim_vol)
+                exit_px, _ = calculate_price_and_delta(
+                    leg['Style'], leg['Type'], p, leg['Strike'], 
+                    rem_days, sim_vol, st.session_state.spot_price, st.session_state.forward_price
+                )
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
             
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
@@ -775,7 +812,10 @@ if st.session_state.legs:
         val_t0 = 0
         val_tF = 0
         for leg in st.session_state.legs:
-            price_t0, _ = calculate_price_and_delta(leg['Style'], leg['Type'], p, leg['Strike'], leg['Expiry'], leg['Vol'])
+            price_t0, _ = calculate_price_and_delta(
+                leg['Style'], leg['Type'], p, leg['Strike'], 
+                leg['Expiry'], leg['Vol'], st.session_state.spot_price, st.session_state.forward_price
+            )
             val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
             price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
             val_tF += (price_tf - leg['Entry']) * leg['Qty'] * contract_multiplier
