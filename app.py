@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.20 (Price Step Increment Upgrade)
+# VERSION: 10.21 (Editable Volatility Calibration)
 # ==========================================
 
 import streamlit as st
@@ -85,6 +85,7 @@ st.markdown("""
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
+if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.01
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
@@ -306,7 +307,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.20</div>
+            <div class="header-sub">Option Strategy Builder v10.21</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -550,7 +551,8 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    h_col_spec = [0.8, 1.1, 0.7, 0.9, 1.3, 2.7, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
+    # Adjusted column specs to allocate slightly more space for the editable Vol input box
+    h_col_spec = [0.8, 1.0, 0.7, 0.9, 1.2, 2.7, 1.2, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
     cols_header = st.columns(h_col_spec)
     
     with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
@@ -559,7 +561,7 @@ if st.session_state.legs:
     with cols_header[3]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
     with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
     with cols_header[5]: st.markdown(f'<div class="trade-header" title="Smart Step Strike">Strike</div>', unsafe_allow_html=True)
-    with cols_header[6]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["IV"]}">Vol</div>', unsafe_allow_html=True)
+    with cols_header[6]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
     with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
     with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
     with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
@@ -660,7 +662,16 @@ if st.session_state.legs:
                     st.session_state.legs[i]['Code'] = "N/A"
                 st.rerun()
                 
-        with c[6]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Vol']:.1f}%</div>", unsafe_allow_html=True)
+        with c[6]: 
+            # Editable Volatility Override
+            new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"vol_{leg['id']}", label_visibility="collapsed")
+            if new_vol_input != leg['Vol']:
+                st.session_state.legs[i]['Vol'] = new_vol_input
+                # Update Entry price immediately to reflect the newly calibrated Theo cost
+                calibrated_theo, _ = calculate_price_and_delta(leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], new_vol_input)
+                st.session_state.legs[i]['Entry'] = calibrated_theo
+                st.rerun()
+                
         with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>${leg['Entry']:.3f}</div>", unsafe_allow_html=True)
         with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>${new_theo:.3f}</div>", unsafe_allow_html=True)
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
@@ -688,8 +699,7 @@ if st.session_state.legs:
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
     time_step = m1.slider("Step (Days)", 1, 30, 1)
-    # The slider now dictates the exact step size between rows
-    step_pct = m2.select_slider("Price Step (% per row)", options=[0.005, 0.01, 0.02, 0.03, 0.05], value=0.01, format_func=lambda x: f"{x*100:.1f}%")
+    range_pct = m2.select_slider("Price Step (% per row)", options=[0.005, 0.01, 0.02, 0.03, 0.05], value=0.01, format_func=lambda x: f"{x*100:.1f}%")
     
     with m1:
         st.caption("Simulate Volatility Shift:")
@@ -700,9 +710,7 @@ if st.session_state.legs:
         st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
 
     spot = st.session_state.spot_price
-    
-    # Generate exactly 13 rows based on the step_pct (6 steps up, Spot, 6 steps down)
-    prices = [spot * (1 + step_pct * i) for i in range(6, -7, -1)]
+    prices = [spot * (1 + range_pct * i) for i in range(6, -7, -1)]
     dates = [d * time_step for d in range(7)]
     
     matrix_data = []
@@ -758,8 +766,7 @@ if st.session_state.legs:
     # CHART
     st.markdown("### Payoff Chart")
     
-    # Sync the chart's total width to the matrix's boundaries (with a tiny 20% padding so lines don't get cut off at the edge)
-    chart_spread = step_pct * 6 * 1.2
+    chart_spread = range_pct * 6 * 1.2
     chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 100)
     
     pnl_today = []
