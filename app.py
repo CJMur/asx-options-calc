@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.26 (Time Convention Sync)
+# VERSION: 10.27 (Timezone & Fwd Curve Fix)
 # ==========================================
 
 import streamlit as st
@@ -76,6 +76,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- TIMEZONE UTILITY ---
+def get_sydney_time():
+    return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
+
 # --- 2. SESSION STATE ---
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
@@ -124,13 +128,22 @@ def load_sheet(raw_url):
         csv_url = f"{raw_url.split('/edit')[0]}/export?format=csv&gid=0" if "/edit" in raw_url else raw_url
         df = pd.read_csv(csv_url, on_bad_lines='skip', dtype=str)
         
+        # --- FUZZY MATCHING FOR FORWARD CURVE ---
         spreads_dict = {}
-        if 'XJO Forward Yield' in df.columns and 'Spread' in df.columns:
-            fwd_df = df[['XJO Forward Yield', 'Spread']].dropna()
+        fwd_col, spread_col = None, None
+        
+        for col in df.columns:
+            clean_col = str(col).strip().lower()
+            if 'forward yield' in clean_col: fwd_col = col
+            elif 'spread' == clean_col: spread_col = col
+                
+        if fwd_col and spread_col:
+            fwd_df = df[[fwd_col, spread_col]].dropna()
             for _, row in fwd_df.iterrows():
                 try:
-                    dt = pd.to_datetime(row['XJO Forward Yield'], dayfirst=True, errors='coerce')
-                    val = pd.to_numeric(row['Spread'], errors='coerce')
+                    dt = pd.to_datetime(row[fwd_col], dayfirst=True, errors='coerce')
+                    # Strip any commas if they exist
+                    val = pd.to_numeric(str(row[spread_col]).replace(',', ''), errors='coerce')
                     if pd.notna(dt) and pd.notna(val):
                         spreads_dict[dt.strftime("%Y-%m-%d")] = val
                 except:
@@ -199,23 +212,23 @@ if st.session_state.ref_data is None:
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
-def black_76_futures_model(S, F, K, T_vol, T_discount, r, v, kind):
-    if T_vol <= 0.0:
+def black_76_futures_model(S, F, K, T, r, v, kind):
+    if T <= 0.0:
         price = max(0.0, S - K) if kind == 'Call' else max(0.0, K - S)
         delta = 0.0
         if kind == 'Call' and S > K: delta = 1.0
         elif kind == 'Put' and S < K: delta = -1.0
         return price, delta
 
-    d1 = (math.log(F / K) + 0.5 * v**2 * T_vol) / (v * math.sqrt(T_vol))
-    d2 = d1 - v * math.sqrt(T_vol)
+    d1 = (math.log(F / K) + 0.5 * v**2 * T) / (v * math.sqrt(T))
+    d2 = d1 - v * math.sqrt(T)
 
     if kind == 'Call':
-        price = math.exp(-r * T_discount) * (F * norm_cdf(d1) - K * norm_cdf(d2))
-        delta = (F / S) * math.exp(-r * T_discount) * norm_cdf(d1)
+        price = math.exp(-r * T) * (F * norm_cdf(d1) - K * norm_cdf(d2))
+        delta = (F / S) * math.exp(-r * T) * norm_cdf(d1)
     else:
-        price = math.exp(-r * T_discount) * (K * norm_cdf(-d2) - F * norm_cdf(-d1))
-        delta = (F / S) * math.exp(-r * T_discount) * (norm_cdf(d1) - 1.0)
+        price = math.exp(-r * T) * (K * norm_cdf(-d2) - F * norm_cdf(-d1))
+        delta = (F / S) * math.exp(-r * T) * (norm_cdf(d1) - 1.0)
 
     return price, delta
 
@@ -246,11 +259,10 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         K = float(strike)
         v = vol_pct / 100.0
         
-        # Hard-locked to Calendar (365) to fix the T scalar bug
-        T_vol = time_days / 365.0
-        T_discount = time_days / 365.0 
+        # Hard-locked to Calendar days (365)
+        T = time_days / 365.0
         
-        if T_vol <= 0.0:
+        if T <= 0.0:
             price = max(0.0, S - K) if kind == 'Call' else max(0.0, K - S)
             delta = 0.0
             if kind == 'Call' and S > K: delta = 1.0
@@ -263,36 +275,35 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
             if expiry_str_key in st.session_state.fwd_spreads:
                 basis_offset = st.session_state.fwd_spreads[expiry_str_key]
                 simulated_fwd = S + basis_offset
-                return black_76_futures_model(S, simulated_fwd, K, T_vol, T_discount, r, v, kind)
+                return black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
             else:
                 q = 0.04 # Fallback
         elif st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
-                days_to_div = (d_info['date'] - datetime.now()).days
+                days_to_div = (d_info['date'] - get_sydney_time()).days
                 if 0 <= days_to_div < time_days:
                     t_div = days_to_div / 365.0
                     div_pv = d_info['amount'] * math.exp(-r * t_div)
                     S = max(0.01, S - div_pv)
         
         if style.upper() == 'EUROPEAN':
-            price = black_scholes_european(S, K, T_vol, r, v, kind, q)
+            price = black_scholes_european(S, K, T, r, v, kind, q)
         else:
-            price = bjerksund_stensland_american(S, K, T_vol, r, v, kind)
+            price = bjerksund_stensland_american(S, K, T, r, v, kind)
             
-        d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T_vol) / (v * math.sqrt(T_vol))
+        d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
         if kind == 'Call':
-            delta = math.exp(-q * T_vol) * norm_cdf(d1)
+            delta = math.exp(-q * T) * norm_cdf(d1)
         else:
-            delta = math.exp(-q * T_vol) * (norm_cdf(d1) - 1)
+            delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
             
         return price, delta
     except: 
         return 0.0, 0.0
 
 def check_market_hours():
-    sydney_tz = pytz.timezone('Australia/Sydney')
-    now = datetime.now(sydney_tz)
+    now = get_sydney_time()
     return False if now.weekday() >= 5 else time(10, 0) <= now.time() <= time(16, 10)
 
 st.session_state.is_market_open = check_market_hours()
@@ -311,7 +322,7 @@ def fetch_data(t):
                 if isinstance(ex_ts, (int, float)):
                     ex_date = datetime.fromtimestamp(ex_ts)
                     amt = info.get('lastDividendValue', info.get('dividendRate', 0)/2)
-                    if ex_date > datetime.now(): div_info = {'amount': amt, 'date': ex_date}
+                    if ex_date > get_sydney_time(): div_info = {'amount': amt, 'date': ex_date}
         except: pass
         return "MANUAL", spot, div_info
 
@@ -330,7 +341,7 @@ def fetch_data(t):
             ex_ts = info['exDividendDate']
             if isinstance(ex_ts, (int, float)):
                 ex_date = datetime.fromtimestamp(ex_ts)
-                if ex_date > datetime.now():
+                if ex_date > get_sydney_time():
                     amt = info.get('lastDividendValue', 0)
                     if amt == 0: amt = info.get('dividendRate', 0) / 2
                     div_info = {'amount': amt, 'date': ex_date}
@@ -341,9 +352,10 @@ def fetch_data(t):
 
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
+fwd_status = f" | 📅 Fwd Spreads: {len(st.session_state.fwd_spreads)}"
 
 if st.session_state.ticker == 'XJO':
-    div_display_txt = f" | 🏦 RBA Rate: {global_rba_rate}%"
+    div_display_txt = f" | 🏦 RBA: {global_rba_rate}%{fwd_status}"
 elif st.session_state.div_info:
     div_display_txt = f" | 💰 Auto Div: ${st.session_state.div_info['amount']:.2f}"
 else:
@@ -354,7 +366,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.26</div>
+            <div class="header-sub">Option Strategy Builder v10.27</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -440,7 +452,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
     tkr = st.session_state.ticker.replace(".AX", "")
     subset = ref[ref['Ticker'] == tkr]
     
-    today = datetime.now().replace(hour=0, minute=0, second=0)
+    today = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
     subset = subset[subset['Expiry'] >= today]
     
     if not subset.empty:
@@ -477,6 +489,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
+            # --- FAILSAFE: Drop duplicate strikes before setting the index
             calls = day_chain[day_chain['Type'] == 'Call'].drop_duplicates(subset=['Strike']).set_index('Strike')
             puts = day_chain[day_chain['Type'] == 'Put'].drop_duplicates(subset=['Strike']).set_index('Strike')
             
@@ -555,7 +568,7 @@ if not df_view.empty and current_exp:
     if selection.selection['rows']:
         idx = selection.selection['rows'][0]
         row = df_view.iloc[idx]
-        days_diff = (datetime.strptime(current_exp, "%Y-%m-%d") - datetime.now()).days
+        days_diff = (datetime.strptime(current_exp, "%Y-%m-%d") - get_sydney_time()).days
         
         st.write("")
         q_c, b1_c, b2_c, b3_c, b4_c, _ = st.columns([1.5, 1, 1, 1, 1, 3], gap="small")
@@ -631,7 +644,7 @@ if st.session_state.legs:
     for i, leg in enumerate(st.session_state.legs):
         if 'id' not in leg: leg['id'] = str(uuid.uuid4())
         if 'Style' not in leg: leg['Style'] = 'American'
-        if 'ExpDateStr' not in leg: leg['ExpDateStr'] = (datetime.now() + timedelta(days=leg['Expiry'])).strftime("%Y-%m-%d")
+        if 'ExpDateStr' not in leg: leg['ExpDateStr'] = (get_sydney_time() + timedelta(days=leg['Expiry'])).strftime("%Y-%m-%d")
         
         new_theo, new_delta = calculate_price_and_delta(
             leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
@@ -792,7 +805,7 @@ if st.session_state.legs:
                 )
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
             
-            col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
+            col_name = (get_sydney_time() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
             row[col_name] = pnl
         matrix_data.append(row)
