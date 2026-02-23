@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.18 (Table UI Rebalancing)
+# VERSION: 10.19 (Exact Expiry Value Fix)
 # ==========================================
 
 import streamlit as st
@@ -201,10 +201,19 @@ def calculate_price_and_delta(style, kind, spot, strike, time_days, vol_pct):
     is_xjo = (st.session_state.ticker == 'XJO')
     
     try:
-        T = max(0.001, time_days / 365.0)
-        v = vol_pct / 100.0
         S = float(spot)
         K = float(strike)
+        T = time_days / 365.0
+        
+        # Bypass Black-Scholes entirely if the option has expired to provide pure intrinsic value
+        if T <= 0.0:
+            price = max(0.0, S - K) if kind == 'Call' else max(0.0, K - S)
+            delta = 0.0
+            if kind == 'Call' and S > K: delta = 1.0
+            elif kind == 'Put' and S < K: delta = -1.0
+            return price, delta
+
+        v = vol_pct / 100.0
         
         if is_xjo:
             q = 0.04 
@@ -298,7 +307,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.18</div>
+            <div class="header-sub">Option Strategy Builder v10.19</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -542,7 +551,6 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    # NEW UI RATIOS: Shrunk Qty/Code columns, widened Strike column
     h_col_spec = [0.8, 1.1, 0.7, 0.9, 1.3, 2.7, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
     cols_header = st.columns(h_col_spec)
     
@@ -595,7 +603,6 @@ if st.session_state.legs:
                 
         with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
         with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
-        # Type column no longer forces a specific text color, defaulting to standard display 
         with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
