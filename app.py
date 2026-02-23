@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.24 (Automated XJO Forward Curve)
+# VERSION: 10.25 (Duplicate Strike Failsafe)
 # ==========================================
 
 import streamlit as st
@@ -356,7 +356,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.24</div>
+            <div class="header-sub">Option Strategy Builder v10.25</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -483,8 +483,9 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
-            calls = day_chain[day_chain['Type'] == 'Call'].set_index('Strike')
-            puts = day_chain[day_chain['Type'] == 'Put'].set_index('Strike')
+            # --- FAILSAFE: Drop duplicate strikes before setting the index to prevent InvalidIndexError
+            calls = day_chain[day_chain['Type'] == 'Call'].drop_duplicates(subset=['Strike']).set_index('Strike')
+            puts = day_chain[day_chain['Type'] == 'Put'].drop_duplicates(subset=['Strike']).set_index('Strike')
             
             all_strikes = sorted(list(set(calls.index) | set(puts.index)))
             df_view = pd.DataFrame({'STRIKE': all_strikes})
