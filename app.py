@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.25 (Duplicate Strike Failsafe)
+# VERSION: 10.26 (Time Convention Sync)
 # ==========================================
 
 import streamlit as st
@@ -80,7 +80,6 @@ st.markdown("""
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
-if 'time_convention' not in st.session_state: st.session_state.time_convention = "Trading (252)"
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'fwd_spreads' not in st.session_state: st.session_state.fwd_spreads = {}
@@ -125,7 +124,6 @@ def load_sheet(raw_url):
         csv_url = f"{raw_url.split('/edit')[0]}/export?format=csv&gid=0" if "/edit" in raw_url else raw_url
         df = pd.read_csv(csv_url, on_bad_lines='skip', dtype=str)
         
-        # Extract Forward Curve Spread logic
         spreads_dict = {}
         if 'XJO Forward Yield' in df.columns and 'Spread' in df.columns:
             fwd_df = df[['XJO Forward Yield', 'Spread']].dropna()
@@ -248,8 +246,8 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         K = float(strike)
         v = vol_pct / 100.0
         
-        days_base = 252.0 if st.session_state.time_convention == 'Trading (252)' else 365.0
-        T_vol = time_days / days_base
+        # Hard-locked to Calendar (365) to fix the T scalar bug
+        T_vol = time_days / 365.0
         T_discount = time_days / 365.0 
         
         if T_vol <= 0.0:
@@ -356,7 +354,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.25</div>
+            <div class="header-sub">Option Strategy Builder v10.26</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -375,14 +373,10 @@ with c1:
 
 with c2:
     if st.session_state.ticker:
-        s1, s2 = st.columns([1, 1.2])
-        new_spot = s1.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
+        new_spot = st.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
         if new_spot != st.session_state.spot_price:
             st.session_state.spot_price = new_spot
             st.session_state.manual_spot = True
-            
-        new_time = s2.selectbox("Time Model", ["Trading (252)", "Calendar (365)"], index=0 if st.session_state.time_convention == "Trading (252)" else 1)
-        st.session_state.time_convention = new_time
     else: st.write("")
 
 with c3:
@@ -483,7 +477,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
-            # --- FAILSAFE: Drop duplicate strikes before setting the index to prevent InvalidIndexError
             calls = day_chain[day_chain['Type'] == 'Call'].drop_duplicates(subset=['Strike']).set_index('Strike')
             puts = day_chain[day_chain['Type'] == 'Put'].drop_duplicates(subset=['Strike']).set_index('Strike')
             
