@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.22 (Forward Curve & Live RBA Rate)
+# VERSION: 10.23 (Black '76 & Time Convention)
 # ==========================================
 
 import streamlit as st
@@ -65,18 +65,11 @@ st.markdown("""
         margin-bottom: 5px; cursor: help; user-select: none;
     }
     
-    /* Center align markdown text and allow background shading */
     .strategy-text { 
-        user-select: none; 
-        display: flex; 
-        align-items: center; 
-        min-height: 40px; 
-        padding: 0 8px;
-        border-radius: 4px;
-        width: 100%;
+        user-select: none; display: flex; align-items: center; 
+        min-height: 40px; padding: 0 8px; border-radius: 4px; width: 100%;
     }
     
-    /* Shrink the +/- buttons so rows stay slim */
     button[kind="secondary"] {
         padding: 0rem 0.5rem !important; min-height: 0px !important; height: 32px !important;
     }
@@ -88,6 +81,7 @@ if 'legs' not in st.session_state: st.session_state.legs = []
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
 if 'forward_price' not in st.session_state: st.session_state.forward_price = 0.0
+if 'time_convention' not in st.session_state: st.session_state.time_convention = "Calendar (365)"
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
@@ -189,9 +183,31 @@ if st.session_state.ref_data is None:
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
 
-# --- 4. MATH ENGINE ---
+# --- 4. MATH ENGINE (Black '76 & BS) ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+def black_76_futures_model(S, F, K, T_vol, T_discount, r, v, kind):
+    # Institutional pricing for indices with known Forward curves
+    if T_vol <= 0.0:
+        price = max(0.0, S - K) if kind == 'Call' else max(0.0, K - S)
+        delta = 0.0
+        if kind == 'Call' and S > K: delta = 1.0
+        elif kind == 'Put' and S < K: delta = -1.0
+        return price, delta
+
+    d1 = (math.log(F / K) + 0.5 * v**2 * T_vol) / (v * math.sqrt(T_vol))
+    d2 = d1 - v * math.sqrt(T_vol)
+
+    if kind == 'Call':
+        price = math.exp(-r * T_discount) * (F * norm_cdf(d1) - K * norm_cdf(d2))
+        # Spot-adjusted Delta for Portfolio Hedging
+        delta = (F / S) * math.exp(-r * T_discount) * norm_cdf(d1)
+    else:
+        price = math.exp(-r * T_discount) * (K * norm_cdf(-d2) - F * norm_cdf(-d1))
+        delta = (F / S) * math.exp(-r * T_discount) * (norm_cdf(d1) - 1.0)
+
+    return price, delta
 
 def black_scholes_european(S, K, T, r, sigma, option_type, q=0.0):
     if T <= 0: return max(0, S - K) if option_type == 'Call' else max(0, K - S)
@@ -218,26 +234,30 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
     try:
         S = float(simulated_spot)
         K = float(strike)
-        T = time_days / 365.0
+        v = vol_pct / 100.0
         
-        # Hard expiry value logic
-        if T <= 0.0:
+        # Volatility Time vs Discounting Time
+        days_base = 252.0 if st.session_state.time_convention == 'Trading (252)' else 365.0
+        T_vol = time_days / days_base
+        T_discount = time_days / 365.0 # Interest always accrues daily
+        
+        if T_vol <= 0.0:
             price = max(0.0, S - K) if kind == 'Call' else max(0.0, K - S)
             delta = 0.0
             if kind == 'Call' and S > K: delta = 1.0
             elif kind == 'Put' and S < K: delta = -1.0
             return price, delta
-
-        v = vol_pct / 100.0
         
         if is_xjo:
             style = 'EUROPEAN' 
-            # If user provided a forward price, back-calculate the implied dividend yield (q)
+            # If Forward curve is provided, route directly to Black '76 model
             if forward_override and forward_override > 0 and current_spot > 0:
-                implied_q = r - (math.log(forward_override / current_spot) / T)
-                q = implied_q
+                # If we are simulating matrix movements, we assume the Forward basis holds constant
+                basis = forward_override - current_spot
+                simulated_fwd = S + basis
+                return black_76_futures_model(S, simulated_fwd, K, T_vol, T_discount, r, v, kind)
             else:
-                q = 0.04 # Fallback generic 4% yield
+                q = 0.04 
         elif st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
@@ -248,16 +268,15 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
                     S = max(0.01, S - div_pv)
         
         if style.upper() == 'EUROPEAN':
-            price = black_scholes_european(S, K, T, r, v, kind, q)
+            price = black_scholes_european(S, K, T_vol, r, v, kind, q)
         else:
-            price = bjerksund_stensland_american(S, K, T, r, v, kind)
+            price = bjerksund_stensland_american(S, K, T_vol, r, v, kind)
             
-        d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
-        
+        d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T_vol) / (v * math.sqrt(T_vol))
         if kind == 'Call':
-            delta = math.exp(-q * T) * norm_cdf(d1)
+            delta = math.exp(-q * T_vol) * norm_cdf(d1)
         else:
-            delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
+            delta = math.exp(-q * T_vol) * (norm_cdf(d1) - 1)
             
         return price, delta
     except: 
@@ -327,7 +346,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.22</div>
+            <div class="header-sub">Option Strategy Builder v10.23</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -339,15 +358,14 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- 7. CONTROLS ---
-c1, c2, c3 = st.columns([1, 1, 2], gap="medium")
+c1, c2, c3 = st.columns([1, 1.2, 1.8], gap="medium")
 with c1: 
     display_val = st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker
     query = st.text_input("Ticker or Option Code", value=display_val, placeholder="e.g., BHP or BHPJ84")
 
 with c2:
     if st.session_state.ticker:
-        # Layout Spot and Forward Inputs
-        s1, s2 = st.columns(2)
+        s1, s2, s3 = st.columns([1, 1, 1.2])
         new_spot = s1.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
         if new_spot != st.session_state.spot_price:
             st.session_state.spot_price = new_spot
@@ -355,6 +373,9 @@ with c2:
             
         new_fwd = s2.number_input("Fwd Price (Opt)", value=float(st.session_state.forward_price), format="%.2f", step=1.0)
         st.session_state.forward_price = new_fwd
+        
+        new_time = s3.selectbox("Time Model", ["Calendar (365)", "Trading (252)"], index=0 if st.session_state.time_convention == "Calendar (365)" else 1)
+        st.session_state.time_convention = new_time
     else: st.write("")
 
 with c3:
