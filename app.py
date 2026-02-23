@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.15 (Net Strategy Theo Price Fix)
+# VERSION: 10.16 (Payoff Matrix Overhaul)
 # ==========================================
 
 import streamlit as st
@@ -298,7 +298,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.15</div>
+            <div class="header-sub">Option Strategy Builder v10.16</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -570,16 +570,14 @@ if st.session_state.legs:
         
         new_theo, new_delta = calculate_price_and_delta(leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], leg['Expiry'], leg['Vol'])
         
-        # Calculate positional metrics
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
         row_margin = leg.get('MarginUnit', 0.0) * abs(leg['Qty']) 
         
-        # Accumulate strategy totals
         total_delta += net_delta
         total_premium += premium
         total_margin += row_margin
-        raw_theo_sum += leg['Qty'] * new_theo  # Accumulate the raw fractional prices
+        raw_theo_sum += leg['Qty'] * new_theo
         
         type_color = "#4ade80" if leg['Type'] == 'Call' else "#f87171"
         p_color = '#4ade80' if premium >= 0 else '#f87171'
@@ -668,7 +666,6 @@ if st.session_state.legs:
                 
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
-    # Normalize the strategy theoretical price by dividing by the primary quantity
     strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
 
     with st.container():
@@ -683,8 +680,8 @@ if st.session_state.legs:
     st.markdown("---")
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
-    time_step = m1.slider("Step (Days)", 1, 30, 7)
-    range_pct = m2.select_slider("Price Range", options=[0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%")
+    time_step = m1.slider("Step (Days)", 1, 30, 1)
+    range_pct = m2.select_slider("Price Range", options=[0.01, 0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%")
     
     with m1:
         st.caption("Simulate Volatility Shift:")
@@ -695,12 +692,16 @@ if st.session_state.legs:
         st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
 
     spot = st.session_state.spot_price
-    prices = np.linspace(spot * (1 + range_pct), spot * (1 - range_pct), 12)
-    dates = [0, time_step, time_step*2, time_step*3, time_step*4]
+    # Exactly 13 items guarantees the 7th item (index 6) is exactly Spot.
+    prices = np.linspace(spot * (1 + range_pct), spot * (1 - range_pct), 13)
+    dates = [d * time_step for d in range(7)]
     
     matrix_data = []
     for p in prices:
-        row = {"Price": f"{p:.2f}"}
+        is_spot = math.isclose(p, spot, rel_tol=1e-5)
+        row_label = f"» ${p:.2f} (SPOT) «" if is_spot else f"${p:.2f}"
+        
+        row = {"Price": row_label}
         for d in dates:
             pnl = 0
             for leg in st.session_state.legs:
@@ -708,13 +709,43 @@ if st.session_state.legs:
                 rem_days = max(0, leg['Expiry'] - d)
                 exit_px, _ = calculate_price_and_delta(leg['Style'], leg['Type'], p, leg['Strike'], rem_days, sim_vol)
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
+            
             col_name = (datetime.now() + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
             row[col_name] = pnl
         matrix_data.append(row)
         
     df_mx = pd.DataFrame(matrix_data).set_index("Price")
-    st.dataframe(df_mx.style.background_gradient(cmap='RdYlGn', axis=None).format("${:,.0f}"), use_container_width=True, height=460)
+    
+    # Calculate percentage return base: use Margin for credit/short strategies, Total Premium for debit/long strategies.
+    capital_at_risk = total_margin if total_premium >= 0 else abs(total_premium)
+    
+    def format_pnl(val):
+        if capital_at_risk <= 0.001:
+            return f"${val:,.0f} (0.0%)"
+        pct = (val / capital_at_risk) * 100
+        sign = "+" if val > 0 else ""
+        return f"${val:,.0f} ({sign}{pct:.1f}%)"
+
+    def make_heatmap(df):
+        max_val = df.max().max()
+        min_val = df.min().min()
+        abs_max = max(abs(max_val), abs(min_val), 1)
+        
+        def style_cell(val):
+            if val > 0:
+                intensity = min(val / abs_max, 1.0)
+                alpha = 0.05 + 0.35 * intensity
+                return f"background-color: rgba(74, 222, 128, {alpha:.2f});"
+            elif val < 0:
+                intensity = min(abs(val) / abs_max, 1.0)
+                alpha = 0.05 + 0.35 * intensity
+                return f"background-color: rgba(248, 113, 113, {alpha:.2f});"
+            return ""
+        
+        return df.applymap(style_cell)
+
+    st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
 
     # CHART
     st.markdown("### Payoff Chart")
