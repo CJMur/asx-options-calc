@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.16 (Payoff Matrix Overhaul)
+# VERSION: 10.18 (Table UI Rebalancing)
 # ==========================================
 
 import streamlit as st
@@ -85,7 +85,7 @@ st.markdown("""
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
-if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.05
+if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.01
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
@@ -298,7 +298,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.16</div>
+            <div class="header-sub">Option Strategy Builder v10.18</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -542,7 +542,8 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    h_col_spec = [1.2, 1.5, 0.8, 1.0, 1.3, 2.2, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
+    # NEW UI RATIOS: Shrunk Qty/Code columns, widened Strike column
+    h_col_spec = [0.8, 1.1, 0.7, 0.9, 1.3, 2.7, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
     cols_header = st.columns(h_col_spec)
     
     with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
@@ -579,7 +580,6 @@ if st.session_state.legs:
         total_margin += row_margin
         raw_theo_sum += leg['Qty'] * new_theo
         
-        type_color = "#4ade80" if leg['Type'] == 'Call' else "#f87171"
         p_color = '#4ade80' if premium >= 0 else '#f87171'
         m_color = '#4ade80' if row_margin >= 0 else '#f87171'
         
@@ -595,7 +595,8 @@ if st.session_state.legs:
                 
         with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
         with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
-        with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{type_color}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
+        # Type column no longer forces a specific text color, defaulting to standard display 
+        with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
@@ -681,7 +682,7 @@ if st.session_state.legs:
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
     time_step = m1.slider("Step (Days)", 1, 30, 1)
-    range_pct = m2.select_slider("Price Range", options=[0.01, 0.02, 0.05, 0.10, 0.20], value=0.05, format_func=lambda x: f"{x*100:.0f}%")
+    range_pct = m2.select_slider("Price Range", options=[0.01, 0.02, 0.05, 0.10, 0.20], value=0.01, format_func=lambda x: f"{x*100:.0f}%")
     
     with m1:
         st.caption("Simulate Volatility Shift:")
@@ -692,7 +693,6 @@ if st.session_state.legs:
         st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
 
     spot = st.session_state.spot_price
-    # Exactly 13 items guarantees the 7th item (index 6) is exactly Spot.
     prices = np.linspace(spot * (1 + range_pct), spot * (1 - range_pct), 13)
     dates = [d * time_step for d in range(7)]
     
@@ -717,7 +717,6 @@ if st.session_state.legs:
         
     df_mx = pd.DataFrame(matrix_data).set_index("Price")
     
-    # Calculate percentage return base: use Margin for credit/short strategies, Total Premium for debit/long strategies.
     capital_at_risk = total_margin if total_premium >= 0 else abs(total_premium)
     
     def format_pnl(val):
