@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.19 (Exact Expiry Value Fix)
+# VERSION: 10.20 (Price Step Increment Upgrade)
 # ==========================================
 
 import streamlit as st
@@ -85,7 +85,6 @@ st.markdown("""
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
-if 'range_pct' not in st.session_state: st.session_state.range_pct = 0.01
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
@@ -307,7 +306,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.19</div>
+            <div class="header-sub">Option Strategy Builder v10.20</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -689,7 +688,8 @@ if st.session_state.legs:
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
     time_step = m1.slider("Step (Days)", 1, 30, 1)
-    range_pct = m2.select_slider("Price Range", options=[0.01, 0.02, 0.05, 0.10, 0.20], value=0.01, format_func=lambda x: f"{x*100:.0f}%")
+    # The slider now dictates the exact step size between rows
+    step_pct = m2.select_slider("Price Step (% per row)", options=[0.005, 0.01, 0.02, 0.03, 0.05], value=0.01, format_func=lambda x: f"{x*100:.1f}%")
     
     with m1:
         st.caption("Simulate Volatility Shift:")
@@ -700,7 +700,9 @@ if st.session_state.legs:
         st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
 
     spot = st.session_state.spot_price
-    prices = np.linspace(spot * (1 + range_pct), spot * (1 - range_pct), 13)
+    
+    # Generate exactly 13 rows based on the step_pct (6 steps up, Spot, 6 steps down)
+    prices = [spot * (1 + step_pct * i) for i in range(6, -7, -1)]
     dates = [d * time_step for d in range(7)]
     
     matrix_data = []
@@ -755,7 +757,11 @@ if st.session_state.legs:
 
     # CHART
     st.markdown("### Payoff Chart")
-    chart_prices = np.linspace(spot * (1 - range_pct*1.5), spot * (1 + range_pct*1.5), 100)
+    
+    # Sync the chart's total width to the matrix's boundaries (with a tiny 20% padding so lines don't get cut off at the edge)
+    chart_spread = step_pct * 6 * 1.2
+    chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 100)
+    
     pnl_today = []
     pnl_expiry = []
     for p in chart_prices:
