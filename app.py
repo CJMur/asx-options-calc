@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.27 (Timezone & Fwd Curve Fix)
+# VERSION: 10.31 (Multi-Sheet GID Implementation)
 # ==========================================
 
 import streamlit as st
@@ -17,7 +17,13 @@ import re
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
-RAW_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/edit?usp=sharing"
+
+# Main Options Database (gid=0)
+OPTIONS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/export?format=csv&gid=0"
+
+# Forward Curve Database 
+FWD_CURVE_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/export?format=csv&gid=861426630"
+
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -123,31 +129,35 @@ def fetch_rba_cash_rate():
 global_rba_rate = fetch_rba_cash_rate()
 
 @st.cache_data(ttl=600)
-def load_sheet(raw_url):
+def load_databases(opts_url, fwd_url):
     try:
-        csv_url = f"{raw_url.split('/edit')[0]}/export?format=csv&gid=0" if "/edit" in raw_url else raw_url
-        df = pd.read_csv(csv_url, on_bad_lines='skip', dtype=str)
-        
-        # --- FUZZY MATCHING FOR FORWARD CURVE ---
+        # 1. Load Forward Curve Data
         spreads_dict = {}
-        fwd_col, spread_col = None, None
-        
-        for col in df.columns:
-            clean_col = str(col).strip().lower()
-            if 'forward yield' in clean_col: fwd_col = col
-            elif 'spread' == clean_col: spread_col = col
-                
-        if fwd_col and spread_col:
-            fwd_df = df[[fwd_col, spread_col]].dropna()
-            for _, row in fwd_df.iterrows():
-                try:
-                    dt = pd.to_datetime(row[fwd_col], dayfirst=True, errors='coerce')
-                    # Strip any commas if they exist
-                    val = pd.to_numeric(str(row[spread_col]).replace(',', ''), errors='coerce')
-                    if pd.notna(dt) and pd.notna(val):
-                        spreads_dict[dt.strftime("%Y-%m-%d")] = val
-                except:
-                    pass
+        try:
+            fwd_df = pd.read_csv(fwd_url, on_bad_lines='skip', dtype=str)
+            spread_col, fwd_date_col = None, None
+            
+            for col in fwd_df.columns:
+                clean_c = str(col).strip().lower()
+                if clean_c == 'spread': spread_col = col
+                elif clean_c in ['fwd expiry', 'expiry', 'xjo forward yield', 'forward yield']: fwd_date_col = col
+
+            if spread_col and fwd_date_col:
+                for _, row in fwd_df.iterrows():
+                    try:
+                        dt_str = str(row[fwd_date_col]).strip()
+                        val_str = str(row[spread_col]).replace(',', '').strip()
+                        dt = pd.to_datetime(dt_str, dayfirst=True, errors='coerce')
+                        val = pd.to_numeric(val_str, errors='coerce')
+                        if pd.notna(dt) and pd.notna(val):
+                            spreads_dict[dt.strftime("%Y-%m-%d")] = val
+                    except:
+                        pass
+        except Exception as e:
+            print(f"Failed to load fwd curve: {e}")
+
+        # 2. Load Main Options Data
+        df = pd.read_csv(opts_url, on_bad_lines='skip', dtype=str)
 
         header_map = {
             'ASXCode': 'Code', 'Underlying': 'Ticker', 'OptType': 'Type', 
@@ -203,7 +213,7 @@ def load_sheet(raw_url):
         return pd.DataFrame(), f"error|{str(e)[:30]}", {}
 
 if st.session_state.ref_data is None:
-    data, msg, extracted_spreads = load_sheet(RAW_SHEET_URL)
+    data, msg, extracted_spreads = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
     st.session_state.fwd_spreads = extracted_spreads
@@ -259,7 +269,7 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         K = float(strike)
         v = vol_pct / 100.0
         
-        # Hard-locked to Calendar days (365)
+        # Hard-locked to Calendar Days
         T = time_days / 365.0
         
         if T <= 0.0:
@@ -366,7 +376,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.27</div>
+            <div class="header-sub">Option Strategy Builder v10.31</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -436,7 +446,7 @@ with c3:
                 
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
-                data, msg, ext_spreads = load_sheet(RAW_SHEET_URL)
+                data, msg, ext_spreads = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
                 st.session_state.ref_data = data
                 st.session_state.sheet_msg = msg
                 st.session_state.fwd_spreads = ext_spreads
@@ -489,7 +499,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
-            # --- FAILSAFE: Drop duplicate strikes before setting the index
             calls = day_chain[day_chain['Type'] == 'Call'].drop_duplicates(subset=['Strike']).set_index('Strike')
             puts = day_chain[day_chain['Type'] == 'Put'].drop_duplicates(subset=['Strike']).set_index('Strike')
             
