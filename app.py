@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.23 (Black '76 & Time Convention)
+# VERSION: 10.24 (Automated XJO Forward Curve)
 # ==========================================
 
 import streamlit as st
@@ -80,10 +80,10 @@ st.markdown("""
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
-if 'forward_price' not in st.session_state: st.session_state.forward_price = 0.0
-if 'time_convention' not in st.session_state: st.session_state.time_convention = "Calendar (365)"
+if 'time_convention' not in st.session_state: st.session_state.time_convention = "Trading (252)"
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
+if 'fwd_spreads' not in st.session_state: st.session_state.fwd_spreads = {}
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
 if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
@@ -125,6 +125,19 @@ def load_sheet(raw_url):
         csv_url = f"{raw_url.split('/edit')[0]}/export?format=csv&gid=0" if "/edit" in raw_url else raw_url
         df = pd.read_csv(csv_url, on_bad_lines='skip', dtype=str)
         
+        # Extract Forward Curve Spread logic
+        spreads_dict = {}
+        if 'XJO Forward Yield' in df.columns and 'Spread' in df.columns:
+            fwd_df = df[['XJO Forward Yield', 'Spread']].dropna()
+            for _, row in fwd_df.iterrows():
+                try:
+                    dt = pd.to_datetime(row['XJO Forward Yield'], dayfirst=True, errors='coerce')
+                    val = pd.to_numeric(row['Spread'], errors='coerce')
+                    if pd.notna(dt) and pd.notna(val):
+                        spreads_dict[dt.strftime("%Y-%m-%d")] = val
+                except:
+                    pass
+
         header_map = {
             'ASXCode': 'Code', 'Underlying': 'Ticker', 'OptType': 'Type', 
             'ExpDate': 'Expiry', 'Strike': 'Strike', 'Volatility': 'Vol', 
@@ -134,7 +147,7 @@ def load_sheet(raw_url):
         
         required = ['Code', 'Ticker', 'Strike', 'Expiry']
         if not all(col in df.columns for col in required):
-            return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}"
+            return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}", spreads_dict
 
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
@@ -174,21 +187,21 @@ def load_sheet(raw_url):
             df['UnitMargin'] = 0.0
 
         df = df.dropna(subset=['Code', 'Ticker', 'Strike', 'Expiry'])
-        return df, f"success|{len(df)} Codes Loaded"
+        return df, f"success|{len(df)} Codes Loaded", spreads_dict
     except Exception as e:
-        return pd.DataFrame(), f"error|{str(e)[:30]}"
+        return pd.DataFrame(), f"error|{str(e)[:30]}", {}
 
 if st.session_state.ref_data is None:
-    data, msg = load_sheet(RAW_SHEET_URL)
+    data, msg, extracted_spreads = load_sheet(RAW_SHEET_URL)
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
+    st.session_state.fwd_spreads = extracted_spreads
 
 # --- 4. MATH ENGINE (Black '76 & BS) ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 def black_76_futures_model(S, F, K, T_vol, T_discount, r, v, kind):
-    # Institutional pricing for indices with known Forward curves
     if T_vol <= 0.0:
         price = max(0.0, S - K) if kind == 'Call' else max(0.0, K - S)
         delta = 0.0
@@ -201,7 +214,6 @@ def black_76_futures_model(S, F, K, T_vol, T_discount, r, v, kind):
 
     if kind == 'Call':
         price = math.exp(-r * T_discount) * (F * norm_cdf(d1) - K * norm_cdf(d2))
-        # Spot-adjusted Delta for Portfolio Hedging
         delta = (F / S) * math.exp(-r * T_discount) * norm_cdf(d1)
     else:
         price = math.exp(-r * T_discount) * (K * norm_cdf(-d2) - F * norm_cdf(-d1))
@@ -223,7 +235,7 @@ def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
     if option_type == 'Call': return bs_price 
     else: return max(bs_price, max(0, K - S))
 
-def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vol_pct, current_spot, forward_override):
+def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
     if simulated_spot <= 0 or strike <= 0 or time_days < 0:
         return 0.0, 0.0
         
@@ -236,10 +248,9 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         K = float(strike)
         v = vol_pct / 100.0
         
-        # Volatility Time vs Discounting Time
         days_base = 252.0 if st.session_state.time_convention == 'Trading (252)' else 365.0
         T_vol = time_days / days_base
-        T_discount = time_days / 365.0 # Interest always accrues daily
+        T_discount = time_days / 365.0 
         
         if T_vol <= 0.0:
             price = max(0.0, S - K) if kind == 'Call' else max(0.0, K - S)
@@ -250,14 +261,13 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         
         if is_xjo:
             style = 'EUROPEAN' 
-            # If Forward curve is provided, route directly to Black '76 model
-            if forward_override and forward_override > 0 and current_spot > 0:
-                # If we are simulating matrix movements, we assume the Forward basis holds constant
-                basis = forward_override - current_spot
-                simulated_fwd = S + basis
+            # Automated Forward Curve Routing
+            if expiry_str_key in st.session_state.fwd_spreads:
+                basis_offset = st.session_state.fwd_spreads[expiry_str_key]
+                simulated_fwd = S + basis_offset
                 return black_76_futures_model(S, simulated_fwd, K, T_vol, T_discount, r, v, kind)
             else:
-                q = 0.04 
+                q = 0.04 # Fallback
         elif st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
@@ -346,7 +356,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.23</div>
+            <div class="header-sub">Option Strategy Builder v10.24</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -358,23 +368,20 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- 7. CONTROLS ---
-c1, c2, c3 = st.columns([1, 1.2, 1.8], gap="medium")
+c1, c2, c3 = st.columns([1, 1, 2], gap="medium")
 with c1: 
     display_val = st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker
     query = st.text_input("Ticker or Option Code", value=display_val, placeholder="e.g., BHP or BHPJ84")
 
 with c2:
     if st.session_state.ticker:
-        s1, s2, s3 = st.columns([1, 1, 1.2])
+        s1, s2 = st.columns([1, 1.2])
         new_spot = s1.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
         if new_spot != st.session_state.spot_price:
             st.session_state.spot_price = new_spot
             st.session_state.manual_spot = True
             
-        new_fwd = s2.number_input("Fwd Price (Opt)", value=float(st.session_state.forward_price), format="%.2f", step=1.0)
-        st.session_state.forward_price = new_fwd
-        
-        new_time = s3.selectbox("Time Model", ["Calendar (365)", "Trading (252)"], index=0 if st.session_state.time_convention == "Calendar (365)" else 1)
+        new_time = s2.selectbox("Time Model", ["Trading (252)", "Calendar (365)"], index=0 if st.session_state.time_convention == "Trading (252)" else 1)
         st.session_state.time_convention = new_time
     else: st.write("")
 
@@ -423,9 +430,10 @@ with c3:
                 
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
-                data, msg = load_sheet(RAW_SHEET_URL)
+                data, msg, ext_spreads = load_sheet(RAW_SHEET_URL)
                 st.session_state.ref_data = data
                 st.session_state.sheet_msg = msg
+                st.session_state.fwd_spreads = ext_spreads
                 st.session_state.is_market_open = check_market_hours()
                 st.rerun()
 
@@ -449,6 +457,11 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         default_idx = exp_list.index(st.session_state.preselect_expiry) if st.session_state.preselect_expiry in exp_list else None
         current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
         
+        if current_exp in st.session_state.fwd_spreads and st.session_state.ticker == 'XJO':
+            basis_val = st.session_state.fwd_spreads[current_exp]
+            derived_fwd = st.session_state.spot_price + basis_val
+            st.caption(f"📈 **Black '76 Active** | Implied Basis: **{basis_val} pts** | Forward Curve: **{derived_fwd:.2f}**")
+        
         if current_exp:
             target_dt = exp_map[current_exp]
             days_diff = (target_dt - today).days
@@ -461,7 +474,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
                 
                 px, delta = calculate_price_and_delta(
                     style, row['Type'], st.session_state.spot_price, row['Strike'], 
-                    days_diff, vol, st.session_state.spot_price, st.session_state.forward_price
+                    days_diff, vol, current_exp
                 )
                 
                 return pd.Series([px, delta, vol, margin])
@@ -628,7 +641,7 @@ if st.session_state.legs:
         
         new_theo, new_delta = calculate_price_and_delta(
             leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
-            leg['Expiry'], leg['Vol'], st.session_state.spot_price, st.session_state.forward_price
+            leg['Expiry'], leg['Vol'], leg['ExpDateStr']
         )
         
         net_delta = leg['Qty'] * new_delta * contract_multiplier
@@ -709,7 +722,7 @@ if st.session_state.legs:
                     
                     matched_theo, _ = calculate_price_and_delta(
                         new_style, leg['Type'], st.session_state.spot_price, new_strike, 
-                        leg['Expiry'], new_vol, st.session_state.spot_price, st.session_state.forward_price
+                        leg['Expiry'], new_vol, leg['ExpDateStr']
                     )
                     st.session_state.legs[i]['Entry'] = matched_theo
                 else:
@@ -722,7 +735,7 @@ if st.session_state.legs:
                 st.session_state.legs[i]['Vol'] = new_vol_input
                 calibrated_theo, _ = calculate_price_and_delta(
                     leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
-                    leg['Expiry'], new_vol_input, st.session_state.spot_price, st.session_state.forward_price
+                    leg['Expiry'], new_vol_input, leg['ExpDateStr']
                 )
                 st.session_state.legs[i]['Entry'] = calibrated_theo
                 st.rerun()
@@ -781,7 +794,7 @@ if st.session_state.legs:
                 rem_days = max(0, leg['Expiry'] - d)
                 exit_px, _ = calculate_price_and_delta(
                     leg['Style'], leg['Type'], p, leg['Strike'], 
-                    rem_days, sim_vol, st.session_state.spot_price, st.session_state.forward_price
+                    rem_days, sim_vol, leg['ExpDateStr']
                 )
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
             
@@ -835,7 +848,7 @@ if st.session_state.legs:
         for leg in st.session_state.legs:
             price_t0, _ = calculate_price_and_delta(
                 leg['Style'], leg['Type'], p, leg['Strike'], 
-                leg['Expiry'], leg['Vol'], st.session_state.spot_price, st.session_state.forward_price
+                leg['Expiry'], leg['Vol'], leg['ExpDateStr']
             )
             val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
             price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
