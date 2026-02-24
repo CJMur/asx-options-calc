@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.31 (Multi-Sheet GID Implementation)
+# VERSION: 10.32 (UI Cleanup - Removed Entry Column)
 # ==========================================
 
 import streamlit as st
@@ -109,7 +109,6 @@ TOOLTIPS = {
     "Delta": "The rate of change of the option price with respect to the underlying asset's price.",
     "Strike": "The set price at which the option contract can be exercised.",
     "Code": "The unique ASX exchange ticker symbol for this specific option contract.",
-    "Entry": "The price you entered the trade at (or current market price).",
     "Premium": "The total cost or credit for the trade. Calculated as Price × Quantity × Contract Multiplier.",
     "Margin": "The estimated collateral required to hold this position."
 }
@@ -376,7 +375,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.31</div>
+            <div class="header-sub">Option Strategy Builder v10.32</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -629,7 +628,8 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    h_col_spec = [0.8, 1.0, 0.7, 0.9, 1.2, 2.7, 1.2, 1.0, 1.0, 1.0, 1.2, 1.5, 0.5]
+    # Adjusted column specs to 12 columns total since Entry was removed
+    h_col_spec = [0.8, 1.1, 0.7, 0.9, 1.2, 2.7, 1.2, 1.2, 1.2, 1.4, 1.6, 0.5]
     cols_header = st.columns(h_col_spec)
     
     with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
@@ -639,11 +639,10 @@ if st.session_state.legs:
     with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
     with cols_header[5]: st.markdown(f'<div class="trade-header" title="Smart Step Strike">Strike</div>', unsafe_allow_html=True)
     with cols_header[6]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
-    with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Entry"]}">Entry</div>', unsafe_allow_html=True)
-    with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
-    with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
-    with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
-    with cols_header[11]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
+    with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
+    with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
+    with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
+    with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
@@ -660,6 +659,7 @@ if st.session_state.legs:
             leg['Expiry'], leg['Vol'], leg['ExpDateStr']
         )
         
+        # We continue to use leg['Entry'] for the underlying PnL calculations, but visually display the newly calibrated Theo
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
         row_margin = leg.get('MarginUnit', 0.0) * abs(leg['Qty']) 
@@ -756,12 +756,11 @@ if st.session_state.legs:
                 st.session_state.legs[i]['Entry'] = calibrated_theo
                 st.rerun()
                 
-        with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>${leg['Entry']:.3f}</div>", unsafe_allow_html=True)
-        with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>${new_theo:.3f}</div>", unsafe_allow_html=True)
-        with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
-        with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
-        with c[11]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
-        with c[12]:
+        with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>${new_theo:.3f}</div>", unsafe_allow_html=True)
+        with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
+        with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
+        with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
+        with c[11]:
             if st.button("✕", key=f"d_{leg['id']}"):
                 st.session_state.legs.pop(i)
                 st.rerun()
@@ -773,10 +772,10 @@ if st.session_state.legs:
     with st.container():
         f = st.columns(h_col_spec)
         with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
-        with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>${strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
-        with f[9]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-        with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
-        with f[11]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+        with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>${strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
+        with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
+        with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+        with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
     # --- MATRIX ---
     st.markdown("---")
