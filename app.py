@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.36 (XJOW Priority & Cache Wipe)
+# VERSION: 10.37 (Duplicate Code Purge)
 # ==========================================
 
 import streamlit as st
@@ -127,7 +127,6 @@ def fetch_rba_cash_rate():
 
 global_rba_rate = fetch_rba_cash_rate()
 
-# Reduced TTL to 5 seconds to permanently prevent Streamlit from holding stale data
 @st.cache_data(ttl=5)
 def load_databases(opts_url, fwd_url):
     try:
@@ -163,7 +162,6 @@ def load_databases(opts_url, fwd_url):
         # 2. Load Main Options Data
         df = pd.read_csv(live_opts_url, on_bad_lines='skip', dtype=str)
         
-        # --- BUSDATE EXTRACTOR ---
         db_date = "Unknown"
         for col in df.columns:
             if str(col).strip().lower() in ['busdate', 'bus date', 'date', 'businessdate']:
@@ -186,6 +184,10 @@ def load_databases(opts_url, fwd_url):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
+        # --- THE GHOST ROW PURGE ---
+        # Before doing any math, drop duplicates of the exact same option Code, keeping only the last (newest) one
+        df = df.drop_duplicates(subset=['Code'], keep='last')
+
         if 'Type' in df.columns:
             raw_type = df['Type'].astype(str).str.strip().str.upper()
             df['Type'] = np.where(raw_type.str.startswith('C'), 'Call', 'Put')
@@ -388,7 +390,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.36</div>
+            <div class="header-sub">Option Strategy Builder v10.37</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -459,12 +461,10 @@ with c3:
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
                 
-                # --- HARD REFRESH: Force wipe the function cache before pulling ---
                 load_databases.clear()
                 
                 data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
                 
-                # Overwrite the session state with the fresh data
                 st.session_state.ref_data = data
                 st.session_state.sheet_msg = msg
                 st.session_state.fwd_spreads = ext_spreads
@@ -505,7 +505,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             def calc_row_metrics(row):
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
-                # For chain view, fallback to raw minimum UnitMargin
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
                 px, delta = calculate_price_and_delta(
@@ -519,7 +518,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
-            # --- FAILSAFE: Sort by Code descending so XJOW takes priority over XJO before dropping duplicates
             calls = day_chain[day_chain['Type'] == 'Call'].sort_values('Code', ascending=False).drop_duplicates(subset=['Strike']).set_index('Strike')
             puts = day_chain[day_chain['Type'] == 'Put'].sort_values('Code', ascending=False).drop_duplicates(subset=['Strike']).set_index('Strike')
             
@@ -773,7 +771,6 @@ if st.session_state.legs:
                 st.session_state.legs[i]['Strike'] = new_strike
                 match = subset[subset['Strike'] == new_strike]
                 if not match.empty:
-                    # Sort logic applied here too to ensure we pull the XJOW code if it clashes
                     match = match.sort_values('Code', ascending=False)
                     new_vol = float(match.iloc[0]['Vol'])
                     new_style = match.iloc[0].get('Style', 'American')
