@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.33 (Portfolio Margin Logic)
+# VERSION: 10.34 (BusDate UI & Google Cache-Buster)
 # ==========================================
 
 import streamlit as st
@@ -23,6 +23,7 @@ OPTIONS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU-
 
 # Forward Curve Database 
 FWD_CURVE_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/export?format=csv&gid=861426630"
+
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -92,6 +93,7 @@ if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
 if 'fwd_spreads' not in st.session_state: st.session_state.fwd_spreads = {}
+if 'data_date' not in st.session_state: st.session_state.data_date = "Unknown"
 if 'sheet_msg' not in st.session_state: st.session_state.sheet_msg = "Initializing..."
 if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
@@ -129,10 +131,15 @@ global_rba_rate = fetch_rba_cash_rate()
 @st.cache_data(ttl=600)
 def load_databases(opts_url, fwd_url):
     try:
+        # Cache buster to force Google Sheets to ignore its own CDN and generate a fresh CSV
+        cb = str(uuid.uuid4())[:8]
+        live_fwd_url = f"{fwd_url}&cb={cb}"
+        live_opts_url = f"{opts_url}&cb={cb}"
+        
         # 1. Load Forward Curve Data
         spreads_dict = {}
         try:
-            fwd_df = pd.read_csv(fwd_url, on_bad_lines='skip', dtype=str)
+            fwd_df = pd.read_csv(live_fwd_url, on_bad_lines='skip', dtype=str)
             spread_col, fwd_date_col = None, None
             
             for col in fwd_df.columns:
@@ -155,7 +162,17 @@ def load_databases(opts_url, fwd_url):
             print(f"Failed to load fwd curve: {e}")
 
         # 2. Load Main Options Data
-        df = pd.read_csv(opts_url, on_bad_lines='skip', dtype=str)
+        df = pd.read_csv(live_opts_url, on_bad_lines='skip', dtype=str)
+        
+        # --- BUSDATE EXTRACTOR ---
+        db_date = "Unknown"
+        for col in df.columns:
+            if str(col).strip().lower() in ['busdate', 'bus date', 'date', 'businessdate']:
+                valid_dates = df[col].dropna()
+                if not valid_dates.empty:
+                    # Strip timestamps if it exported as a full datetime string
+                    db_date = str(valid_dates.iloc[0]).split(' ')[0].strip()
+                break
 
         header_map = {
             'ASXCode': 'Code', 'Underlying': 'Ticker', 'OptType': 'Type', 
@@ -166,7 +183,7 @@ def load_databases(opts_url, fwd_url):
         
         required = ['Code', 'Ticker', 'Strike', 'Expiry']
         if not all(col in df.columns for col in required):
-            return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}", spreads_dict
+            return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}", spreads_dict, db_date
 
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
@@ -199,25 +216,24 @@ def load_databases(opts_url, fwd_url):
         scen_cols = [c for c in df.columns if 'Scenario' in str(c)]
         if scen_cols:
             for col in scen_cols:
-                # Force cleanup of the numeric arrays so the engine can parse them without crashing
                 clean_str = df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
                 df[col] = pd.to_numeric(clean_str, errors='coerce').fillna(0.0)
             
-            # Keep UnitMargin for the Chain Display
             df['UnitMargin'] = df[scen_cols].min(axis=1, skipna=True).fillna(0.0)
         else:
             df['UnitMargin'] = 0.0
 
         df = df.dropna(subset=['Code', 'Ticker', 'Strike', 'Expiry'])
-        return df, f"success|{len(df)} Codes Loaded", spreads_dict
+        return df, f"success|{len(df)} Codes Loaded", spreads_dict, db_date
     except Exception as e:
-        return pd.DataFrame(), f"error|{str(e)[:30]}", {}
+        return pd.DataFrame(), f"error|{str(e)[:30]}", {}, "Error"
 
 if st.session_state.ref_data is None:
-    data, msg, extracted_spreads = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
+    data, msg, extracted_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
     st.session_state.fwd_spreads = extracted_spreads
+    st.session_state.data_date = d_date
 
 # --- 4. MATH ENGINE (Black '76 & BS) ---
 def norm_cdf(x):
@@ -361,20 +377,21 @@ def fetch_data(t):
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 fwd_status = f" | 📅 Fwd Spreads: {len(st.session_state.fwd_spreads)}"
+date_status = f" | 📊 Data: {st.session_state.data_date}"
 
 if st.session_state.ticker == 'XJO':
-    div_display_txt = f" | 🏦 RBA: {global_rba_rate}%{fwd_status}"
+    div_display_txt = f" | 🏦 RBA: {global_rba_rate}%{fwd_status}{date_status}"
 elif st.session_state.div_info:
-    div_display_txt = f" | 💰 Auto Div: ${st.session_state.div_info['amount']:.2f}"
+    div_display_txt = f" | 💰 Auto Div: ${st.session_state.div_info['amount']:.2f}{date_status}"
 else:
-    div_display_txt = ""
+    div_display_txt = f"{date_status}"
 
 st.markdown(f"""
 <div class="header-box">
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.33</div>
+            <div class="header-sub">Option Strategy Builder v10.34</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -444,10 +461,11 @@ with c3:
                 
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
-                data, msg, ext_spreads = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
+                data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
                 st.session_state.ref_data = data
                 st.session_state.sheet_msg = msg
                 st.session_state.fwd_spreads = ext_spreads
+                st.session_state.data_date = d_date
                 st.session_state.is_market_open = check_market_hours()
                 st.rerun()
 
