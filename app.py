@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.32 (UI Cleanup - Removed Entry Column)
+# VERSION: 10.33 (Portfolio Margin Logic)
 # ==========================================
 
 import streamlit as st
@@ -23,7 +23,6 @@ OPTIONS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU-
 
 # Forward Curve Database 
 FWD_CURVE_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/export?format=csv&gid=861426630"
-
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -110,7 +109,7 @@ TOOLTIPS = {
     "Strike": "The set price at which the option contract can be exercised.",
     "Code": "The unique ASX exchange ticker symbol for this specific option contract.",
     "Premium": "The total cost or credit for the trade. Calculated as Price × Quantity × Contract Multiplier.",
-    "Margin": "The estimated collateral required to hold this position."
+    "Margin": "The estimated portfolio collateral required to hold this specific strategy."
 }
 
 # --- 3. DATA ENGINE ---
@@ -196,13 +195,16 @@ def load_databases(opts_url, fwd_url):
             
         df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce') if 'Settlement' in df.columns else 0.0
 
+        # --- PORTFOLIO MARGIN UPGRADE: Retain full Scenario Arrays ---
         scen_cols = [c for c in df.columns if 'Scenario' in str(c)]
         if scen_cols:
-            scen_df = df[scen_cols].copy()
             for col in scen_cols:
-                clean_str = scen_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
-                scen_df[col] = pd.to_numeric(clean_str, errors='coerce')
-            df['UnitMargin'] = scen_df.min(axis=1, skipna=True).fillna(0.0)
+                # Force cleanup of the numeric arrays so the engine can parse them without crashing
+                clean_str = df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True)
+                df[col] = pd.to_numeric(clean_str, errors='coerce').fillna(0.0)
+            
+            # Keep UnitMargin for the Chain Display
+            df['UnitMargin'] = df[scen_cols].min(axis=1, skipna=True).fillna(0.0)
         else:
             df['UnitMargin'] = 0.0
 
@@ -267,8 +269,6 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         S = float(simulated_spot)
         K = float(strike)
         v = vol_pct / 100.0
-        
-        # Hard-locked to Calendar Days
         T = time_days / 365.0
         
         if T <= 0.0:
@@ -280,13 +280,12 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         
         if is_xjo:
             style = 'EUROPEAN' 
-            # Automated Forward Curve Routing
             if expiry_str_key in st.session_state.fwd_spreads:
                 basis_offset = st.session_state.fwd_spreads[expiry_str_key]
                 simulated_fwd = S + basis_offset
                 return black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
             else:
-                q = 0.04 # Fallback
+                q = 0.04
         elif st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
@@ -375,7 +374,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.32</div>
+            <div class="header-sub">Option Strategy Builder v10.33</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -485,6 +484,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             def calc_row_metrics(row):
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
                 style = row.get('Style', 'American')
+                # For chain view, fallback to raw minimum UnitMargin
                 margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                 
                 px, delta = calculate_price_and_delta(
@@ -628,7 +628,6 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    # Adjusted column specs to 12 columns total since Entry was removed
     h_col_spec = [0.8, 1.1, 0.7, 0.9, 1.2, 2.7, 1.2, 1.2, 1.2, 1.4, 1.6, 0.5]
     cols_header = st.columns(h_col_spec)
     
@@ -646,6 +645,36 @@ if st.session_state.legs:
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
+    # --- PORTFOLIO MARGIN SIMULATION ENGINE ---
+    scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)]
+    portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
+    leg_risk_arrays = []
+    
+    tkr = st.session_state.ticker.replace(".AX", "")
+    
+    # 1. Gather the raw 16-scenario risk array for every leg in the strategy
+    for leg in st.session_state.legs:
+        match = st.session_state.ref_data[
+            (st.session_state.ref_data['Ticker'] == tkr) & 
+            (st.session_state.ref_data['Type'] == leg['Type']) & 
+            (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
+            (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+        ]
+        
+        if not match.empty and scen_cols:
+            risk_array = match.iloc[0][scen_cols].values.astype(float)
+        else:
+            risk_array = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
+            
+        leg_risk_arrays.append(risk_array)
+        
+        # 2. Multiply that array by the trade quantity and sum it into the total portfolio
+        portfolio_scenarios += risk_array * leg['Qty']
+        
+    # 3. Find the single absolute worst-case scenario for the combined strategy (e.g., Scenario 11)
+    worst_scenario_idx = np.argmin(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0
+    # -------------------------------------------
+
     total_delta, total_premium, raw_theo_sum, total_margin = 0, 0, 0, 0
     max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
     
@@ -659,10 +688,11 @@ if st.session_state.legs:
             leg['Expiry'], leg['Vol'], leg['ExpDateStr']
         )
         
-        # We continue to use leg['Entry'] for the underlying PnL calculations, but visually display the newly calibrated Theo
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
-        row_margin = leg.get('MarginUnit', 0.0) * abs(leg['Qty']) 
+        
+        # 4. Pull the exact dollar margin for this specific leg based on the Portfolio's worst-case scenario
+        row_margin = leg_risk_arrays[i][worst_scenario_idx] * leg['Qty'] if len(leg_risk_arrays[i]) > 0 else 0.0
         
         total_delta += net_delta
         total_premium += premium
@@ -688,7 +718,6 @@ if st.session_state.legs:
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
-            tkr = st.session_state.ticker.replace(".AX", "")
             subset = st.session_state.ref_data[
                 (st.session_state.ref_data['Ticker'] == tkr) & 
                 (st.session_state.ref_data['Type'] == leg['Type']) & 
