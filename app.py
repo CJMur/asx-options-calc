@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.35 (Hard Refresh Data Fix)
+# VERSION: 10.36 (XJOW Priority & Cache Wipe)
 # ==========================================
 
 import streamlit as st
@@ -127,10 +127,10 @@ def fetch_rba_cash_rate():
 
 global_rba_rate = fetch_rba_cash_rate()
 
-@st.cache_data(ttl=600)
+# Reduced TTL to 5 seconds to permanently prevent Streamlit from holding stale data
+@st.cache_data(ttl=5)
 def load_databases(opts_url, fwd_url):
     try:
-        # Cache buster to force Google Sheets to ignore its own CDN
         cb = str(uuid.uuid4())[:8]
         live_fwd_url = f"{fwd_url}&cb={cb}"
         live_opts_url = f"{opts_url}&cb={cb}"
@@ -388,7 +388,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.35</div>
+            <div class="header-sub">Option Strategy Builder v10.36</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -519,8 +519,9 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
             day_chain = pd.concat([day_chain, metrics], axis=1)
             
-            calls = day_chain[day_chain['Type'] == 'Call'].drop_duplicates(subset=['Strike']).set_index('Strike')
-            puts = day_chain[day_chain['Type'] == 'Put'].drop_duplicates(subset=['Strike']).set_index('Strike')
+            # --- FAILSAFE: Sort by Code descending so XJOW takes priority over XJO before dropping duplicates
+            calls = day_chain[day_chain['Type'] == 'Call'].sort_values('Code', ascending=False).drop_duplicates(subset=['Strike']).set_index('Strike')
+            puts = day_chain[day_chain['Type'] == 'Put'].sort_values('Code', ascending=False).drop_duplicates(subset=['Strike']).set_index('Strike')
             
             all_strikes = sorted(list(set(calls.index) | set(puts.index)))
             df_view = pd.DataFrame({'STRIKE': all_strikes})
@@ -673,7 +674,6 @@ if st.session_state.legs:
     
     tkr = st.session_state.ticker.replace(".AX", "")
     
-    # 1. Gather the raw 16-scenario risk array for every leg in the strategy
     for leg in st.session_state.legs:
         match = st.session_state.ref_data[
             (st.session_state.ref_data['Ticker'] == tkr) & 
@@ -688,11 +688,8 @@ if st.session_state.legs:
             risk_array = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
             
         leg_risk_arrays.append(risk_array)
-        
-        # 2. Multiply that array by the trade quantity and sum it into the total portfolio
         portfolio_scenarios += risk_array * leg['Qty']
         
-    # 3. Find the single absolute worst-case scenario for the combined strategy
     worst_scenario_idx = np.argmin(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0
     # -------------------------------------------
 
@@ -711,8 +708,6 @@ if st.session_state.legs:
         
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
-        
-        # 4. Pull the exact dollar margin for this specific leg based on the Portfolio's worst-case scenario
         row_margin = leg_risk_arrays[i][worst_scenario_idx] * leg['Qty'] if len(leg_risk_arrays[i]) > 0 else 0.0
         
         total_delta += net_delta
@@ -778,6 +773,8 @@ if st.session_state.legs:
                 st.session_state.legs[i]['Strike'] = new_strike
                 match = subset[subset['Strike'] == new_strike]
                 if not match.empty:
+                    # Sort logic applied here too to ensure we pull the XJOW code if it clashes
+                    match = match.sort_values('Code', ascending=False)
                     new_vol = float(match.iloc[0]['Vol'])
                     new_style = match.iloc[0].get('Style', 'American')
                     
