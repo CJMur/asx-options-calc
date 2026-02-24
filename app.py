@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.37 (Duplicate Code Purge)
+# VERSION: 10.38 (Speed & Optimization Update)
 # ==========================================
 
 import streamlit as st
@@ -127,10 +127,11 @@ def fetch_rba_cash_rate():
 
 global_rba_rate = fetch_rba_cash_rate()
 
-@st.cache_data(ttl=5)
-def load_databases(opts_url, fwd_url):
+# Restored long memory (1 hour) for fast UI interaction
+@st.cache_data(ttl=3600)
+def load_databases(opts_url, fwd_url, cb="default"):
     try:
-        cb = str(uuid.uuid4())[:8]
+        # Cache-buster is passed purely from the "LOAD OPTIONS" button
         live_fwd_url = f"{fwd_url}&cb={cb}"
         live_opts_url = f"{opts_url}&cb={cb}"
         
@@ -184,8 +185,7 @@ def load_databases(opts_url, fwd_url):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
-        # --- THE GHOST ROW PURGE ---
-        # Before doing any math, drop duplicates of the exact same option Code, keeping only the last (newest) one
+        # Purge ghost rows
         df = df.drop_duplicates(subset=['Code'], keep='last')
 
         if 'Type' in df.columns:
@@ -228,7 +228,7 @@ def load_databases(opts_url, fwd_url):
         return pd.DataFrame(), f"error|{str(e)[:30]}", {}, "Error"
 
 if st.session_state.ref_data is None:
-    data, msg, extracted_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
+    data, msg, extracted_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, "default")
     st.session_state.ref_data = data
     st.session_state.sheet_msg = msg
     st.session_state.fwd_spreads = extracted_spreads
@@ -390,7 +390,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.37</div>
+            <div class="header-sub">Option Strategy Builder v10.38</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -461,9 +461,10 @@ with c3:
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
                 
-                load_databases.clear()
+                load_databases.clear() # Wipe the internal cache
+                new_cb = str(uuid.uuid4())[:8] # Generate a unique cache-buster string
                 
-                data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
+                data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, new_cb)
                 
                 st.session_state.ref_data = data
                 st.session_state.sheet_msg = msg
