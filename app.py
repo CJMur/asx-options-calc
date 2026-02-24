@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.34 (BusDate UI & Google Cache-Buster)
+# VERSION: 10.35 (Hard Refresh Data Fix)
 # ==========================================
 
 import streamlit as st
@@ -23,7 +23,6 @@ OPTIONS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU-
 
 # Forward Curve Database 
 FWD_CURVE_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/export?format=csv&gid=861426630"
-
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -131,7 +130,7 @@ global_rba_rate = fetch_rba_cash_rate()
 @st.cache_data(ttl=600)
 def load_databases(opts_url, fwd_url):
     try:
-        # Cache buster to force Google Sheets to ignore its own CDN and generate a fresh CSV
+        # Cache buster to force Google Sheets to ignore its own CDN
         cb = str(uuid.uuid4())[:8]
         live_fwd_url = f"{fwd_url}&cb={cb}"
         live_opts_url = f"{opts_url}&cb={cb}"
@@ -170,7 +169,6 @@ def load_databases(opts_url, fwd_url):
             if str(col).strip().lower() in ['busdate', 'bus date', 'date', 'businessdate']:
                 valid_dates = df[col].dropna()
                 if not valid_dates.empty:
-                    # Strip timestamps if it exported as a full datetime string
                     db_date = str(valid_dates.iloc[0]).split(' ')[0].strip()
                 break
 
@@ -212,7 +210,6 @@ def load_databases(opts_url, fwd_url):
             
         df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce') if 'Settlement' in df.columns else 0.0
 
-        # --- PORTFOLIO MARGIN UPGRADE: Retain full Scenario Arrays ---
         scen_cols = [c for c in df.columns if 'Scenario' in str(c)]
         if scen_cols:
             for col in scen_cols:
@@ -391,7 +388,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.34</div>
+            <div class="header-sub">Option Strategy Builder v10.35</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -450,7 +447,7 @@ with c3:
 
             st.session_state.ticker = ticker_to_fetch
 
-            with st.spinner("Fetching Market Data..."):
+            with st.spinner("Fetching Fresh Market Data..."):
                 source, px, div_data = fetch_data(st.session_state.ticker)
                 
                 if px > 0:
@@ -461,7 +458,13 @@ with c3:
                 
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
+                
+                # --- HARD REFRESH: Force wipe the function cache before pulling ---
+                load_databases.clear()
+                
                 data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL)
+                
+                # Overwrite the session state with the fresh data
                 st.session_state.ref_data = data
                 st.session_state.sheet_msg = msg
                 st.session_state.fwd_spreads = ext_spreads
@@ -689,7 +692,7 @@ if st.session_state.legs:
         # 2. Multiply that array by the trade quantity and sum it into the total portfolio
         portfolio_scenarios += risk_array * leg['Qty']
         
-    # 3. Find the single absolute worst-case scenario for the combined strategy (e.g., Scenario 11)
+    # 3. Find the single absolute worst-case scenario for the combined strategy
     worst_scenario_idx = np.argmin(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0
     # -------------------------------------------
 
