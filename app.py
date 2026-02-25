@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.40 (Matrix UI Tweak)
+# VERSION: 1.1.4 (Restart Button & Margin Finalized)
 # ==========================================
 
 import streamlit as st
@@ -382,7 +382,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.40</div>
+            <div class="header-sub">Option Strategy Builder v1.1.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -409,7 +409,29 @@ with c2:
 
 with c3:
     st.write(""); st.write("")
-    if st.button("LOAD OPTIONS", type="primary", use_container_width=True) or (query and query.upper() != display_val):
+    
+    # Split column 3 for the LOAD and RESTART buttons
+    bc1, bc2 = st.columns([3, 1.2])
+    
+    with bc2:
+        if st.button("RESTART", use_container_width=True):
+            # Save the cached database so it doesn't force a 5-second re-download on clear
+            saved_db = st.session_state.get('ref_data', None)
+            saved_fwd = st.session_state.get('fwd_spreads', {})
+            saved_date = st.session_state.get('data_date', 'Unknown')
+            
+            st.session_state.clear() # Wipe all legs, settings, and UI selections
+            
+            # Restore the database into memory
+            st.session_state.ref_data = saved_db
+            st.session_state.fwd_spreads = saved_fwd
+            st.session_state.data_date = saved_date
+            st.rerun()
+
+    with bc1:
+        do_load = st.button("LOAD OPTIONS", type="primary", use_container_width=True)
+        
+    if do_load or (query and query.upper() != display_val):
         if not query: st.warning("Please enter a ticker or option code.")
         else:
             query_upper = query.upper().strip()
@@ -453,8 +475,9 @@ with c3:
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
                 
-                load_databases.clear() # Wipe the internal cache
-                new_cb = str(uuid.uuid4())[:8] # Generate a unique cache-buster string
+                # --- FORCED CACHE WIPE ON LOAD ---
+                load_databases.clear() 
+                new_cb = str(uuid.uuid4())[:8] 
                 
                 data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, new_cb)
                 
@@ -899,7 +922,6 @@ if st.session_state.legs:
         sign = "+" if val > 0 else ""
         return f"${val:,.0f} ({sign}{pct:.1f}%)"
 
-    # --- SPOT ROW BOLDING INJECTED HERE ---
     def make_heatmap(df):
         max_val = df.max().max()
         min_val = df.min().min()
