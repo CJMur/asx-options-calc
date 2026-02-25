@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.39 (Checkbox UI & Matrix Bolding)
+# VERSION: 10.40 (Matrix UI Tweak)
 # ==========================================
 
 import streamlit as st
@@ -382,7 +382,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.39</div>
+            <div class="header-sub">Option Strategy Builder v10.40</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -920,9 +920,9 @@ if st.session_state.legs:
                     alpha = 0.05 + 0.35 * intensity
                     s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
                 
-                # Apply visual pop to the Spot row
+                # Apply visual pop to the Spot row (No blue border, just bold text)
                 if is_spot:
-                    s += "font-weight: 900; color: #1DBFD2; border-top: 2px solid #1DBFD2; border-bottom: 2px solid #1DBFD2; "
+                    s += "font-weight: bold; "
                     
                 styles_df.loc[idx, col] = s
         return styles_df
