@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.1.5 (Client UI Polish)
+# VERSION: 1.1.6 (Date Normalization & UI Reset)
 # ==========================================
 
 import streamlit as st
@@ -94,6 +94,7 @@ if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
+if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0 # UI Checkbox Reset Counter
 
 if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
 if 'preselect_expiry' not in st.session_state: st.session_state.preselect_expiry = None
@@ -182,9 +183,11 @@ def load_databases(opts_url, fwd_url, cb="default"):
         # Purge ghost rows
         df = df.drop_duplicates(subset=['Code'], keep='last')
 
+        # Advanced Type Parsing to catch 'Weekly Call', 'Call - E', etc.
         if 'Type' in df.columns:
             raw_type = df['Type'].astype(str).str.strip().str.upper()
-            df['Type'] = np.where(raw_type.str.startswith('C'), 'Call', 'Put')
+            is_call = raw_type.str.contains('CALL') | raw_type.str.startswith('C')
+            df['Type'] = np.where(is_call, 'Call', 'Put')
         else:
             df['Type'] = 'Call'
             
@@ -195,7 +198,9 @@ def load_databases(opts_url, fwd_url, cb="default"):
             df['Style'] = 'American'
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
-        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
+        
+        # --- DATE NORMALIZATION FIX: Strip timestamps so Calls and Puts sync perfectly ---
+        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
             df['Vol'] = pd.to_numeric(df['Vol'].astype(str).str.replace('%', ''), errors='coerce')
@@ -371,7 +376,6 @@ def fetch_data(t):
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
 
-# Cleaned up header info for client presentation
 if st.session_state.div_info and st.session_state.ticker != 'XJO':
     div_display_txt = f"💰 Auto Div: ${st.session_state.div_info['amount']:.2f} | {date_status}"
 else:
@@ -382,7 +386,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.1.5</div>
+            <div class="header-sub">Option Strategy Builder v1.1.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -588,7 +592,8 @@ if not df_view.empty and current_exp:
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
-    editor_key = f"chain_editor_{current_exp}_{st.session_state.ticker}"
+    # DYNAMIC CHECKBOX RESET: Attaches a background counter to the ID of the UI table
+    editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
     edited_df = st.data_editor(
         styled_disp,
@@ -647,8 +652,8 @@ if not df_view.empty and current_exp:
                 "Delta": float(delta_val), 
                 "MarginUnit": float(row['C_Margin'] if kind == 'Call' else row['P_Margin'])
             })
-            if editor_key in st.session_state:
-                del st.session_state[editor_key]
+            # FORCES THE CHECKBOX TO RESET TO BLANK AFTER YOU ADD A LEG
+            st.session_state.editor_reset += 1
             st.rerun()
             
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
