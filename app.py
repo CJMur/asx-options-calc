@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.38 (Speed & Optimization Update)
+# VERSION: 1.1.8 (Universal XJO Merge)
 # ==========================================
 
 import streamlit as st
@@ -48,7 +48,7 @@ st.markdown("""
         background-color: #16aebf !important;
     }
     div[data-testid="stButton"] button[kind="secondary"] {
-        background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
+        background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1; font-weight: bold;
     }
     
     /* --- SLIDER COLOR FIX (Electric Blue) --- */
@@ -74,10 +74,6 @@ st.markdown("""
         user-select: none; display: flex; align-items: center; 
         min-height: 40px; padding: 0 8px; border-radius: 4px; width: 100%;
     }
-    
-    button[kind="secondary"] {
-        padding: 0rem 0.5rem !important; min-height: 0px !important; height: 32px !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -98,6 +94,7 @@ if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
+if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0 
 
 if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
 if 'preselect_expiry' not in st.session_state: st.session_state.preselect_expiry = None
@@ -127,11 +124,9 @@ def fetch_rba_cash_rate():
 
 global_rba_rate = fetch_rba_cash_rate()
 
-# Restored long memory (1 hour) for fast UI interaction
 @st.cache_data(ttl=3600)
 def load_databases(opts_url, fwd_url, cb="default"):
     try:
-        # Cache-buster is passed purely from the "LOAD OPTIONS" button
         live_fwd_url = f"{fwd_url}&cb={cb}"
         live_opts_url = f"{opts_url}&cb={cb}"
         
@@ -185,12 +180,12 @@ def load_databases(opts_url, fwd_url, cb="default"):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
-        # Purge ghost rows
         df = df.drop_duplicates(subset=['Code'], keep='last')
 
         if 'Type' in df.columns:
             raw_type = df['Type'].astype(str).str.strip().str.upper()
-            df['Type'] = np.where(raw_type.str.startswith('C'), 'Call', 'Put')
+            is_call = raw_type.str.contains('CALL') | raw_type.str.startswith('C')
+            df['Type'] = np.where(is_call, 'Call', 'Put')
         else:
             df['Type'] = 'Call'
             
@@ -201,7 +196,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
             df['Style'] = 'American'
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
-        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce')
+        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
             df['Vol'] = pd.to_numeric(df['Vol'].astype(str).str.replace('%', ''), errors='coerce')
@@ -278,7 +273,9 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         
     r = global_rba_rate / 100.0
     q = 0.0
-    is_xjo = (st.session_state.ticker == 'XJO')
+    
+    # Universal XJO check for the math engine
+    is_xjo = st.session_state.ticker.startswith('XJO')
     
     try:
         S = float(simulated_spot)
@@ -333,6 +330,9 @@ st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
+    # Normalize weeklies to main index for Yahoo pricing
+    if clean.startswith('XJO'): clean = 'XJO'
+    
     sym = "^AXJO" if clean == "XJO" else f"{clean}.AX"
     div_info, spot = None, 0.0
     
@@ -375,13 +375,10 @@ def fetch_data(t):
 
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
-fwd_status = f" | 📅 Fwd Spreads: {len(st.session_state.fwd_spreads)}"
-date_status = f" | 📊 Data: {st.session_state.data_date}"
+date_status = f"📊 Data: {st.session_state.data_date}"
 
-if st.session_state.ticker == 'XJO':
-    div_display_txt = f" | 🏦 RBA: {global_rba_rate}%{fwd_status}{date_status}"
-elif st.session_state.div_info:
-    div_display_txt = f" | 💰 Auto Div: ${st.session_state.div_info['amount']:.2f}{date_status}"
+if st.session_state.div_info and not st.session_state.ticker.startswith('XJO'):
+    div_display_txt = f"💰 Auto Div: ${st.session_state.div_info['amount']:.2f} | {date_status}"
 else:
     div_display_txt = f"{date_status}"
 
@@ -390,12 +387,12 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.38</div>
+            <div class="header-sub">Option Strategy Builder v1.1.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
             <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
-            <span class="status-tag">{mkt_status}{div_display_txt}</span>
+            <span class="status-tag">{mkt_status} | {div_display_txt}</span>
         </div>
     </div>
 </div>
@@ -417,7 +414,26 @@ with c2:
 
 with c3:
     st.write(""); st.write("")
-    if st.button("LOAD OPTIONS", type="primary", use_container_width=True) or (query and query.upper() != display_val):
+    
+    bc1, bc2 = st.columns([3, 1.2])
+    
+    with bc2:
+        if st.button("🔄 RESTART", use_container_width=True):
+            saved_db = st.session_state.get('ref_data', None)
+            saved_fwd = st.session_state.get('fwd_spreads', {})
+            saved_date = st.session_state.get('data_date', 'Unknown')
+            
+            st.session_state.clear() 
+            
+            st.session_state.ref_data = saved_db
+            st.session_state.fwd_spreads = saved_fwd
+            st.session_state.data_date = saved_date
+            st.rerun()
+
+    with bc1:
+        do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
+        
+    if do_load or (query and query.upper() != display_val):
         if not query: st.warning("Please enter a ticker or option code.")
         else:
             query_upper = query.upper().strip()
@@ -429,6 +445,9 @@ with c3:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
+                    # Universal XJO normalization for the search bar
+                    if ticker_to_fetch.startswith('XJO'): ticker_to_fetch = 'XJO'
+                    
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
                     st.session_state.preselect_strike = float(match.iloc[0]['Strike'])
                     st.session_state.preselect_code = query_upper
@@ -439,10 +458,12 @@ with c3:
                         best_match = max(possible_matches, key=len)
                         if len(query_upper) > len(best_match):
                             ticker_to_fetch = best_match
+                            if ticker_to_fetch.startswith('XJO'): ticker_to_fetch = 'XJO'
                             st.session_state.preselect_code = query_upper
                             st.session_state.preselect_expiry = None
                             st.session_state.preselect_strike = None
                     else:
+                        if ticker_to_fetch.startswith('XJO'): ticker_to_fetch = 'XJO'
                         st.session_state.preselect_expiry = None
                         st.session_state.preselect_strike = None
                         st.session_state.preselect_code = None
@@ -461,8 +482,8 @@ with c3:
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
                 
-                load_databases.clear() # Wipe the internal cache
-                new_cb = str(uuid.uuid4())[:8] # Generate a unique cache-buster string
+                load_databases.clear() 
+                new_cb = str(uuid.uuid4())[:8] 
                 
                 data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, new_cb)
                 
@@ -480,7 +501,13 @@ current_exp = None
 if st.session_state.ref_data is not None and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
-    subset = ref[ref['Ticker'] == tkr]
+    
+    # --- UNIVERSAL XJO MERGE ---
+    # Pulls in standard monthlies (XJO) AND all weeklies (XJOW, XJO1, XJO2, etc.)
+    if tkr.startswith('XJO'):
+        subset = ref[ref['Ticker'].str.startswith('XJO')]
+    else:
+        subset = ref[ref['Ticker'] == tkr]
     
     today = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
     subset = subset[subset['Expiry'] >= today]
@@ -492,11 +519,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         
         default_idx = exp_list.index(st.session_state.preselect_expiry) if st.session_state.preselect_expiry in exp_list else None
         current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
-        
-        if current_exp in st.session_state.fwd_spreads and st.session_state.ticker == 'XJO':
-            basis_val = st.session_state.fwd_spreads[current_exp]
-            derived_fwd = st.session_state.spot_price + basis_val
-            st.caption(f"📈 **Black '76 Active** | Implied Basis: **{basis_val} pts** | Forward Curve: **{derived_fwd:.2f}**")
         
         if current_exp:
             target_dt = exp_map[current_exp]
@@ -525,6 +547,8 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             all_strikes = sorted(list(set(calls.index) | set(puts.index)))
             df_view = pd.DataFrame({'STRIKE': all_strikes})
             
+            df_view.insert(0, 'C_Sel', False)
+            
             df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
             df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
             df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
@@ -538,6 +562,8 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
             df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
             df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
+            
+            df_view['P_Sel'] = False
 
 if not df_view.empty and current_exp:
     center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
@@ -549,7 +575,7 @@ if not df_view.empty and current_exp:
     
     st.markdown(f"**Chain: {current_exp}**")
     
-    disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
+    disp = df_view[['C_Sel', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Sel']].copy()
     
     def highlight_itm(row):
         spot = st.session_state.spot_price
@@ -559,9 +585,9 @@ if not df_view.empty and current_exp:
         styles = []
         for col in row.index:
             s = ""
-            if col in ['C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
+            if col in ['C_Sel', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
-            elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta'] and strike > spot:
+            elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Sel'] and strike > spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
             
             if col == 'STRIKE':
@@ -578,9 +604,12 @@ if not df_view.empty and current_exp:
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
-    selection = st.dataframe(
+    editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
+    
+    edited_df = st.data_editor(
         styled_disp,
         column_config={
+            "C_Sel": st.column_config.CheckboxColumn("☑ Call", default=False),
             "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
             "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
             "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
@@ -590,17 +619,31 @@ if not df_view.empty and current_exp:
             "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
             "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
+            "P_Sel": st.column_config.CheckboxColumn("☑ Put", default=False),
         },
-        hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row"
+        hide_index=True, use_container_width=True, key=editor_key,
+        disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
     )
     
-    if selection.selection['rows']:
-        idx = selection.selection['rows'][0]
-        row = df_view.iloc[idx]
+    selected_row_idx = None
+    selected_type = None
+
+    for idx in range(len(edited_df)):
+        if edited_df['C_Sel'].iloc[idx]:
+            selected_row_idx = idx
+            selected_type = 'Call'
+            break
+        elif edited_df['P_Sel'].iloc[idx]:
+            selected_row_idx = idx
+            selected_type = 'Put'
+            break
+            
+    if selected_row_idx is not None:
+        row = df_view.iloc[selected_row_idx]
         days_diff = (datetime.strptime(current_exp, "%Y-%m-%d") - get_sydney_time()).days
         
         st.write("")
-        q_c, b1_c, b2_c, b3_c, b4_c, _ = st.columns([1.5, 1, 1, 1, 1, 3], gap="small")
+        q_c, b1_c, b2_c, _ = st.columns([1.5, 1.5, 1.5, 5], gap="small")
 
         with q_c:
             trade_qty = st.number_input("Trade Quantity", min_value=1, value=1, step=1)
@@ -620,6 +663,8 @@ if not df_view.empty and current_exp:
                 "Delta": float(delta_val), 
                 "MarginUnit": float(row['C_Margin'] if kind == 'Call' else row['P_Margin'])
             })
+            st.session_state.editor_reset += 1 
+            st.session_state.preselect_code = None 
             st.rerun()
             
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
@@ -629,25 +674,31 @@ if not df_view.empty and current_exp:
         
         btn_spacer = "<div style='height: 28px;'></div>"
         
-        with b1_c:
-             st.markdown(btn_spacer, unsafe_allow_html=True)
-             if st.button(f"Buy Call", use_container_width=True): add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
-        with b2_c:
-             st.markdown(btn_spacer, unsafe_allow_html=True)
-             if st.button(f"Sell Call", use_container_width=True): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
-        with b3_c:
-             st.markdown(btn_spacer, unsafe_allow_html=True)
-             if st.button(f"Buy Put", use_container_width=True): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
-        with b4_c:
-             st.markdown(btn_spacer, unsafe_allow_html=True)
-             if st.button(f"Sell Put", use_container_width=True): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
+        if selected_type == 'Call':
+            with b1_c:
+                 st.markdown(btn_spacer, unsafe_allow_html=True)
+                 if st.button("Buy Call", use_container_width=True): 
+                     add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
+            with b2_c:
+                 st.markdown(btn_spacer, unsafe_allow_html=True)
+                 if st.button("Sell Call", use_container_width=True): 
+                     add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
+        elif selected_type == 'Put':
+            with b1_c:
+                 st.markdown(btn_spacer, unsafe_allow_html=True)
+                 if st.button("Buy Put", use_container_width=True): 
+                     add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
+            with b2_c:
+                 st.markdown(btn_spacer, unsafe_allow_html=True)
+                 if st.button("Sell Put", use_container_width=True): 
+                     add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
 
 # --- 10. STRATEGY ---
 if st.session_state.legs:
     st.markdown("---")
     st.subheader("Strategy")
     
-    contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
+    contract_multiplier = 10 if st.session_state.ticker.startswith('XJO') else 100
     
     h_col_spec = [0.8, 1.1, 0.7, 0.9, 1.2, 2.7, 1.2, 1.2, 1.2, 1.4, 1.6, 0.5]
     cols_header = st.columns(h_col_spec)
@@ -674,8 +725,14 @@ if st.session_state.legs:
     tkr = st.session_state.ticker.replace(".AX", "")
     
     for leg in st.session_state.legs:
+        # Match Universal XJO logic to ensure risk arrays are pulled perfectly
+        if tkr.startswith('XJO'):
+            ticker_mask = st.session_state.ref_data['Ticker'].str.startswith('XJO')
+        else:
+            ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+
         match = st.session_state.ref_data[
-            (st.session_state.ref_data['Ticker'] == tkr) & 
+            ticker_mask & 
             (st.session_state.ref_data['Type'] == leg['Type']) & 
             (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
             (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
@@ -733,8 +790,13 @@ if st.session_state.legs:
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
+            if tkr.startswith('XJO'):
+                ticker_mask = st.session_state.ref_data['Ticker'].str.startswith('XJO')
+            else:
+                ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+                
             subset = st.session_state.ref_data[
-                (st.session_state.ref_data['Ticker'] == tkr) & 
+                ticker_mask & 
                 (st.session_state.ref_data['Type'] == leg['Type']) & 
                 (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
             ]
@@ -879,18 +941,26 @@ if st.session_state.legs:
         min_val = df.min().min()
         abs_max = max(abs(max_val), abs(min_val), 1)
         
-        def style_cell(val):
-            if val > 0:
-                intensity = min(val / abs_max, 1.0)
-                alpha = 0.05 + 0.35 * intensity
-                return f"background-color: rgba(74, 222, 128, {alpha:.2f});"
-            elif val < 0:
-                intensity = min(abs(val) / abs_max, 1.0)
-                alpha = 0.05 + 0.35 * intensity
-                return f"background-color: rgba(248, 113, 113, {alpha:.2f});"
-            return ""
-        
-        return df.applymap(style_cell)
+        styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+        for idx in df.index:
+            is_spot = "SPOT" in str(idx)
+            for col in df.columns:
+                val = df.loc[idx, col]
+                s = ""
+                if val > 0:
+                    intensity = min(val / abs_max, 1.0)
+                    alpha = 0.05 + 0.35 * intensity
+                    s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
+                elif val < 0:
+                    intensity = min(abs(val) / abs_max, 1.0)
+                    alpha = 0.05 + 0.35 * intensity
+                    s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
+                
+                if is_spot:
+                    s += "font-weight: bold; "
+                    
+                styles_df.loc[idx, col] = s
+        return styles_df
 
     st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
 
