@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 10.38 (Speed & Optimization Update)
+# VERSION: 10.39 (Checkbox UI & Matrix Bolding)
 # ==========================================
 
 import streamlit as st
@@ -57,12 +57,6 @@ st.markdown("""
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
     div[data-testid="stSlider"] p { color: white !important; }
     input[type=range] { accent-color: #0050FF !important; }
-    
-    /* Dataframe Row Selection Highlight (Teal) */
-    [data-testid="stDataFrame"] [aria-selected="true"] > div {
-        background-color: rgba(29, 191, 210, 0.4) !important;
-        color: white !important;
-    }
     
     .stDataFrame { border: none !important; }
     .trade-header {
@@ -127,11 +121,9 @@ def fetch_rba_cash_rate():
 
 global_rba_rate = fetch_rba_cash_rate()
 
-# Restored long memory (1 hour) for fast UI interaction
 @st.cache_data(ttl=3600)
 def load_databases(opts_url, fwd_url, cb="default"):
     try:
-        # Cache-buster is passed purely from the "LOAD OPTIONS" button
         live_fwd_url = f"{fwd_url}&cb={cb}"
         live_opts_url = f"{opts_url}&cb={cb}"
         
@@ -390,7 +382,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v10.38</div>
+            <div class="header-sub">Option Strategy Builder v10.39</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -525,6 +517,9 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             all_strikes = sorted(list(set(calls.index) | set(puts.index)))
             df_view = pd.DataFrame({'STRIKE': all_strikes})
             
+            # --- CHECKBOX UI SETUP ---
+            df_view.insert(0, 'C_Sel', False)
+            
             df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
             df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
             df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
@@ -538,6 +533,8 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
             df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
             df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
+            
+            df_view['P_Sel'] = False
 
 if not df_view.empty and current_exp:
     center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
@@ -549,7 +546,7 @@ if not df_view.empty and current_exp:
     
     st.markdown(f"**Chain: {current_exp}**")
     
-    disp = df_view[['C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code']].copy()
+    disp = df_view[['C_Sel', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Sel']].copy()
     
     def highlight_itm(row):
         spot = st.session_state.spot_price
@@ -559,9 +556,9 @@ if not df_view.empty and current_exp:
         styles = []
         for col in row.index:
             s = ""
-            if col in ['C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
+            if col in ['C_Sel', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
-            elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta'] and strike > spot:
+            elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Sel'] and strike > spot:
                 s += "background-color: rgba(74, 222, 128, 0.10); "
             
             if col == 'STRIKE':
@@ -578,9 +575,12 @@ if not df_view.empty and current_exp:
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
-    selection = st.dataframe(
+    editor_key = f"chain_editor_{current_exp}_{st.session_state.ticker}"
+    
+    edited_df = st.data_editor(
         styled_disp,
         column_config={
+            "C_Sel": st.column_config.CheckboxColumn("☑ Call", default=False),
             "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
             "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
             "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
@@ -590,17 +590,32 @@ if not df_view.empty and current_exp:
             "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
             "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
+            "P_Sel": st.column_config.CheckboxColumn("☑ Put", default=False),
         },
-        hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row"
+        hide_index=True, use_container_width=True, key=editor_key,
+        disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
     )
     
-    if selection.selection['rows']:
-        idx = selection.selection['rows'][0]
-        row = df_view.iloc[idx]
+    # Check if a Call or Put box was checked
+    selected_row_idx = None
+    selected_type = None
+
+    for idx in range(len(edited_df)):
+        if edited_df['C_Sel'].iloc[idx]:
+            selected_row_idx = idx
+            selected_type = 'Call'
+            break
+        elif edited_df['P_Sel'].iloc[idx]:
+            selected_row_idx = idx
+            selected_type = 'Put'
+            break
+            
+    if selected_row_idx is not None:
+        row = df_view.iloc[selected_row_idx]
         days_diff = (datetime.strptime(current_exp, "%Y-%m-%d") - get_sydney_time()).days
         
         st.write("")
-        q_c, b1_c, b2_c, b3_c, b4_c, _ = st.columns([1.5, 1, 1, 1, 1, 3], gap="small")
+        q_c, b1_c, b2_c, _ = st.columns([1.5, 1.5, 1.5, 5], gap="small")
 
         with q_c:
             trade_qty = st.number_input("Trade Quantity", min_value=1, value=1, step=1)
@@ -620,6 +635,9 @@ if not df_view.empty and current_exp:
                 "Delta": float(delta_val), 
                 "MarginUnit": float(row['C_Margin'] if kind == 'Call' else row['P_Margin'])
             })
+            # Clear the checkbox selection after pushing the leg down
+            if editor_key in st.session_state:
+                del st.session_state[editor_key]
             st.rerun()
             
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
@@ -629,18 +647,25 @@ if not df_view.empty and current_exp:
         
         btn_spacer = "<div style='height: 28px;'></div>"
         
-        with b1_c:
-             st.markdown(btn_spacer, unsafe_allow_html=True)
-             if st.button(f"Buy Call", use_container_width=True): add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
-        with b2_c:
-             st.markdown(btn_spacer, unsafe_allow_html=True)
-             if st.button(f"Sell Call", use_container_width=True): add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
-        with b3_c:
-             st.markdown(btn_spacer, unsafe_allow_html=True)
-             if st.button(f"Buy Put", use_container_width=True): add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
-        with b4_c:
-             st.markdown(btn_spacer, unsafe_allow_html=True)
-             if st.button(f"Sell Put", use_container_width=True): add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
+        # Display the correct Action Buttons based on the Checkbox selected
+        if selected_type == 'Call':
+            with b1_c:
+                 st.markdown(btn_spacer, unsafe_allow_html=True)
+                 if st.button("Buy Call", use_container_width=True): 
+                     add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
+            with b2_c:
+                 st.markdown(btn_spacer, unsafe_allow_html=True)
+                 if st.button("Sell Call", use_container_width=True): 
+                     add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
+        elif selected_type == 'Put':
+            with b1_c:
+                 st.markdown(btn_spacer, unsafe_allow_html=True)
+                 if st.button("Buy Put", use_container_width=True): 
+                     add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
+            with b2_c:
+                 st.markdown(btn_spacer, unsafe_allow_html=True)
+                 if st.button("Sell Put", use_container_width=True): 
+                     add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
 
 # --- 10. STRATEGY ---
 if st.session_state.legs:
@@ -874,23 +899,33 @@ if st.session_state.legs:
         sign = "+" if val > 0 else ""
         return f"${val:,.0f} ({sign}{pct:.1f}%)"
 
+    # --- SPOT ROW BOLDING INJECTED HERE ---
     def make_heatmap(df):
         max_val = df.max().max()
         min_val = df.min().min()
         abs_max = max(abs(max_val), abs(min_val), 1)
         
-        def style_cell(val):
-            if val > 0:
-                intensity = min(val / abs_max, 1.0)
-                alpha = 0.05 + 0.35 * intensity
-                return f"background-color: rgba(74, 222, 128, {alpha:.2f});"
-            elif val < 0:
-                intensity = min(abs(val) / abs_max, 1.0)
-                alpha = 0.05 + 0.35 * intensity
-                return f"background-color: rgba(248, 113, 113, {alpha:.2f});"
-            return ""
-        
-        return df.applymap(style_cell)
+        styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+        for idx in df.index:
+            is_spot = "SPOT" in str(idx)
+            for col in df.columns:
+                val = df.loc[idx, col]
+                s = ""
+                if val > 0:
+                    intensity = min(val / abs_max, 1.0)
+                    alpha = 0.05 + 0.35 * intensity
+                    s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
+                elif val < 0:
+                    intensity = min(abs(val) / abs_max, 1.0)
+                    alpha = 0.05 + 0.35 * intensity
+                    s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
+                
+                # Apply visual pop to the Spot row
+                if is_spot:
+                    s += "font-weight: 900; color: #1DBFD2; border-top: 2px solid #1DBFD2; border-bottom: 2px solid #1DBFD2; "
+                    
+                styles_df.loc[idx, col] = s
+        return styles_df
 
     st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
 
