@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.1.9 (Table Height & Visibility Fix)
+# VERSION: 1.1.8 (Universal XJO Merge)
 # ==========================================
 
 import streamlit as st
@@ -180,10 +180,8 @@ def load_databases(opts_url, fwd_url, cb="default"):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
-        # Purge ghost rows
         df = df.drop_duplicates(subset=['Code'], keep='last')
 
-        # Identify Calls vs Puts regardless of provider formatting
         if 'Type' in df.columns:
             raw_type = df['Type'].astype(str).str.strip().str.upper()
             is_call = raw_type.str.contains('CALL') | raw_type.str.startswith('C')
@@ -198,8 +196,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
             df['Style'] = 'American'
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
-        
-        # Strip timestamps from the raw data so Puts and Calls sync onto the same calendar day perfectly
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -277,7 +273,9 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         
     r = global_rba_rate / 100.0
     q = 0.0
-    is_xjo = (st.session_state.ticker.startswith('XJO'))
+    
+    # Universal XJO check for the math engine
+    is_xjo = st.session_state.ticker.startswith('XJO')
     
     try:
         S = float(simulated_spot)
@@ -332,6 +330,7 @@ st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
+    # Normalize weeklies to main index for Yahoo pricing
     if clean.startswith('XJO'): clean = 'XJO'
     
     sym = "^AXJO" if clean == "XJO" else f"{clean}.AX"
@@ -388,7 +387,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.1.9</div>
+            <div class="header-sub">Option Strategy Builder v1.1.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -446,6 +445,7 @@ with c3:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
+                    # Universal XJO normalization for the search bar
                     if ticker_to_fetch.startswith('XJO'): ticker_to_fetch = 'XJO'
                     
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
@@ -502,7 +502,8 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     
-    # Universal Net to capture standard index options and weekly index options
+    # --- UNIVERSAL XJO MERGE ---
+    # Pulls in standard monthlies (XJO) AND all weeklies (XJOW, XJO1, XJO2, etc.)
     if tkr.startswith('XJO'):
         subset = ref[ref['Ticker'].str.startswith('XJO')]
     else:
@@ -548,14 +549,14 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             
             df_view.insert(0, 'C_Sel', False)
             
-            df_view['C_Code'] = df_view['STRIKE'].map(calls['Code']).fillna('---')
+            df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
             df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
             df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
             df_view['C_Vol'] = df_view['STRIKE'].map(calls['Calc_Vol'])
             df_view['C_Delta'] = df_view['STRIKE'].map(calls['Calc_Delta'])
             df_view['C_Margin'] = df_view['STRIKE'].map(calls['Calc_Margin'])
             
-            df_view['P_Code'] = df_view['STRIKE'].map(puts['Code']).fillna('---')
+            df_view['P_Code'] = df_view['STRIKE'].map(puts['Code'])
             df_view['P_Style_Full'] = df_view['STRIKE'].map(puts['Style']).fillna('American')
             df_view['P_Price'] = df_view['STRIKE'].map(puts['Calc_Price'])
             df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
@@ -592,7 +593,7 @@ if not df_view.empty and current_exp:
             if col == 'STRIKE':
                 s += "font-weight: bold; background-color: rgba(255,255,255,0.05); "
             
-            if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None" and str(row[col]) != '---':
+            if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
                 s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
                 
             styles.append(s)
@@ -601,11 +602,10 @@ if not df_view.empty and current_exp:
     styled_disp = disp.style.apply(highlight_itm, axis=1).format({
         'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}', 'STRIKE': '{:.3f}',
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
-    }, na_rep='---')
+    })
 
     editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
-    # HARD-CODED HEIGHT: Prevents the optical illusion of missing strikes in the scrollbar
     edited_df = st.data_editor(
         styled_disp,
         column_config={
@@ -621,7 +621,7 @@ if not df_view.empty and current_exp:
             "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
             "P_Sel": st.column_config.CheckboxColumn("☑ Put", default=False),
         },
-        hide_index=True, use_container_width=True, height=900, key=editor_key,
+        hide_index=True, use_container_width=True, key=editor_key,
         disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
     )
     
@@ -649,11 +649,6 @@ if not df_view.empty and current_exp:
             trade_qty = st.number_input("Trade Quantity", min_value=1, value=1, step=1)
         
         def add(side, kind, px, code_hint, delta_val, qty_val, style_full):
-            # Guard against attempting to trade empty provider data
-            if str(code_hint) == '---' or pd.isna(px):
-                st.warning(f"Data provider does not have {kind} data exported for Strike {row['STRIKE']}")
-                return
-                
             st.session_state.legs.append({
                 "id": str(uuid.uuid4()),
                 "Qty": qty_val if side == "Buy" else -qty_val, 
@@ -672,8 +667,8 @@ if not df_view.empty and current_exp:
             st.session_state.preselect_code = None 
             st.rerun()
             
-        c_c = str(row['C_Code'])
-        p_c = str(row['P_Code'])
+        c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
+        p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
         c_s = str(row['C_Style_Full'])
         p_s = str(row['P_Style_Full'])
         
@@ -730,6 +725,7 @@ if st.session_state.legs:
     tkr = st.session_state.ticker.replace(".AX", "")
     
     for leg in st.session_state.legs:
+        # Match Universal XJO logic to ensure risk arrays are pulled perfectly
         if tkr.startswith('XJO'):
             ticker_mask = st.session_state.ref_data['Ticker'].str.startswith('XJO')
         else:
