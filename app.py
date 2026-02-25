@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.1.6 (Date Normalization & UI Reset)
+# VERSION: 1.1.7 (XJOW Merge & UI Auto-Clear)
 # ==========================================
 
 import streamlit as st
@@ -94,7 +94,7 @@ if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
-if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0 # UI Checkbox Reset Counter
+if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0 
 
 if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
 if 'preselect_expiry' not in st.session_state: st.session_state.preselect_expiry = None
@@ -180,10 +180,8 @@ def load_databases(opts_url, fwd_url, cb="default"):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
-        # Purge ghost rows
         df = df.drop_duplicates(subset=['Code'], keep='last')
 
-        # Advanced Type Parsing to catch 'Weekly Call', 'Call - E', etc.
         if 'Type' in df.columns:
             raw_type = df['Type'].astype(str).str.strip().str.upper()
             is_call = raw_type.str.contains('CALL') | raw_type.str.startswith('C')
@@ -198,8 +196,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
             df['Style'] = 'American'
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
-        
-        # --- DATE NORMALIZATION FIX: Strip timestamps so Calls and Puts sync perfectly ---
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -331,7 +327,10 @@ def check_market_hours():
 st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
+    # Normalize ticker logic for fetching Yahoo pricing data
     clean = t.upper().replace(".AX", "").strip()
+    if clean == 'XJOW': clean = 'XJO'
+    
     sym = "^AXJO" if clean == "XJO" else f"{clean}.AX"
     div_info, spot = None, 0.0
     
@@ -386,7 +385,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.1.6</div>
+            <div class="header-sub">Option Strategy Builder v1.1.7</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -444,6 +443,9 @@ with c3:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
+                    # Normalizes XJOW searches back to XJO so the UI stays locked on the main index
+                    if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
+                    
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
                     st.session_state.preselect_strike = float(match.iloc[0]['Strike'])
                     st.session_state.preselect_code = query_upper
@@ -454,10 +456,12 @@ with c3:
                         best_match = max(possible_matches, key=len)
                         if len(query_upper) > len(best_match):
                             ticker_to_fetch = best_match
+                            if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                             st.session_state.preselect_code = query_upper
                             st.session_state.preselect_expiry = None
                             st.session_state.preselect_strike = None
                     else:
+                        if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                         st.session_state.preselect_expiry = None
                         st.session_state.preselect_strike = None
                         st.session_state.preselect_code = None
@@ -495,7 +499,13 @@ current_exp = None
 if st.session_state.ref_data is not None and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
-    subset = ref[ref['Ticker'] == tkr]
+    
+    # --- WEEKLY MERGE FIX ---
+    # Treats XJO and XJOW as the exact same underlying asset to populate the chain together
+    if tkr == 'XJO':
+        subset = ref[ref['Ticker'].isin(['XJO', 'XJOW'])]
+    else:
+        subset = ref[ref['Ticker'] == tkr]
     
     today = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
     subset = subset[subset['Expiry'] >= today]
@@ -592,7 +602,6 @@ if not df_view.empty and current_exp:
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
-    # DYNAMIC CHECKBOX RESET: Attaches a background counter to the ID of the UI table
     editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
     edited_df = st.data_editor(
@@ -652,8 +661,10 @@ if not df_view.empty and current_exp:
                 "Delta": float(delta_val), 
                 "MarginUnit": float(row['C_Margin'] if kind == 'Call' else row['P_Margin'])
             })
-            # FORCES THE CHECKBOX TO RESET TO BLANK AFTER YOU ADD A LEG
-            st.session_state.editor_reset += 1
+            
+            # --- THE AUTO-CLEAR FIX ---
+            st.session_state.editor_reset += 1 # Wipes the Checkboxes
+            st.session_state.preselect_code = None # Drops the teal search highlight
             st.rerun()
             
         c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
@@ -714,8 +725,9 @@ if st.session_state.legs:
     tkr = st.session_state.ticker.replace(".AX", "")
     
     for leg in st.session_state.legs:
+        # Include both XJO and XJOW when pulling risk scenarios for index trades
         match = st.session_state.ref_data[
-            (st.session_state.ref_data['Ticker'] == tkr) & 
+            (st.session_state.ref_data['Ticker'].isin([tkr, f"{tkr}W"])) & 
             (st.session_state.ref_data['Type'] == leg['Type']) & 
             (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
             (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
@@ -774,7 +786,7 @@ if st.session_state.legs:
         
         with c[5]: 
             subset = st.session_state.ref_data[
-                (st.session_state.ref_data['Ticker'] == tkr) & 
+                (st.session_state.ref_data['Ticker'].isin([tkr, f"{tkr}W"])) & 
                 (st.session_state.ref_data['Type'] == leg['Type']) & 
                 (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
             ]
