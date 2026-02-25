@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.1.4 (Restart Button & Margin Finalized)
+# VERSION: 1.1.5 (Client UI Polish)
 # ==========================================
 
 import streamlit as st
@@ -48,7 +48,7 @@ st.markdown("""
         background-color: #16aebf !important;
     }
     div[data-testid="stButton"] button[kind="secondary"] {
-        background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1;
+        background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1; font-weight: bold;
     }
     
     /* --- SLIDER COLOR FIX (Electric Blue) --- */
@@ -57,6 +57,12 @@ st.markdown("""
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
     div[data-testid="stSlider"] p { color: white !important; }
     input[type=range] { accent-color: #0050FF !important; }
+    
+    /* Dataframe Row Selection Highlight (Teal) */
+    [data-testid="stDataFrame"] [aria-selected="true"] > div {
+        background-color: rgba(29, 191, 210, 0.4) !important;
+        color: white !important;
+    }
     
     .stDataFrame { border: none !important; }
     .trade-header {
@@ -67,10 +73,6 @@ st.markdown("""
     .strategy-text { 
         user-select: none; display: flex; align-items: center; 
         min-height: 40px; padding: 0 8px; border-radius: 4px; width: 100%;
-    }
-    
-    button[kind="secondary"] {
-        padding: 0rem 0.5rem !important; min-height: 0px !important; height: 32px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -367,13 +369,11 @@ def fetch_data(t):
 
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
-fwd_status = f" | 📅 Fwd Spreads: {len(st.session_state.fwd_spreads)}"
-date_status = f" | 📊 Data: {st.session_state.data_date}"
+date_status = f"📊 Data: {st.session_state.data_date}"
 
-if st.session_state.ticker == 'XJO':
-    div_display_txt = f" | 🏦 RBA: {global_rba_rate}%{fwd_status}{date_status}"
-elif st.session_state.div_info:
-    div_display_txt = f" | 💰 Auto Div: ${st.session_state.div_info['amount']:.2f}{date_status}"
+# Cleaned up header info for client presentation
+if st.session_state.div_info and st.session_state.ticker != 'XJO':
+    div_display_txt = f"💰 Auto Div: ${st.session_state.div_info['amount']:.2f} | {date_status}"
 else:
     div_display_txt = f"{date_status}"
 
@@ -382,12 +382,12 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.1.4</div>
+            <div class="header-sub">Option Strategy Builder v1.1.5</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
             <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
-            <span class="status-tag">{mkt_status}{div_display_txt}</span>
+            <span class="status-tag">{mkt_status} | {div_display_txt}</span>
         </div>
     </div>
 </div>
@@ -410,26 +410,23 @@ with c2:
 with c3:
     st.write(""); st.write("")
     
-    # Split column 3 for the LOAD and RESTART buttons
     bc1, bc2 = st.columns([3, 1.2])
     
     with bc2:
-        if st.button("RESTART", use_container_width=True):
-            # Save the cached database so it doesn't force a 5-second re-download on clear
+        if st.button("🔄 RESTART", use_container_width=True):
             saved_db = st.session_state.get('ref_data', None)
             saved_fwd = st.session_state.get('fwd_spreads', {})
             saved_date = st.session_state.get('data_date', 'Unknown')
             
-            st.session_state.clear() # Wipe all legs, settings, and UI selections
+            st.session_state.clear() 
             
-            # Restore the database into memory
             st.session_state.ref_data = saved_db
             st.session_state.fwd_spreads = saved_fwd
             st.session_state.data_date = saved_date
             st.rerun()
 
     with bc1:
-        do_load = st.button("LOAD OPTIONS", type="primary", use_container_width=True)
+        do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
         
     if do_load or (query and query.upper() != display_val):
         if not query: st.warning("Please enter a ticker or option code.")
@@ -475,7 +472,6 @@ with c3:
                 st.session_state.div_info = div_data
                 st.session_state.data_source = source
                 
-                # --- FORCED CACHE WIPE ON LOAD ---
                 load_databases.clear() 
                 new_cb = str(uuid.uuid4())[:8] 
                 
@@ -508,11 +504,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         default_idx = exp_list.index(st.session_state.preselect_expiry) if st.session_state.preselect_expiry in exp_list else None
         current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
         
-        if current_exp in st.session_state.fwd_spreads and st.session_state.ticker == 'XJO':
-            basis_val = st.session_state.fwd_spreads[current_exp]
-            derived_fwd = st.session_state.spot_price + basis_val
-            st.caption(f"📈 **Black '76 Active** | Implied Basis: **{basis_val} pts** | Forward Curve: **{derived_fwd:.2f}**")
-        
         if current_exp:
             target_dt = exp_map[current_exp]
             days_diff = (target_dt - today).days
@@ -540,7 +531,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             all_strikes = sorted(list(set(calls.index) | set(puts.index)))
             df_view = pd.DataFrame({'STRIKE': all_strikes})
             
-            # --- CHECKBOX UI SETUP ---
             df_view.insert(0, 'C_Sel', False)
             
             df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
@@ -619,7 +609,6 @@ if not df_view.empty and current_exp:
         disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
     )
     
-    # Check if a Call or Put box was checked
     selected_row_idx = None
     selected_type = None
 
@@ -658,7 +647,6 @@ if not df_view.empty and current_exp:
                 "Delta": float(delta_val), 
                 "MarginUnit": float(row['C_Margin'] if kind == 'Call' else row['P_Margin'])
             })
-            # Clear the checkbox selection after pushing the leg down
             if editor_key in st.session_state:
                 del st.session_state[editor_key]
             st.rerun()
@@ -670,7 +658,6 @@ if not df_view.empty and current_exp:
         
         btn_spacer = "<div style='height: 28px;'></div>"
         
-        # Display the correct Action Buttons based on the Checkbox selected
         if selected_type == 'Call':
             with b1_c:
                  st.markdown(btn_spacer, unsafe_allow_html=True)
@@ -942,7 +929,6 @@ if st.session_state.legs:
                     alpha = 0.05 + 0.35 * intensity
                     s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
                 
-                # Apply visual pop to the Spot row (No blue border, just bold text)
                 if is_spot:
                     s += "font-weight: bold; "
                     
