@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.1.6 (Date Normalization & UI Reset)
+# VERSION: 1.2.0 (Advanced Charting & URL Sync)
 # ==========================================
 
 import streamlit as st
@@ -14,6 +14,8 @@ import math
 import uuid
 import requests
 import re
+import json
+import base64
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -81,7 +83,22 @@ st.markdown("""
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
-# --- 2. SESSION STATE ---
+# --- 2. SESSION STATE & URL PARSER ---
+# This intercepts a shared URL and pre-loads the strategy without needing the database
+if 'url_loaded' not in st.session_state:
+    st.session_state.url_loaded = True
+    if "s" in st.query_params:
+        try:
+            encoded_state = st.query_params["s"]
+            decoded_json = base64.urlsafe_b64decode(encoded_state.encode()).decode()
+            payload = json.loads(decoded_json)
+            st.session_state.ticker = payload.get("t", "")
+            st.session_state.spot_price = payload.get("p", 0.0)
+            st.session_state.manual_spot = payload.get("m", False)
+            st.session_state.legs = payload.get("l", [])
+        except:
+            pass
+
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
@@ -94,7 +111,7 @@ if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
-if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0 # UI Checkbox Reset Counter
+if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0
 
 if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
 if 'preselect_expiry' not in st.session_state: st.session_state.preselect_expiry = None
@@ -180,7 +197,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
-        # Purge ghost rows
         df = df.drop_duplicates(subset=['Code'], keep='last')
 
         if 'Type' in df.columns:
@@ -196,8 +212,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
             df['Style'] = 'American'
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
-        
-        # Strip timestamps from the raw data so Puts and Calls sync onto the same calendar day perfectly
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -384,7 +398,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.1.6</div>
+            <div class="header-sub">Option Strategy Builder v1.2.0</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -416,6 +430,7 @@ with c3:
     
     with bc2:
         if st.button("🔄 RESTART", use_container_width=True):
+            st.query_params.clear() # Wipes the Shareable URL cleanly
             saved_db = st.session_state.get('ref_data', None)
             saved_fwd = st.session_state.get('fwd_spreads', {})
             saved_date = st.session_state.get('data_date', 'Unknown')
@@ -493,6 +508,7 @@ current_exp = None
 if st.session_state.ref_data is not None and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
+    
     subset = ref[ref['Ticker'] == tkr]
     
     today = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -704,19 +720,21 @@ if st.session_state.legs:
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
     # --- PORTFOLIO MARGIN SIMULATION ENGINE ---
-    scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)]
+    scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
     portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
     leg_risk_arrays = []
     
     tkr = st.session_state.ticker.replace(".AX", "")
     
     for leg in st.session_state.legs:
-        match = st.session_state.ref_data[
-            (st.session_state.ref_data['Ticker'] == tkr) & 
-            (st.session_state.ref_data['Type'] == leg['Type']) & 
-            (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
-            (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-        ]
+        match = pd.DataFrame()
+        if st.session_state.ref_data is not None:
+            match = st.session_state.ref_data[
+                (st.session_state.ref_data['Ticker'] == tkr) & 
+                (st.session_state.ref_data['Type'] == leg['Type']) & 
+                (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
+                (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+            ]
         
         if not match.empty and scen_cols:
             risk_array = match.iloc[0][scen_cols].values.astype(float)
@@ -770,13 +788,15 @@ if st.session_state.legs:
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
-            subset = st.session_state.ref_data[
-                (st.session_state.ref_data['Ticker'] == tkr) & 
-                (st.session_state.ref_data['Type'] == leg['Type']) & 
-                (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-            ]
+            subset = pd.DataFrame()
+            if st.session_state.ref_data is not None:
+                subset = st.session_state.ref_data[
+                    (st.session_state.ref_data['Ticker'] == tkr) & 
+                    (st.session_state.ref_data['Type'] == leg['Type']) & 
+                    (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+                ]
             
-            available_strikes = sorted(subset['Strike'].unique().tolist())
+            available_strikes = sorted(subset['Strike'].unique().tolist()) if not subset.empty else []
             current_strike = float(leg['Strike'])
             
             if available_strikes:
@@ -807,24 +827,25 @@ if st.session_state.legs:
                 
             if new_strike is not None and new_strike != current_strike:
                 st.session_state.legs[i]['Strike'] = new_strike
-                match = subset[subset['Strike'] == new_strike]
-                if not match.empty:
-                    match = match.sort_values('Code', ascending=False)
-                    new_vol = float(match.iloc[0]['Vol'])
-                    new_style = match.iloc[0].get('Style', 'American')
-                    
-                    st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
-                    st.session_state.legs[i]['Vol'] = new_vol
-                    st.session_state.legs[i]['Style'] = new_style
-                    st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
-                    
-                    matched_theo, _ = calculate_price_and_delta(
-                        new_style, leg['Type'], st.session_state.spot_price, new_strike, 
-                        leg['Expiry'], new_vol, leg['ExpDateStr']
-                    )
-                    st.session_state.legs[i]['Entry'] = matched_theo
-                else:
-                    st.session_state.legs[i]['Code'] = "N/A"
+                if not subset.empty:
+                    match = subset[subset['Strike'] == new_strike]
+                    if not match.empty:
+                        match = match.sort_values('Code', ascending=False)
+                        new_vol = float(match.iloc[0]['Vol'])
+                        new_style = match.iloc[0].get('Style', 'American')
+                        
+                        st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
+                        st.session_state.legs[i]['Vol'] = new_vol
+                        st.session_state.legs[i]['Style'] = new_style
+                        st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
+                        
+                        matched_theo, _ = calculate_price_and_delta(
+                            new_style, leg['Type'], st.session_state.spot_price, new_strike, 
+                            leg['Expiry'], new_vol, leg['ExpDateStr']
+                        )
+                        st.session_state.legs[i]['Entry'] = matched_theo
+                    else:
+                        st.session_state.legs[i]['Code'] = "N/A"
                 st.rerun()
                 
         with c[6]: 
@@ -858,6 +879,18 @@ if st.session_state.legs:
         with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
         with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
         with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+
+    # --- URL STATE SYNC ENGINE ---
+    payload = {
+        "t": st.session_state.ticker,
+        "p": st.session_state.spot_price,
+        "m": st.session_state.manual_spot,
+        "l": st.session_state.legs
+    }
+    try:
+        encoded_state = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        st.query_params["s"] = encoded_state
+    except: pass
 
     # --- MATRIX ---
     st.markdown("---")
@@ -939,11 +972,11 @@ if st.session_state.legs:
 
     st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
 
-    # CHART
+    # --- ADVANCED CHARTING ENGINE ---
     st.markdown("### Payoff Chart")
     
-    chart_spread = range_pct * 6 * 1.2
-    chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 100)
+    chart_spread = range_pct * 8 # Slightly wider spread to catch wider breakevens
+    chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 200)
     
     pnl_today = []
     pnl_expiry = []
@@ -961,7 +994,29 @@ if st.session_state.legs:
         pnl_today.append(val_t0)
         pnl_expiry.append(val_tF)
         
+    # Mathematical Scan for Break-Even points at Expiry
+    breakevens = []
+    for i in range(len(chart_prices)-1):
+        if pnl_expiry[i] * pnl_expiry[i+1] < 0: # Detects where the PnL mathematically crosses 0
+            x1, x2 = chart_prices[i], chart_prices[i+1]
+            y1, y2 = pnl_expiry[i], pnl_expiry[i+1]
+            x_zero = x1 - y1 * (x2 - x1) / (y2 - y1) # Linear interpolation for exact penny precision
+            breakevens.append(x_zero)
+        
     fig = go.Figure()
+    
+    # Shade the Background Profit / Loss Zones
+    fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(74, 222, 128, 0.08)", layer="below", line_width=0)
+    fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
+    
+    # Draw Exact Break-Even Lines
+    for be in breakevens:
+        fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
+        fig.add_annotation(
+            x=be, y=0, text=f"BE: ${be:.2f}",
+            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor="#10b981",
+            ax=0, ay=-40, bgcolor="#0f172a", bordercolor="#10b981", font=dict(color="#10b981", size=11)
+        )
     
     fig.add_trace(go.Scatter(
         x=chart_prices, y=pnl_today, name="Today", 
@@ -977,11 +1032,23 @@ if st.session_state.legs:
     
     fig.add_vline(x=spot, line_dash="dot", line_color="grey")
     
+    # Lock the visual Y-axis bounds tightly to the strategy PnL so the shading doesn't look empty
+    max_pnl = max(max(pnl_expiry), max(pnl_today))
+    min_pnl = min(min(pnl_expiry), min(pnl_today))
+    padding = max(abs(max_pnl), abs(min_pnl)) * 0.1
+    
     fig.update_layout(
         height=450, 
         template="plotly_white", 
         margin=dict(t=30, b=30),
         xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"),
-        yaxis=dict(title="Profit / Loss ($)", tickprefix="$")
+        yaxis=dict(
+            title="Profit / Loss ($)", tickprefix="$", 
+            zeroline=True, zerolinewidth=2, zerolinecolor='black',
+            range=[min_pnl - padding, max_pnl + padding]
+        )
     )
     st.plotly_chart(fig, use_container_width=True)
+else:
+    if "s" in st.query_params:
+        del st.query_params["s"]
