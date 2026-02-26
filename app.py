@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.2.3 (Compact Table UI)
+# VERSION: 1.2.4 (Vectorized Speed Test)
 # ==========================================
 
 import streamlit as st
@@ -87,35 +87,6 @@ st.markdown("""
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
-# --- BULLETPROOF DATE PARSER ---
-def smart_parse_date(d_str):
-    try:
-        d_str = str(d_str).strip().split(' ')[0]
-        d_str = re.sub(r'(/|-)(2[5-9])$', r'\g<1>20\2', d_str)
-        
-        replacements = {
-            'January': 'Jan', 'February': 'Feb', 'March': 'Mar', 'April': 'Apr', 
-            'June': 'Jun', 'July': 'Jul', 'August': 'Aug', 'September': 'Sep', 
-            'Sept': 'Sep', 'October': 'Oct', 'November': 'Nov', 'December': 'Dec'
-        }
-        for k, v in replacements.items():
-            d_str = re.sub(k, v, d_str, flags=re.IGNORECASE)
-
-        dt_df = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
-        dt_mf = pd.to_datetime(d_str, dayfirst=False, errors='coerce')
-        
-        if pd.isna(dt_df) and pd.isna(dt_mf): return pd.NaT
-        if pd.isna(dt_df): return dt_mf
-        if pd.isna(dt_mf): return dt_df
-        if dt_df == dt_mf: return dt_df
-        
-        if dt_df.weekday() == 3: return dt_df
-        if dt_mf.weekday() == 3: return dt_mf
-        
-        return dt_df
-    except:
-        return pd.NaT
-
 # --- 2. SESSION STATE & URL PARSER ---
 if 'url_loaded' not in st.session_state:
     st.session_state.url_loaded = True
@@ -179,11 +150,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
         live_fwd_url = f"{fwd_url}&cb={cb}"
         live_opts_url = f"{opts_url}&cb={cb}"
         
-        def opts_col_filter(col_name):
-            c = str(col_name).strip().lower()
-            required = ['asxcode', 'underlying', 'opttype', 'expdate', 'strike', 'volatility', 'settlement', 'style', 'lookup key', 'busdate', 'bus date', 'businessdate', 'date']
-            return (c in required) or ('scenario' in c)
-
+        # Parallel Fetching setup
         def fetch_fwd():
             try:
                 return pd.read_csv(live_fwd_url, dtype=str, engine='pyarrow')
@@ -191,6 +158,12 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 return pd.read_csv(live_fwd_url, on_bad_lines='skip', dtype=str)
 
         def fetch_opts():
+            # Column Pruning to drastically reduce download and parse time
+            def opts_col_filter(col_name):
+                c = str(col_name).strip().lower()
+                required = ['asxcode', 'underlying', 'opttype', 'expdate', 'strike', 'volatility', 'settlement', 'style', 'lookup key', 'busdate', 'bus date', 'businessdate', 'date']
+                return (c in required) or ('scenario' in c)
+                
             try:
                 return pd.read_csv(live_opts_url, dtype=str, usecols=opts_col_filter, engine='pyarrow')
             except:
@@ -202,6 +175,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
             fwd_df = future_fwd.result()
             df = future_opts.result()
 
+        # Parse Forward Curve Dates (Vectorized)
         spreads_dict = {}
         if fwd_df is not None and not fwd_df.empty:
             spread_col, fwd_date_col = None, None
@@ -256,6 +230,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         
+        # --- VECTORIZED C-SPEED DATE PARSING (No custom loop) ---
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -444,7 +419,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.2.3</div>
+            <div class="header-sub">Option Strategy Builder v1.2.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -503,7 +478,6 @@ with c3:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
-                    
                     if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                     
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
@@ -575,7 +549,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         
         default_idx = exp_list.index(st.session_state.preselect_expiry) if st.session_state.preselect_expiry in exp_list else None
         
-        # --- VIEW MODE UI ---
         exp_col1, exp_col2 = st.columns([1, 2])
         with exp_col1:
             current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
@@ -676,7 +649,6 @@ if not df_view.empty and current_exp:
 
     editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
-    # Height parameter removed. Streamlit handles scrolling automatically in a compact window.
     edited_df = st.data_editor(
         styled_disp,
         column_config={
