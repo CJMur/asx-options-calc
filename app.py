@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.1.6.1 (Revert & Date Lock)
+# VERSION: 1.1.6.2 (Safe Weekly Merge)
 # ==========================================
 
 import streamlit as st
@@ -94,7 +94,7 @@ if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
-if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0 
+if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0
 
 if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
 if 'preselect_expiry' not in st.session_state: st.session_state.preselect_expiry = None
@@ -180,7 +180,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         
-        # Original 1.1.6 duplicate drop
         df = df.drop_duplicates(subset=['Code'], keep='last')
 
         if 'Type' in df.columns:
@@ -196,8 +195,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
             df['Style'] = 'American'
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
-        
-        # Dayfirst=True effortlessly parses missing leading zeros (e.g. 5/3/2026). Normalize strips timestamps.
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -330,6 +327,10 @@ st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
+    
+    # Safely normalize XJOW to XJO for spot price lookups
+    if clean == 'XJOW': clean = 'XJO'
+        
     sym = "^AXJO" if clean == "XJO" else f"{clean}.AX"
     div_info, spot = None, 0.0
     
@@ -384,7 +385,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.1.6.1</div>
+            <div class="header-sub">Option Strategy Builder v1.1.6.2</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -442,6 +443,10 @@ with c3:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
+                    
+                    # Normalize XJOW to XJO so the whole index chain loads together
+                    if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
+                    
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
                     st.session_state.preselect_strike = float(match.iloc[0]['Strike'])
                     st.session_state.preselect_code = query_upper
@@ -452,10 +457,12 @@ with c3:
                         best_match = max(possible_matches, key=len)
                         if len(query_upper) > len(best_match):
                             ticker_to_fetch = best_match
+                            if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                             st.session_state.preselect_code = query_upper
                             st.session_state.preselect_expiry = None
                             st.session_state.preselect_strike = None
                     else:
+                        if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                         st.session_state.preselect_expiry = None
                         st.session_state.preselect_strike = None
                         st.session_state.preselect_code = None
@@ -494,8 +501,12 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     
-    # Restored 1.1.6 basic matching logic
-    subset = ref[ref['Ticker'] == tkr]
+    # --- SAFE WEEKLY MERGE ---
+    # Specifically captures exactly XJO and XJOW, preventing any wildcard overlaps
+    if tkr == 'XJO':
+        subset = ref[ref['Ticker'].isin(['XJO', 'XJOW'])]
+    else:
+        subset = ref[ref['Ticker'] == tkr]
     
     today = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
     subset = subset[subset['Expiry'] >= today]
@@ -713,8 +724,14 @@ if st.session_state.legs:
     tkr = st.session_state.ticker.replace(".AX", "")
     
     for leg in st.session_state.legs:
+        # Safe Weekly Merge logic repeated for Margin calculation
+        if tkr == 'XJO':
+            ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
+        else:
+            ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+
         match = st.session_state.ref_data[
-            (st.session_state.ref_data['Ticker'] == tkr) & 
+            ticker_mask & 
             (st.session_state.ref_data['Type'] == leg['Type']) & 
             (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
             (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
@@ -772,8 +789,14 @@ if st.session_state.legs:
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
+            # Safe Weekly Merge logic repeated for Strike Up/Down Arrows
+            if tkr == 'XJO':
+                ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
+            else:
+                ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+                
             subset = st.session_state.ref_data[
-                (st.session_state.ref_data['Ticker'] == tkr) & 
+                ticker_mask & 
                 (st.session_state.ref_data['Type'] == leg['Type']) & 
                 (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
             ]
