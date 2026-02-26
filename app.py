@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.2.0 (Advanced Charting & URL Sync)
+# VERSION: 1.2.2 (Performance Engine & Scrollable UI)
 # ==========================================
 
 import streamlit as st
@@ -16,6 +16,7 @@ import requests
 import re
 import json
 import base64
+import concurrent.futures
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -76,6 +77,9 @@ st.markdown("""
         user-select: none; display: flex; align-items: center; 
         min-height: 40px; padding: 0 8px; border-radius: 4px; width: 100%;
     }
+    
+    /* Horizontal Radio Button Styling */
+    div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -84,7 +88,6 @@ def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
 # --- 2. SESSION STATE & URL PARSER ---
-# This intercepts a shared URL and pre-loads the strategy without needing the database
 if 'url_loaded' not in st.session_state:
     st.session_state.url_loaded = True
     if "s" in st.query_params:
@@ -111,7 +114,7 @@ if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
-if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0
+if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0 
 
 if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
 if 'preselect_expiry' not in st.session_state: st.session_state.preselect_expiry = None
@@ -127,7 +130,7 @@ TOOLTIPS = {
     "Margin": "The estimated portfolio collateral required to hold this specific strategy."
 }
 
-# --- 3. DATA ENGINE ---
+# --- 3. DATA ENGINE (PERFORMANCE UPGRADED) ---
 @st.cache_data(ttl=86400)
 def fetch_rba_cash_rate():
     try:
@@ -147,34 +150,51 @@ def load_databases(opts_url, fwd_url, cb="default"):
         live_fwd_url = f"{fwd_url}&cb={cb}"
         live_opts_url = f"{opts_url}&cb={cb}"
         
-        # 1. Load Forward Curve Data
+        # Helper for Column Pruning (Only downloads exactly what we need)
+        def opts_col_filter(col_name):
+            c = str(col_name).strip().lower()
+            required = ['asxcode', 'underlying', 'opttype', 'expdate', 'strike', 'volatility', 'settlement', 'style', 'lookup key', 'busdate', 'bus date', 'businessdate', 'date']
+            return (c in required) or ('scenario' in c)
+
+        # Parallel Fetch Functions
+        def fetch_fwd():
+            try:
+                return pd.read_csv(live_fwd_url, dtype=str, engine='pyarrow')
+            except:
+                return pd.read_csv(live_fwd_url, on_bad_lines='skip', dtype=str)
+
+        def fetch_opts():
+            try:
+                return pd.read_csv(live_opts_url, dtype=str, usecols=opts_col_filter, engine='pyarrow')
+            except:
+                return pd.read_csv(live_opts_url, on_bad_lines='skip', dtype=str, usecols=opts_col_filter)
+
+        # 1. PARALLEL DOWNLOADING
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future_fwd = executor.submit(fetch_fwd)
+            future_opts = executor.submit(fetch_opts)
+            fwd_df = future_fwd.result()
+            df = future_opts.result()
+
+        # 2. Process Forward Curve
         spreads_dict = {}
-        try:
-            fwd_df = pd.read_csv(live_fwd_url, on_bad_lines='skip', dtype=str)
+        if fwd_df is not None and not fwd_df.empty:
             spread_col, fwd_date_col = None, None
-            
             for col in fwd_df.columns:
                 clean_c = str(col).strip().lower()
                 if clean_c == 'spread': spread_col = col
                 elif clean_c in ['fwd expiry', 'expiry', 'xjo forward yield', 'forward yield']: fwd_date_col = col
 
             if spread_col and fwd_date_col:
-                for _, row in fwd_df.iterrows():
-                    try:
-                        dt_str = str(row[fwd_date_col]).strip()
-                        val_str = str(row[spread_col]).replace(',', '').strip()
-                        dt = pd.to_datetime(dt_str, dayfirst=True, errors='coerce')
-                        val = pd.to_numeric(val_str, errors='coerce')
-                        if pd.notna(dt) and pd.notna(val):
-                            spreads_dict[dt.strftime("%Y-%m-%d")] = val
-                    except:
-                        pass
-        except Exception as e:
-            print(f"Failed to load fwd curve: {e}")
+                # Vectorized date processing for Forward Curve
+                fwd_dates = pd.to_datetime(fwd_df[fwd_date_col], dayfirst=True, errors='coerce')
+                fwd_vals = pd.to_numeric(fwd_df[spread_col].astype(str).str.replace(',', ''), errors='coerce')
+                valid_mask = fwd_dates.notna() & fwd_vals.notna()
+                
+                for d, v in zip(fwd_dates[valid_mask], fwd_vals[valid_mask]):
+                    spreads_dict[d.strftime("%Y-%m-%d")] = v
 
-        # 2. Load Main Options Data
-        df = pd.read_csv(live_opts_url, on_bad_lines='skip', dtype=str)
-        
+        # 3. Process Main Options Data
         db_date = "Unknown"
         for col in df.columns:
             if str(col).strip().lower() in ['busdate', 'bus date', 'date', 'businessdate']:
@@ -212,6 +232,8 @@ def load_databases(opts_url, fwd_url, cb="default"):
             df['Style'] = 'American'
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
+        
+        # VECTORIZED DATE PROCESSING (Native C-Speed execution)
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -344,6 +366,8 @@ st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
+    if clean == 'XJOW': clean = 'XJO'
+        
     sym = "^AXJO" if clean == "XJO" else f"{clean}.AX"
     div_info, spot = None, 0.0
     
@@ -398,7 +422,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.2.0</div>
+            <div class="header-sub">Option Strategy Builder v1.2.2</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -430,7 +454,7 @@ with c3:
     
     with bc2:
         if st.button("🔄 RESTART", use_container_width=True):
-            st.query_params.clear() # Wipes the Shareable URL cleanly
+            st.query_params.clear() 
             saved_db = st.session_state.get('ref_data', None)
             saved_fwd = st.session_state.get('fwd_spreads', {})
             saved_date = st.session_state.get('data_date', 'Unknown')
@@ -457,6 +481,9 @@ with c3:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
+                    
+                    if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
+                    
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
                     st.session_state.preselect_strike = float(match.iloc[0]['Strike'])
                     st.session_state.preselect_code = query_upper
@@ -467,10 +494,12 @@ with c3:
                         best_match = max(possible_matches, key=len)
                         if len(query_upper) > len(best_match):
                             ticker_to_fetch = best_match
+                            if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                             st.session_state.preselect_code = query_upper
                             st.session_state.preselect_expiry = None
                             st.session_state.preselect_strike = None
                     else:
+                        if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                         st.session_state.preselect_expiry = None
                         st.session_state.preselect_strike = None
                         st.session_state.preselect_code = None
@@ -509,7 +538,10 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     
-    subset = ref[ref['Ticker'] == tkr]
+    if tkr == 'XJO':
+        subset = ref[ref['Ticker'].isin(['XJO', 'XJOW'])]
+    else:
+        subset = ref[ref['Ticker'] == tkr]
     
     today = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
     subset = subset[subset['Expiry'] >= today]
@@ -520,7 +552,14 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         exp_list = list(exp_map.keys())
         
         default_idx = exp_list.index(st.session_state.preselect_expiry) if st.session_state.preselect_expiry in exp_list else None
-        current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
+        
+        # --- VIEW MODE UI ---
+        exp_col1, exp_col2 = st.columns([1, 2])
+        with exp_col1:
+            current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
+        with exp_col2:
+            st.write("<div style='height: 29px;'></div>", unsafe_allow_html=True) 
+            view_mode = st.radio("Strikes View", options=["Standard (25)", "Expanded (50)", "All Strikes"], horizontal=True, label_visibility="collapsed")
         
         if current_exp:
             target_dt = exp_map[current_exp]
@@ -570,10 +609,18 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
 if not df_view.empty and current_exp:
     center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
         
-    if center > 0:
+    # Radius dictates how many rows are extracted, but the UI table height is now locked to keep it cleanly scrollable
+    if view_mode == "Standard (25)":
+        radius = 12
+    elif view_mode == "Expanded (50)":
+        radius = 25
+    else:
+        radius = len(df_view) 
+
+    if center > 0 and radius < len(df_view):
         df_view['Diff'] = abs(df_view['STRIKE'] - center)
         atm_idx = df_view['Diff'].idxmin()
-        df_view = df_view.iloc[max(0, atm_idx - 12):min(len(df_view), atm_idx + 13)].drop(columns=['Diff'])
+        df_view = df_view.iloc[max(0, atm_idx - radius):min(len(df_view), atm_idx + radius + 1)].drop(columns=['Diff'])
     
     st.markdown(f"**Chain: {current_exp}**")
     
@@ -608,6 +655,7 @@ if not df_view.empty and current_exp:
 
     editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
+    # Locked height at 650px ensures it is always a clean, scrollable window
     edited_df = st.data_editor(
         styled_disp,
         column_config={
@@ -623,7 +671,7 @@ if not df_view.empty and current_exp:
             "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
             "P_Sel": st.column_config.CheckboxColumn("☑ Put", default=False),
         },
-        hide_index=True, use_container_width=True, key=editor_key,
+        hide_index=True, use_container_width=True, height=650, key=editor_key,
         disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
     )
     
@@ -720,21 +768,24 @@ if st.session_state.legs:
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
     # --- PORTFOLIO MARGIN SIMULATION ENGINE ---
-    scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
+    scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)]
     portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
     leg_risk_arrays = []
     
     tkr = st.session_state.ticker.replace(".AX", "")
     
     for leg in st.session_state.legs:
-        match = pd.DataFrame()
-        if st.session_state.ref_data is not None:
-            match = st.session_state.ref_data[
-                (st.session_state.ref_data['Ticker'] == tkr) & 
-                (st.session_state.ref_data['Type'] == leg['Type']) & 
-                (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
-                (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-            ]
+        if tkr == 'XJO':
+            ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
+        else:
+            ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+
+        match = st.session_state.ref_data[
+            ticker_mask & 
+            (st.session_state.ref_data['Type'] == leg['Type']) & 
+            (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
+            (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+        ]
         
         if not match.empty and scen_cols:
             risk_array = match.iloc[0][scen_cols].values.astype(float)
@@ -788,15 +839,18 @@ if st.session_state.legs:
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
-            subset = pd.DataFrame()
-            if st.session_state.ref_data is not None:
-                subset = st.session_state.ref_data[
-                    (st.session_state.ref_data['Ticker'] == tkr) & 
-                    (st.session_state.ref_data['Type'] == leg['Type']) & 
-                    (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-                ]
+            if tkr == 'XJO':
+                ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
+            else:
+                ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+                
+            subset = st.session_state.ref_data[
+                ticker_mask & 
+                (st.session_state.ref_data['Type'] == leg['Type']) & 
+                (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+            ]
             
-            available_strikes = sorted(subset['Strike'].unique().tolist()) if not subset.empty else []
+            available_strikes = sorted(subset['Strike'].unique().tolist())
             current_strike = float(leg['Strike'])
             
             if available_strikes:
@@ -827,25 +881,24 @@ if st.session_state.legs:
                 
             if new_strike is not None and new_strike != current_strike:
                 st.session_state.legs[i]['Strike'] = new_strike
-                if not subset.empty:
-                    match = subset[subset['Strike'] == new_strike]
-                    if not match.empty:
-                        match = match.sort_values('Code', ascending=False)
-                        new_vol = float(match.iloc[0]['Vol'])
-                        new_style = match.iloc[0].get('Style', 'American')
-                        
-                        st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
-                        st.session_state.legs[i]['Vol'] = new_vol
-                        st.session_state.legs[i]['Style'] = new_style
-                        st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
-                        
-                        matched_theo, _ = calculate_price_and_delta(
-                            new_style, leg['Type'], st.session_state.spot_price, new_strike, 
-                            leg['Expiry'], new_vol, leg['ExpDateStr']
-                        )
-                        st.session_state.legs[i]['Entry'] = matched_theo
-                    else:
-                        st.session_state.legs[i]['Code'] = "N/A"
+                match = subset[subset['Strike'] == new_strike]
+                if not match.empty:
+                    match = match.sort_values('Code', ascending=False)
+                    new_vol = float(match.iloc[0]['Vol'])
+                    new_style = match.iloc[0].get('Style', 'American')
+                    
+                    st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
+                    st.session_state.legs[i]['Vol'] = new_vol
+                    st.session_state.legs[i]['Style'] = new_style
+                    st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
+                    
+                    matched_theo, _ = calculate_price_and_delta(
+                        new_style, leg['Type'], st.session_state.spot_price, new_strike, 
+                        leg['Expiry'], new_vol, leg['ExpDateStr']
+                    )
+                    st.session_state.legs[i]['Entry'] = matched_theo
+                else:
+                    st.session_state.legs[i]['Code'] = "N/A"
                 st.rerun()
                 
         with c[6]: 
@@ -975,7 +1028,7 @@ if st.session_state.legs:
     # --- ADVANCED CHARTING ENGINE ---
     st.markdown("### Payoff Chart")
     
-    chart_spread = range_pct * 8 # Slightly wider spread to catch wider breakevens
+    chart_spread = range_pct * 8
     chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 200)
     
     pnl_today = []
@@ -994,22 +1047,19 @@ if st.session_state.legs:
         pnl_today.append(val_t0)
         pnl_expiry.append(val_tF)
         
-    # Mathematical Scan for Break-Even points at Expiry
     breakevens = []
     for i in range(len(chart_prices)-1):
-        if pnl_expiry[i] * pnl_expiry[i+1] < 0: # Detects where the PnL mathematically crosses 0
+        if pnl_expiry[i] * pnl_expiry[i+1] < 0:
             x1, x2 = chart_prices[i], chart_prices[i+1]
             y1, y2 = pnl_expiry[i], pnl_expiry[i+1]
-            x_zero = x1 - y1 * (x2 - x1) / (y2 - y1) # Linear interpolation for exact penny precision
+            x_zero = x1 - y1 * (x2 - x1) / (y2 - y1) 
             breakevens.append(x_zero)
         
     fig = go.Figure()
     
-    # Shade the Background Profit / Loss Zones
     fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(74, 222, 128, 0.08)", layer="below", line_width=0)
     fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
     
-    # Draw Exact Break-Even Lines
     for be in breakevens:
         fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
         fig.add_annotation(
@@ -1032,7 +1082,6 @@ if st.session_state.legs:
     
     fig.add_vline(x=spot, line_dash="dot", line_color="grey")
     
-    # Lock the visual Y-axis bounds tightly to the strategy PnL so the shading doesn't look empty
     max_pnl = max(max(pnl_expiry), max(pnl_today))
     min_pnl = min(min(pnl_expiry), min(pnl_today))
     padding = max(abs(max_pnl), abs(min_pnl)) * 0.1
