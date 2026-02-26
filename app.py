@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.2.2 (Performance Engine & Scrollable UI)
+# VERSION: 1.2.3 (Compact Table UI)
 # ==========================================
 
 import streamlit as st
@@ -87,6 +87,35 @@ st.markdown("""
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
+# --- BULLETPROOF DATE PARSER ---
+def smart_parse_date(d_str):
+    try:
+        d_str = str(d_str).strip().split(' ')[0]
+        d_str = re.sub(r'(/|-)(2[5-9])$', r'\g<1>20\2', d_str)
+        
+        replacements = {
+            'January': 'Jan', 'February': 'Feb', 'March': 'Mar', 'April': 'Apr', 
+            'June': 'Jun', 'July': 'Jul', 'August': 'Aug', 'September': 'Sep', 
+            'Sept': 'Sep', 'October': 'Oct', 'November': 'Nov', 'December': 'Dec'
+        }
+        for k, v in replacements.items():
+            d_str = re.sub(k, v, d_str, flags=re.IGNORECASE)
+
+        dt_df = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
+        dt_mf = pd.to_datetime(d_str, dayfirst=False, errors='coerce')
+        
+        if pd.isna(dt_df) and pd.isna(dt_mf): return pd.NaT
+        if pd.isna(dt_df): return dt_mf
+        if pd.isna(dt_mf): return dt_df
+        if dt_df == dt_mf: return dt_df
+        
+        if dt_df.weekday() == 3: return dt_df
+        if dt_mf.weekday() == 3: return dt_mf
+        
+        return dt_df
+    except:
+        return pd.NaT
+
 # --- 2. SESSION STATE & URL PARSER ---
 if 'url_loaded' not in st.session_state:
     st.session_state.url_loaded = True
@@ -150,13 +179,11 @@ def load_databases(opts_url, fwd_url, cb="default"):
         live_fwd_url = f"{fwd_url}&cb={cb}"
         live_opts_url = f"{opts_url}&cb={cb}"
         
-        # Helper for Column Pruning (Only downloads exactly what we need)
         def opts_col_filter(col_name):
             c = str(col_name).strip().lower()
             required = ['asxcode', 'underlying', 'opttype', 'expdate', 'strike', 'volatility', 'settlement', 'style', 'lookup key', 'busdate', 'bus date', 'businessdate', 'date']
             return (c in required) or ('scenario' in c)
 
-        # Parallel Fetch Functions
         def fetch_fwd():
             try:
                 return pd.read_csv(live_fwd_url, dtype=str, engine='pyarrow')
@@ -169,14 +196,12 @@ def load_databases(opts_url, fwd_url, cb="default"):
             except:
                 return pd.read_csv(live_opts_url, on_bad_lines='skip', dtype=str, usecols=opts_col_filter)
 
-        # 1. PARALLEL DOWNLOADING
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future_fwd = executor.submit(fetch_fwd)
             future_opts = executor.submit(fetch_opts)
             fwd_df = future_fwd.result()
             df = future_opts.result()
 
-        # 2. Process Forward Curve
         spreads_dict = {}
         if fwd_df is not None and not fwd_df.empty:
             spread_col, fwd_date_col = None, None
@@ -186,7 +211,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 elif clean_c in ['fwd expiry', 'expiry', 'xjo forward yield', 'forward yield']: fwd_date_col = col
 
             if spread_col and fwd_date_col:
-                # Vectorized date processing for Forward Curve
                 fwd_dates = pd.to_datetime(fwd_df[fwd_date_col], dayfirst=True, errors='coerce')
                 fwd_vals = pd.to_numeric(fwd_df[spread_col].astype(str).str.replace(',', ''), errors='coerce')
                 valid_mask = fwd_dates.notna() & fwd_vals.notna()
@@ -194,7 +218,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 for d, v in zip(fwd_dates[valid_mask], fwd_vals[valid_mask]):
                     spreads_dict[d.strftime("%Y-%m-%d")] = v
 
-        # 3. Process Main Options Data
         db_date = "Unknown"
         for col in df.columns:
             if str(col).strip().lower() in ['busdate', 'bus date', 'date', 'businessdate']:
@@ -233,7 +256,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         
-        # VECTORIZED DATE PROCESSING (Native C-Speed execution)
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -422,7 +444,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.2.2</div>
+            <div class="header-sub">Option Strategy Builder v1.2.3</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -609,7 +631,6 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
 if not df_view.empty and current_exp:
     center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
         
-    # Radius dictates how many rows are extracted, but the UI table height is now locked to keep it cleanly scrollable
     if view_mode == "Standard (25)":
         radius = 12
     elif view_mode == "Expanded (50)":
@@ -655,7 +676,7 @@ if not df_view.empty and current_exp:
 
     editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
-    # Locked height at 650px ensures it is always a clean, scrollable window
+    # Height parameter removed. Streamlit handles scrolling automatically in a compact window.
     edited_df = st.data_editor(
         styled_disp,
         column_config={
@@ -671,7 +692,7 @@ if not df_view.empty and current_exp:
             "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
             "P_Sel": st.column_config.CheckboxColumn("☑ Put", default=False),
         },
-        hide_index=True, use_container_width=True, height=650, key=editor_key,
+        hide_index=True, use_container_width=True, key=editor_key,
         disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
     )
     
