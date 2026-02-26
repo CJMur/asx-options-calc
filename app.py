@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.1.6.2 (Safe Weekly Merge)
+# VERSION: 1.1.7 (Date Year Fix & Weekly Merge)
 # ==========================================
 
 import streamlit as st
@@ -81,6 +81,37 @@ st.markdown("""
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
+# --- BULLETPROOF DATE PARSER ---
+def smart_parse_date(d_str):
+    try:
+        d_str = str(d_str).strip().split(' ')[0]
+        # Force 2-digit years to 4-digit years (e.g., /26 -> /2026)
+        d_str = re.sub(r'(/|-)(2[5-9])$', r'\g<1>20\2', d_str)
+        
+        replacements = {
+            'January': 'Jan', 'February': 'Feb', 'March': 'Mar', 'April': 'Apr', 
+            'June': 'Jun', 'July': 'Jul', 'August': 'Aug', 'September': 'Sep', 
+            'Sept': 'Sep', 'October': 'Oct', 'November': 'Nov', 'December': 'Dec'
+        }
+        for k, v in replacements.items():
+            d_str = re.sub(k, v, d_str, flags=re.IGNORECASE)
+
+        dt_df = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
+        dt_mf = pd.to_datetime(d_str, dayfirst=False, errors='coerce')
+        
+        if pd.isna(dt_df) and pd.isna(dt_mf): return pd.NaT
+        if pd.isna(dt_df): return dt_mf
+        if pd.isna(dt_mf): return dt_df
+        if dt_df == dt_mf: return dt_df
+        
+        # Thursday Check: Resolves day/month flips like 3/5/2026
+        if dt_df.weekday() == 3: return dt_df
+        if dt_mf.weekday() == 3: return dt_mf
+        
+        return dt_df
+    except:
+        return pd.NaT
+
 # --- 2. SESSION STATE ---
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
@@ -94,7 +125,7 @@ if 'manual_spot' not in st.session_state: st.session_state.manual_spot = False
 if 'is_market_open' not in st.session_state: st.session_state.is_market_open = True
 if 'div_info' not in st.session_state: st.session_state.div_info = None
 if 'matrix_vol_mod' not in st.session_state: st.session_state.matrix_vol_mod = 0.0
-if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0
+if 'editor_reset' not in st.session_state: st.session_state.editor_reset = 0 
 
 if 'preselect_code' not in st.session_state: st.session_state.preselect_code = None
 if 'preselect_expiry' not in st.session_state: st.session_state.preselect_expiry = None
@@ -144,9 +175,8 @@ def load_databases(opts_url, fwd_url, cb="default"):
             if spread_col and fwd_date_col:
                 for _, row in fwd_df.iterrows():
                     try:
-                        dt_str = str(row[fwd_date_col]).strip()
+                        dt = smart_parse_date(row[fwd_date_col])
                         val_str = str(row[spread_col]).replace(',', '').strip()
-                        dt = pd.to_datetime(dt_str, dayfirst=True, errors='coerce')
                         val = pd.to_numeric(val_str, errors='coerce')
                         if pd.notna(dt) and pd.notna(val):
                             spreads_dict[dt.strftime("%Y-%m-%d")] = val
@@ -195,7 +225,10 @@ def load_databases(opts_url, fwd_url, cb="default"):
             df['Style'] = 'American'
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
-        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
+        
+        # Implement the smart date parser
+        clean_exp = df['Expiry'].apply(smart_parse_date)
+        df['Expiry'] = pd.to_datetime(clean_exp, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
             df['Vol'] = pd.to_numeric(df['Vol'].astype(str).str.replace('%', ''), errors='coerce')
@@ -327,8 +360,6 @@ st.session_state.is_market_open = check_market_hours()
 
 def fetch_data(t):
     clean = t.upper().replace(".AX", "").strip()
-    
-    # Safely normalize XJOW to XJO for spot price lookups
     if clean == 'XJOW': clean = 'XJO'
         
     sym = "^AXJO" if clean == "XJO" else f"{clean}.AX"
@@ -385,7 +416,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.1.6.2</div>
+            <div class="header-sub">Option Strategy Builder v1.1.7</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -443,8 +474,6 @@ with c3:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
-                    
-                    # Normalize XJOW to XJO so the whole index chain loads together
                     if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                     
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
@@ -501,8 +530,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     
-    # --- SAFE WEEKLY MERGE ---
-    # Specifically captures exactly XJO and XJOW, preventing any wildcard overlaps
+    # --- WEEKLY & MONTHLY MERGE ---
     if tkr == 'XJO':
         subset = ref[ref['Ticker'].isin(['XJO', 'XJOW'])]
     else:
@@ -724,7 +752,7 @@ if st.session_state.legs:
     tkr = st.session_state.ticker.replace(".AX", "")
     
     for leg in st.session_state.legs:
-        # Safe Weekly Merge logic repeated for Margin calculation
+        # Match Weekly Merge logic for risk array pulling
         if tkr == 'XJO':
             ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
         else:
@@ -789,7 +817,6 @@ if st.session_state.legs:
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
-            # Safe Weekly Merge logic repeated for Strike Up/Down Arrows
             if tkr == 'XJO':
                 ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
             else:
