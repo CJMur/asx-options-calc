@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.2.4 (Vectorized Speed Test)
+# VERSION: 1.2.5 (Parquet Speed Update)
 # ==========================================
 
 import streamlit as st
@@ -17,15 +17,14 @@ import re
 import json
 import base64
 import concurrent.futures
+import io
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 
-# Main Options Database (gid=0)
-OPTIONS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/export?format=csv&gid=0"
-
-# Forward Curve Database 
-FWD_CURVE_URL = "https://docs.google.com/spreadsheets/d/1d9FQ5mn--MSNJ_WJkU--IvoSRU0gQBqE0f9s9zEb0Q4/export?format=csv&gid=861426630"
+# GitHub Raw URLs (Parquet Files)
+OPTIONS_SHEET_URL = "https://github.com/CJMur/tc-options-data/raw/refs/heads/main/options_data.parquet"
+FWD_CURVE_URL = "https://github.com/CJMur/tc-options-data/raw/refs/heads/main/fwd_curve.parquet"
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -130,7 +129,7 @@ TOOLTIPS = {
     "Margin": "The estimated portfolio collateral required to hold this specific strategy."
 }
 
-# --- 3. DATA ENGINE (PERFORMANCE UPGRADED) ---
+# --- 3. DATA ENGINE (PARQUET SPEED UPGRADE) ---
 @st.cache_data(ttl=86400)
 def fetch_rba_cash_rate():
     try:
@@ -147,27 +146,24 @@ global_rba_rate = fetch_rba_cash_rate()
 @st.cache_data(ttl=3600)
 def load_databases(opts_url, fwd_url, cb="default"):
     try:
-        live_fwd_url = f"{fwd_url}&cb={cb}"
-        live_opts_url = f"{opts_url}&cb={cb}"
+        live_fwd_url = f"{fwd_url}?cb={cb}"
+        live_opts_url = f"{opts_url}?cb={cb}"
         
-        # Parallel Fetching setup
+        # Parallel Fetching setup via BytesIO for high-speed binary parsing
         def fetch_fwd():
             try:
-                return pd.read_csv(live_fwd_url, dtype=str, engine='pyarrow')
+                res = requests.get(live_fwd_url, timeout=10)
+                return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
             except:
-                return pd.read_csv(live_fwd_url, on_bad_lines='skip', dtype=str)
+                return pd.DataFrame()
 
         def fetch_opts():
-            # Column Pruning to drastically reduce download and parse time
-            def opts_col_filter(col_name):
-                c = str(col_name).strip().lower()
-                required = ['asxcode', 'underlying', 'opttype', 'expdate', 'strike', 'volatility', 'settlement', 'style', 'lookup key', 'busdate', 'bus date', 'businessdate', 'date']
-                return (c in required) or ('scenario' in c)
-                
             try:
-                return pd.read_csv(live_opts_url, dtype=str, usecols=opts_col_filter, engine='pyarrow')
-            except:
-                return pd.read_csv(live_opts_url, on_bad_lines='skip', dtype=str, usecols=opts_col_filter)
+                res = requests.get(live_opts_url, timeout=10)
+                return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
+            except Exception as e:
+                print(f"Opts fetch error: {e}")
+                return pd.DataFrame()
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future_fwd = executor.submit(fetch_fwd)
@@ -175,7 +171,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
             fwd_df = future_fwd.result()
             df = future_opts.result()
 
-        # Parse Forward Curve Dates (Vectorized)
+        # Parse Forward Curve
         spreads_dict = {}
         if fwd_df is not None and not fwd_df.empty:
             spread_col, fwd_date_col = None, None
@@ -192,6 +188,10 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 for d, v in zip(fwd_dates[valid_mask], fwd_vals[valid_mask]):
                     spreads_dict[d.strftime("%Y-%m-%d")] = v
 
+        if df.empty:
+            return pd.DataFrame(), "error|No option data loaded", spreads_dict, "Unknown"
+
+        # Extract Database Date
         db_date = "Unknown"
         for col in df.columns:
             if str(col).strip().lower() in ['busdate', 'bus date', 'date', 'businessdate']:
@@ -230,7 +230,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         
-        # --- VECTORIZED C-SPEED DATE PARSING (No custom loop) ---
+        # Vectorized C-Speed Date Parsing
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -419,7 +419,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.2.4</div>
+            <div class="header-sub">Option Strategy Builder v1.2.5</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -478,6 +478,7 @@ with c3:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
+                    
                     if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
                     
                     st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
@@ -549,6 +550,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
         
         default_idx = exp_list.index(st.session_state.preselect_expiry) if st.session_state.preselect_expiry in exp_list else None
         
+        # --- VIEW MODE UI ---
         exp_col1, exp_col2 = st.columns([1, 2])
         with exp_col1:
             current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
@@ -649,6 +651,7 @@ if not df_view.empty and current_exp:
 
     editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
+    # Standard Streamlit height removed to allow native clean scrolling
     edited_df = st.data_editor(
         styled_disp,
         column_config={
