@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.2.5 (Parquet Speed Update)
+# VERSION: 1.2.6 (UI Refinements)
 # ==========================================
 
 import streamlit as st
@@ -419,7 +419,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.2.5</div>
+            <div class="header-sub">Option Strategy Builder v1.2.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -556,7 +556,7 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
             current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
         with exp_col2:
             st.write("<div style='height: 29px;'></div>", unsafe_allow_html=True) 
-            view_mode = st.radio("Strikes View", options=["Standard (25)", "Expanded (50)", "All Strikes"], horizontal=True, label_visibility="collapsed")
+            view_mode = st.radio("Strikes View", options=["Standard View (25 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
         
         if current_exp:
             target_dt = exp_map[current_exp]
@@ -606,10 +606,8 @@ if st.session_state.ref_data is not None and st.session_state.ticker:
 if not df_view.empty and current_exp:
     center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
         
-    if view_mode == "Standard (25)":
+    if view_mode == "Standard View (25 Strikes)":
         radius = 12
-    elif view_mode == "Expanded (50)":
-        radius = 25
     else:
         radius = len(df_view) 
 
@@ -651,7 +649,6 @@ if not df_view.empty and current_exp:
 
     editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
-    # Standard Streamlit height removed to allow native clean scrolling
     edited_df = st.data_editor(
         styled_disp,
         column_config={
