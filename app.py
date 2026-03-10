@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.2.6 (UI Refinements)
+# VERSION: 1.2.7 (Parquet Cache-Buster)
 # ==========================================
 
 import streamlit as st
@@ -22,9 +22,9 @@ import io
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 
-# GitHub Raw URLs (Parquet Files)
-OPTIONS_SHEET_URL = "https://github.com/CJMur/tc-options-data/raw/refs/heads/main/options_data.parquet"
-FWD_CURVE_URL = "https://github.com/CJMur/tc-options-data/raw/refs/heads/main/fwd_curve.parquet"
+# Direct GitHub Raw CDN URLs (Bypasses the redirect drop)
+OPTIONS_SHEET_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/options_data.parquet"
+FWD_CURVE_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/fwd_curve.parquet"
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -149,17 +149,22 @@ def load_databases(opts_url, fwd_url, cb="default"):
         live_fwd_url = f"{fwd_url}?cb={cb}"
         live_opts_url = f"{opts_url}?cb={cb}"
         
-        # Parallel Fetching setup via BytesIO for high-speed binary parsing
+        # Hard no-cache headers to command GitHub CDN to give us the fresh file
+        fetch_headers = {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+        }
+        
         def fetch_fwd():
             try:
-                res = requests.get(live_fwd_url, timeout=10)
+                res = requests.get(live_fwd_url, headers=fetch_headers, timeout=10)
                 return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
             except:
                 return pd.DataFrame()
 
         def fetch_opts():
             try:
-                res = requests.get(live_opts_url, timeout=10)
+                res = requests.get(live_opts_url, headers=fetch_headers, timeout=10)
                 return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
             except Exception as e:
                 print(f"Opts fetch error: {e}")
@@ -419,7 +424,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.2.6</div>
+            <div class="header-sub">Option Strategy Builder v1.2.7</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
