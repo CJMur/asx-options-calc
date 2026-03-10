@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.0 (Ironclad Pipeline & UI)
+# VERSION: 1.3.1 (Clean Vector Build)
 # ==========================================
 
 import streamlit as st
@@ -14,6 +14,9 @@ import math
 import uuid
 import requests
 import re
+import json
+import base64
+import concurrent.futures
 import io
 
 # --- 1. CONFIGURATION & THEME ---
@@ -83,7 +86,21 @@ st.markdown("""
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
-# --- 2. SESSION STATE ---
+# --- 2. SESSION STATE & URL PARSER ---
+if 'url_loaded' not in st.session_state:
+    st.session_state.url_loaded = True
+    if "s" in st.query_params:
+        try:
+            encoded_state = st.query_params["s"]
+            decoded_json = base64.urlsafe_b64decode(encoded_state.encode()).decode()
+            payload = json.loads(decoded_json)
+            st.session_state.ticker = payload.get("t", "")
+            st.session_state.spot_price = payload.get("p", 0.0)
+            st.session_state.manual_spot = payload.get("m", False)
+            st.session_state.legs = payload.get("l", [])
+        except:
+            pass
+
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
@@ -112,7 +129,7 @@ TOOLTIPS = {
     "Margin": "The estimated portfolio collateral required to hold this specific strategy."
 }
 
-# --- 3. DATA ENGINE (BULLETPROOF PARQUET UPGRADE) ---
+# --- 3. DATA ENGINE (CLEAN PARQUET ENGINE) ---
 @st.cache_data(ttl=86400)
 def fetch_rba_cash_rate():
     try:
@@ -129,6 +146,7 @@ global_rba_rate = fetch_rba_cash_rate()
 @st.cache_data(ttl=3600)
 def load_databases(opts_url, fwd_url, cb="default"):
     try:
+        # We append the cache-buster to the URL to force GitHub's CDN to give us the latest file
         live_fwd_url = f"{fwd_url}?cb={cb}"
         live_opts_url = f"{opts_url}?cb={cb}"
         
@@ -165,7 +183,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 if res_opts.content.startswith(b'PAR1'):
                     df = pd.read_parquet(io.BytesIO(res_opts.content), engine='pyarrow')
                 else:
-                    return pd.DataFrame(), "error|GitHub blocked the request (Sent HTML instead of Parquet).", spreads_dict, "Unknown"
+                    return pd.DataFrame(), "error|GitHub blocked the request (Sent HTML instead of Parquet). Wait 1 minute and retry.", spreads_dict, "Unknown"
             else:
                 return pd.DataFrame(), f"error|GitHub returned HTTP {res_opts.status_code}.", spreads_dict, "Unknown"
         except Exception as e:
@@ -195,7 +213,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
         required = ['Code', 'Ticker', 'Strike', 'Expiry']
         missing_cols = [c for c in required if c not in df.columns]
         if missing_cols:
-            return pd.DataFrame(), f"error|Missing required columns: {missing_cols}", spreads_dict, db_date
+            return pd.DataFrame(), f"error|Missing required columns: {missing_cols}. Columns found: {list(df.columns)}", spreads_dict, db_date
 
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
@@ -216,30 +234,8 @@ def load_databases(opts_url, fwd_url, cb="default"):
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         
-        # Vectorized C-Speed Date Parsing with Year-26 Shield
-        s = df['Expiry'].astype(str).str.strip().str.split(' ').str[0]
-        s = s.str.replace(r'(/|-)(2[5-9])$', r'\g<1>20\2', regex=True)
-        
-        replacements = {
-            'January': 'Jan', 'February': 'Feb', 'March': 'Mar', 'April': 'Apr', 
-            'June': 'Jun', 'July': 'Jul', 'August': 'Aug', 'September': 'Sep', 
-            'Sept': 'Sep', 'October': 'Oct', 'November': 'Nov', 'December': 'Dec'
-        }
-        for k, v in replacements.items():
-            s = s.str.replace(k, v, case=False, regex=True)
-            
-        dt_df = pd.to_datetime(s, dayfirst=True, errors='coerce')
-        dt_mf = pd.to_datetime(s, dayfirst=False, errors='coerce')
-        
-        dt = dt_df.copy()
-        mask_na = dt_df.isna()
-        dt.loc[mask_na] = dt_mf.loc[mask_na]
-        
-        mask_diff = dt_df.notna() & dt_mf.notna() & (dt_df != dt_mf)
-        mask_mf_thurs = mask_diff & (dt_mf.dt.weekday == 3) & (dt_df.dt.weekday != 3)
-        dt.loc[mask_mf_thurs] = dt_mf.loc[mask_mf_thurs]
-        
-        df['Expiry'] = dt.dt.normalize()
+        # --- CLEAN C-SPEED DATE PARSING (Removed the Thursday Lock Bug) ---
+        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
             df['Vol'] = pd.to_numeric(df['Vol'].astype(str).str.replace('%', ''), errors='coerce')
@@ -431,7 +427,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.0</div>
+            <div class="header-sub">Option Strategy Builder v1.3.1</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -546,6 +542,7 @@ with c3:
 # --- 9. CHAIN DISPLAY ---
 df_view = pd.DataFrame()
 current_exp = None
+subset = pd.DataFrame()
 
 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty and st.session_state.ticker:
     ref = st.session_state.ref_data
@@ -618,6 +615,11 @@ if st.session_state.ref_data is not None and not st.session_state.ref_data.empty
             df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
             
             df_view['P_Sel'] = False
+
+# UX Warning for missing data logic
+if st.session_state.ticker and st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
+    if subset.empty:
+        st.warning(f"No valid options found for **{st.session_state.ticker}** expiring on or after today. Please ensure your data export contains current expiries.")
 
 if not df_view.empty and current_exp:
     center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
@@ -850,20 +852,20 @@ if st.session_state.legs:
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
-            subset = pd.DataFrame()
+            subset_st = pd.DataFrame()
             if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                 if tkr == 'XJO':
                     ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
                 else:
                     ticker_mask = st.session_state.ref_data['Ticker'] == tkr
                     
-                subset = st.session_state.ref_data[
+                subset_st = st.session_state.ref_data[
                     ticker_mask & 
                     (st.session_state.ref_data['Type'] == leg['Type']) & 
                     (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
                 ]
             
-            available_strikes = sorted(subset['Strike'].unique().tolist()) if not subset.empty else []
+            available_strikes = sorted(subset_st['Strike'].unique().tolist()) if not subset_st.empty else []
             current_strike = float(leg['Strike'])
             
             if available_strikes:
@@ -894,8 +896,8 @@ if st.session_state.legs:
                 
             if new_strike is not None and new_strike != current_strike:
                 st.session_state.legs[i]['Strike'] = new_strike
-                if not subset.empty:
-                    match = subset[subset['Strike'] == new_strike]
+                if not subset_st.empty:
+                    match = subset_st[subset_st['Strike'] == new_strike]
                     if not match.empty:
                         match = match.sort_values('Code', ascending=False)
                         new_vol = float(match.iloc[0]['Vol'])
@@ -946,6 +948,18 @@ if st.session_state.legs:
         with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
         with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
         with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+
+    # --- URL STATE SYNC ENGINE ---
+    payload = {
+        "t": st.session_state.ticker,
+        "p": st.session_state.spot_price,
+        "m": st.session_state.manual_spot,
+        "l": st.session_state.legs
+    }
+    try:
+        encoded_state = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        st.query_params["s"] = encoded_state
+    except: pass
 
     # --- MATRIX ---
     st.markdown("---")
@@ -1100,3 +1114,6 @@ if st.session_state.legs:
         )
     )
     st.plotly_chart(fig, use_container_width=True)
+else:
+    if "s" in st.query_params:
+        del st.query_params["s"]
