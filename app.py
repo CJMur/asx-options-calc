@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.2.8 (Ironclad Parquet Build)
+# VERSION: 1.3.0 (Ironclad Pipeline & UI)
 # ==========================================
 
 import streamlit as st
@@ -14,17 +14,14 @@ import math
 import uuid
 import requests
 import re
-import json
-import base64
-import concurrent.futures
 import io
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 
 # Direct GitHub Raw CDN URLs
-OPTIONS_SHEET_URL = "https://github.com/CJMur/tc-options-data/raw/refs/heads/main/options_data.parquet"
-FWD_CURVE_URL = "https://github.com/CJMur/tc-options-data/raw/refs/heads/main/fwd_curve.parquet"
+OPTIONS_SHEET_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/options_data.parquet"
+FWD_CURVE_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/fwd_curve.parquet"
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -86,21 +83,7 @@ st.markdown("""
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
-# --- 2. SESSION STATE & URL PARSER ---
-if 'url_loaded' not in st.session_state:
-    st.session_state.url_loaded = True
-    if "s" in st.query_params:
-        try:
-            encoded_state = st.query_params["s"]
-            decoded_json = base64.urlsafe_b64decode(encoded_state.encode()).decode()
-            payload = json.loads(decoded_json)
-            st.session_state.ticker = payload.get("t", "")
-            st.session_state.spot_price = payload.get("p", 0.0)
-            st.session_state.manual_spot = payload.get("m", False)
-            st.session_state.legs = payload.get("l", [])
-        except:
-            pass
-
+# --- 2. SESSION STATE ---
 if 'legs' not in st.session_state: st.session_state.legs = [] 
 if 'ticker' not in st.session_state: st.session_state.ticker = "" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
@@ -129,7 +112,7 @@ TOOLTIPS = {
     "Margin": "The estimated portfolio collateral required to hold this specific strategy."
 }
 
-# --- 3. DATA ENGINE (IRONCLAD PARQUET UPGRADE) ---
+# --- 3. DATA ENGINE (BULLETPROOF PARQUET UPGRADE) ---
 @st.cache_data(ttl=86400)
 def fetch_rba_cash_rate():
     try:
@@ -149,44 +132,17 @@ def load_databases(opts_url, fwd_url, cb="default"):
         live_fwd_url = f"{fwd_url}?cb={cb}"
         live_opts_url = f"{opts_url}?cb={cb}"
         
-        # Absolute cache-busting headers
-        fetch_headers = {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-        }
-        
-        def fetch_fwd():
-            try:
-                res = requests.get(live_fwd_url, headers=fetch_headers, timeout=10)
-                if res.status_code == 200:
-                    return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
-            except: pass
-            return pd.DataFrame()
-
-        def fetch_opts():
-            try:
-                res = requests.get(live_opts_url, headers=fetch_headers, timeout=15)
-                if res.status_code == 200:
-                    return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
-                else:
-                    return f"error|GitHub returned status code {res.status_code}"
-            except Exception as e:
-                return f"error|Failed to download Parquet: {str(e)}"
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_fwd = executor.submit(fetch_fwd)
-            future_opts = executor.submit(fetch_opts)
-            fwd_df = future_fwd.result()
-            opts_result = future_opts.result()
-
-        if isinstance(opts_result, str) and opts_result.startswith("error|"):
-            return pd.DataFrame(), opts_result, {}, "Unknown"
-            
-        df = opts_result
-
+        fwd_df = pd.DataFrame()
         spreads_dict = {}
-        if fwd_df is not None and not fwd_df.empty:
+        
+        # 1. Fetch Forward Curve Safely
+        try:
+            res_fwd = requests.get(live_fwd_url, timeout=10)
+            if res_fwd.status_code == 200 and res_fwd.content.startswith(b'PAR1'):
+                fwd_df = pd.read_parquet(io.BytesIO(res_fwd.content), engine='pyarrow')
+        except: pass
+
+        if not fwd_df.empty:
             fwd_df.columns = [str(c).strip() for c in fwd_df.columns]
             spread_col, fwd_date_col = None, None
             for col in fwd_df.columns:
@@ -201,13 +157,26 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 for d, v in zip(fwd_dates[valid_mask], fwd_vals[valid_mask]):
                     spreads_dict[d.strftime("%Y-%m-%d")] = v
 
-        if df.empty:
-            return pd.DataFrame(), "error|The Parquet file was completely empty.", spreads_dict, "Unknown"
+        # 2. Fetch Options Data with Magic Byte Shield
+        df = pd.DataFrame()
+        try:
+            res_opts = requests.get(live_opts_url, timeout=15)
+            if res_opts.status_code == 200:
+                if res_opts.content.startswith(b'PAR1'):
+                    df = pd.read_parquet(io.BytesIO(res_opts.content), engine='pyarrow')
+                else:
+                    return pd.DataFrame(), "error|GitHub blocked the request (Sent HTML instead of Parquet).", spreads_dict, "Unknown"
+            else:
+                return pd.DataFrame(), f"error|GitHub returned HTTP {res_opts.status_code}.", spreads_dict, "Unknown"
+        except Exception as e:
+            return pd.DataFrame(), f"error|Download failed: {str(e)}", spreads_dict, "Unknown"
 
-        # STRIP INVISIBLE SPACES FROM COLUMNS (The silent killer)
+        if df.empty:
+            return pd.DataFrame(), "error|The Parquet file was downloaded but it is empty.", spreads_dict, "Unknown"
+
+        # 3. Strip invisible spaces from column names to prevent mapping crashes
         df.columns = [str(c).strip() for c in df.columns]
 
-        # Extract Database Date
         db_date = "Unknown"
         for col in df.columns:
             if str(col).lower() in ['busdate', 'bus date', 'date', 'businessdate']:
@@ -224,9 +193,9 @@ def load_databases(opts_url, fwd_url, cb="default"):
         df = df.rename(columns=header_map)
         
         required = ['Code', 'Ticker', 'Strike', 'Expiry']
-        missing_cols = [col for col in required if col not in df.columns]
+        missing_cols = [c for c in required if c not in df.columns]
         if missing_cols:
-            return pd.DataFrame(), f"error|Missing required columns in data: {missing_cols}. Please check Google Sheets headers.", spreads_dict, db_date
+            return pd.DataFrame(), f"error|Missing required columns: {missing_cols}", spreads_dict, db_date
 
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
@@ -247,8 +216,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         
-        # --- VECTORIZED "THURSDAY LOCK" C-SPEED DATE PARSING ---
-        # 1. Clean strings and force /26 to /2026 instantly
+        # Vectorized C-Speed Date Parsing with Year-26 Shield
         s = df['Expiry'].astype(str).str.strip().str.split(' ').str[0]
         s = s.str.replace(r'(/|-)(2[5-9])$', r'\g<1>20\2', regex=True)
         
@@ -260,11 +228,9 @@ def load_databases(opts_url, fwd_url, cb="default"):
         for k, v in replacements.items():
             s = s.str.replace(k, v, case=False, regex=True)
             
-        # 2. Parse both Day-First and Month-First scenarios
         dt_df = pd.to_datetime(s, dayfirst=True, errors='coerce')
         dt_mf = pd.to_datetime(s, dayfirst=False, errors='coerce')
         
-        # 3. Mathematically select the correct reality (Thursday Lock)
         dt = dt_df.copy()
         mask_na = dt_df.isna()
         dt.loc[mask_na] = dt_mf.loc[mask_na]
@@ -294,15 +260,14 @@ def load_databases(opts_url, fwd_url, cb="default"):
         else:
             df['UnitMargin'] = 0.0
 
-        # Final purge
         df = df.dropna(subset=['Code', 'Ticker', 'Strike', 'Expiry'])
         
         if df.empty:
-            return pd.DataFrame(), "error|Data loaded but all rows were dropped. Check date or code formatting.", spreads_dict, db_date
+            return pd.DataFrame(), "error|Data loaded successfully but all rows were dropped. Please check the date formats.", spreads_dict, db_date
             
         return df, f"success|{len(df)} Codes Loaded", spreads_dict, db_date
     except Exception as e:
-        return pd.DataFrame(), f"error|{str(e)[:50]}", {}, "Error"
+        return pd.DataFrame(), f"error|Pipeline failed: {str(e)[:50]}", {}, "Error"
 
 if st.session_state.ref_data is None:
     data, msg, extracted_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, "default")
@@ -466,7 +431,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.2.8</div>
+            <div class="header-sub">Option Strategy Builder v1.3.0</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -477,7 +442,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# VISIBLE ERROR DIAGNOSTICS (Helps debug data failures instantly)
+# VISIBLE ERROR DIAGNOSTICS
 if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.startswith("error|"):
     st.error(f"**Data Engine Warning:** {st.session_state.sheet_msg.split('|')[1]}")
 
@@ -525,7 +490,7 @@ with c3:
             ref = st.session_state.ref_data
             ticker_to_fetch = query_upper
             
-            if ref is not None:
+            if ref is not None and not ref.empty:
                 match = ref[ref['Code'] == query_upper]
                 if not match.empty:
                     ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
@@ -820,7 +785,7 @@ if st.session_state.legs:
     
     for leg in st.session_state.legs:
         match = pd.DataFrame()
-        if st.session_state.ref_data is not None:
+        if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
             if tkr == 'XJO':
                 ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
             else:
@@ -886,7 +851,7 @@ if st.session_state.legs:
         
         with c[5]: 
             subset = pd.DataFrame()
-            if st.session_state.ref_data is not None:
+            if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                 if tkr == 'XJO':
                     ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
                 else:
@@ -981,18 +946,6 @@ if st.session_state.legs:
         with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
         with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
         with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
-
-    # --- URL STATE SYNC ENGINE ---
-    payload = {
-        "t": st.session_state.ticker,
-        "p": st.session_state.spot_price,
-        "m": st.session_state.manual_spot,
-        "l": st.session_state.legs
-    }
-    try:
-        encoded_state = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
-        st.query_params["s"] = encoded_state
-    except: pass
 
     # --- MATRIX ---
     st.markdown("---")
@@ -1147,6 +1100,3 @@ if st.session_state.legs:
         )
     )
     st.plotly_chart(fig, use_container_width=True)
-else:
-    if "s" in st.query_params:
-        del st.query_params["s"]
