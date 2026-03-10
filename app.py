@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.2.7 (Parquet Cache-Buster)
+# VERSION: 1.2.8 (Ironclad Parquet Build)
 # ==========================================
 
 import streamlit as st
@@ -22,9 +22,9 @@ import io
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 
-# Direct GitHub Raw CDN URLs (Bypasses the redirect drop)
-OPTIONS_SHEET_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/options_data.parquet"
-FWD_CURVE_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/fwd_curve.parquet"
+# Direct GitHub Raw CDN URLs
+OPTIONS_SHEET_URL = "https://github.com/CJMur/tc-options-data/raw/refs/heads/main/options_data.parquet"
+FWD_CURVE_URL = "https://github.com/CJMur/tc-options-data/raw/refs/heads/main/fwd_curve.parquet"
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -129,7 +129,7 @@ TOOLTIPS = {
     "Margin": "The estimated portfolio collateral required to hold this specific strategy."
 }
 
-# --- 3. DATA ENGINE (PARQUET SPEED UPGRADE) ---
+# --- 3. DATA ENGINE (IRONCLAD PARQUET UPGRADE) ---
 @st.cache_data(ttl=86400)
 def fetch_rba_cash_rate():
     try:
@@ -149,39 +149,48 @@ def load_databases(opts_url, fwd_url, cb="default"):
         live_fwd_url = f"{fwd_url}?cb={cb}"
         live_opts_url = f"{opts_url}?cb={cb}"
         
-        # Hard no-cache headers to command GitHub CDN to give us the fresh file
+        # Absolute cache-busting headers
         fetch_headers = {
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
         }
         
         def fetch_fwd():
             try:
                 res = requests.get(live_fwd_url, headers=fetch_headers, timeout=10)
-                return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
-            except:
-                return pd.DataFrame()
+                if res.status_code == 200:
+                    return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
+            except: pass
+            return pd.DataFrame()
 
         def fetch_opts():
             try:
-                res = requests.get(live_opts_url, headers=fetch_headers, timeout=10)
-                return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
+                res = requests.get(live_opts_url, headers=fetch_headers, timeout=15)
+                if res.status_code == 200:
+                    return pd.read_parquet(io.BytesIO(res.content), engine='pyarrow')
+                else:
+                    return f"error|GitHub returned status code {res.status_code}"
             except Exception as e:
-                print(f"Opts fetch error: {e}")
-                return pd.DataFrame()
+                return f"error|Failed to download Parquet: {str(e)}"
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future_fwd = executor.submit(fetch_fwd)
             future_opts = executor.submit(fetch_opts)
             fwd_df = future_fwd.result()
-            df = future_opts.result()
+            opts_result = future_opts.result()
 
-        # Parse Forward Curve
+        if isinstance(opts_result, str) and opts_result.startswith("error|"):
+            return pd.DataFrame(), opts_result, {}, "Unknown"
+            
+        df = opts_result
+
         spreads_dict = {}
         if fwd_df is not None and not fwd_df.empty:
+            fwd_df.columns = [str(c).strip() for c in fwd_df.columns]
             spread_col, fwd_date_col = None, None
             for col in fwd_df.columns:
-                clean_c = str(col).strip().lower()
+                clean_c = str(col).lower()
                 if clean_c == 'spread': spread_col = col
                 elif clean_c in ['fwd expiry', 'expiry', 'xjo forward yield', 'forward yield']: fwd_date_col = col
 
@@ -189,17 +198,19 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 fwd_dates = pd.to_datetime(fwd_df[fwd_date_col], dayfirst=True, errors='coerce')
                 fwd_vals = pd.to_numeric(fwd_df[spread_col].astype(str).str.replace(',', ''), errors='coerce')
                 valid_mask = fwd_dates.notna() & fwd_vals.notna()
-                
                 for d, v in zip(fwd_dates[valid_mask], fwd_vals[valid_mask]):
                     spreads_dict[d.strftime("%Y-%m-%d")] = v
 
         if df.empty:
-            return pd.DataFrame(), "error|No option data loaded", spreads_dict, "Unknown"
+            return pd.DataFrame(), "error|The Parquet file was completely empty.", spreads_dict, "Unknown"
+
+        # STRIP INVISIBLE SPACES FROM COLUMNS (The silent killer)
+        df.columns = [str(c).strip() for c in df.columns]
 
         # Extract Database Date
         db_date = "Unknown"
         for col in df.columns:
-            if str(col).strip().lower() in ['busdate', 'bus date', 'date', 'businessdate']:
+            if str(col).lower() in ['busdate', 'bus date', 'date', 'businessdate']:
                 valid_dates = df[col].dropna()
                 if not valid_dates.empty:
                     db_date = str(valid_dates.iloc[0]).split(' ')[0].strip()
@@ -213,8 +224,9 @@ def load_databases(opts_url, fwd_url, cb="default"):
         df = df.rename(columns=header_map)
         
         required = ['Code', 'Ticker', 'Strike', 'Expiry']
-        if not all(col in df.columns for col in required):
-            return pd.DataFrame(), f"error|Missing columns: {list(df.columns)}", spreads_dict, db_date
+        missing_cols = [col for col in required if col not in df.columns]
+        if missing_cols:
+            return pd.DataFrame(), f"error|Missing required columns in data: {missing_cols}. Please check Google Sheets headers.", spreads_dict, db_date
 
         df['Ticker'] = df['Ticker'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
         df['Code'] = df['Code'].astype(str).str.upper().str.strip().replace('NAN', np.nan).replace('', np.nan)
@@ -235,8 +247,33 @@ def load_databases(opts_url, fwd_url, cb="default"):
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         
-        # Vectorized C-Speed Date Parsing
-        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
+        # --- VECTORIZED "THURSDAY LOCK" C-SPEED DATE PARSING ---
+        # 1. Clean strings and force /26 to /2026 instantly
+        s = df['Expiry'].astype(str).str.strip().str.split(' ').str[0]
+        s = s.str.replace(r'(/|-)(2[5-9])$', r'\g<1>20\2', regex=True)
+        
+        replacements = {
+            'January': 'Jan', 'February': 'Feb', 'March': 'Mar', 'April': 'Apr', 
+            'June': 'Jun', 'July': 'Jul', 'August': 'Aug', 'September': 'Sep', 
+            'Sept': 'Sep', 'October': 'Oct', 'November': 'Nov', 'December': 'Dec'
+        }
+        for k, v in replacements.items():
+            s = s.str.replace(k, v, case=False, regex=True)
+            
+        # 2. Parse both Day-First and Month-First scenarios
+        dt_df = pd.to_datetime(s, dayfirst=True, errors='coerce')
+        dt_mf = pd.to_datetime(s, dayfirst=False, errors='coerce')
+        
+        # 3. Mathematically select the correct reality (Thursday Lock)
+        dt = dt_df.copy()
+        mask_na = dt_df.isna()
+        dt.loc[mask_na] = dt_mf.loc[mask_na]
+        
+        mask_diff = dt_df.notna() & dt_mf.notna() & (dt_df != dt_mf)
+        mask_mf_thurs = mask_diff & (dt_mf.dt.weekday == 3) & (dt_df.dt.weekday != 3)
+        dt.loc[mask_mf_thurs] = dt_mf.loc[mask_mf_thurs]
+        
+        df['Expiry'] = dt.dt.normalize()
         
         if 'Vol' in df.columns:
             df['Vol'] = pd.to_numeric(df['Vol'].astype(str).str.replace('%', ''), errors='coerce')
@@ -257,10 +294,15 @@ def load_databases(opts_url, fwd_url, cb="default"):
         else:
             df['UnitMargin'] = 0.0
 
+        # Final purge
         df = df.dropna(subset=['Code', 'Ticker', 'Strike', 'Expiry'])
+        
+        if df.empty:
+            return pd.DataFrame(), "error|Data loaded but all rows were dropped. Check date or code formatting.", spreads_dict, db_date
+            
         return df, f"success|{len(df)} Codes Loaded", spreads_dict, db_date
     except Exception as e:
-        return pd.DataFrame(), f"error|{str(e)[:30]}", {}, "Error"
+        return pd.DataFrame(), f"error|{str(e)[:50]}", {}, "Error"
 
 if st.session_state.ref_data is None:
     data, msg, extracted_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, "default")
@@ -424,7 +466,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.2.7</div>
+            <div class="header-sub">Option Strategy Builder v1.2.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -434,6 +476,10 @@ st.markdown(f"""
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+# VISIBLE ERROR DIAGNOSTICS (Helps debug data failures instantly)
+if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.startswith("error|"):
+    st.error(f"**Data Engine Warning:** {st.session_state.sheet_msg.split('|')[1]}")
 
 # --- 7. CONTROLS ---
 c1, c2, c3 = st.columns([1, 1, 2], gap="medium")
@@ -536,7 +582,7 @@ with c3:
 df_view = pd.DataFrame()
 current_exp = None
 
-if st.session_state.ref_data is not None and st.session_state.ticker:
+if st.session_state.ref_data is not None and not st.session_state.ref_data.empty and st.session_state.ticker:
     ref = st.session_state.ref_data
     tkr = st.session_state.ticker.replace(".AX", "")
     
@@ -766,24 +812,26 @@ if st.session_state.legs:
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
     # --- PORTFOLIO MARGIN SIMULATION ENGINE ---
-    scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)]
+    scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
     portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
     leg_risk_arrays = []
     
     tkr = st.session_state.ticker.replace(".AX", "")
     
     for leg in st.session_state.legs:
-        if tkr == 'XJO':
-            ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
-        else:
-            ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+        match = pd.DataFrame()
+        if st.session_state.ref_data is not None:
+            if tkr == 'XJO':
+                ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
+            else:
+                ticker_mask = st.session_state.ref_data['Ticker'] == tkr
 
-        match = st.session_state.ref_data[
-            ticker_mask & 
-            (st.session_state.ref_data['Type'] == leg['Type']) & 
-            (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
-            (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-        ]
+            match = st.session_state.ref_data[
+                ticker_mask & 
+                (st.session_state.ref_data['Type'] == leg['Type']) & 
+                (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
+                (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+            ]
         
         if not match.empty and scen_cols:
             risk_array = match.iloc[0][scen_cols].values.astype(float)
@@ -837,18 +885,20 @@ if st.session_state.legs:
         with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
         
         with c[5]: 
-            if tkr == 'XJO':
-                ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
-            else:
-                ticker_mask = st.session_state.ref_data['Ticker'] == tkr
-                
-            subset = st.session_state.ref_data[
-                ticker_mask & 
-                (st.session_state.ref_data['Type'] == leg['Type']) & 
-                (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-            ]
+            subset = pd.DataFrame()
+            if st.session_state.ref_data is not None:
+                if tkr == 'XJO':
+                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
+                else:
+                    ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+                    
+                subset = st.session_state.ref_data[
+                    ticker_mask & 
+                    (st.session_state.ref_data['Type'] == leg['Type']) & 
+                    (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+                ]
             
-            available_strikes = sorted(subset['Strike'].unique().tolist())
+            available_strikes = sorted(subset['Strike'].unique().tolist()) if not subset.empty else []
             current_strike = float(leg['Strike'])
             
             if available_strikes:
@@ -879,24 +929,25 @@ if st.session_state.legs:
                 
             if new_strike is not None and new_strike != current_strike:
                 st.session_state.legs[i]['Strike'] = new_strike
-                match = subset[subset['Strike'] == new_strike]
-                if not match.empty:
-                    match = match.sort_values('Code', ascending=False)
-                    new_vol = float(match.iloc[0]['Vol'])
-                    new_style = match.iloc[0].get('Style', 'American')
-                    
-                    st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
-                    st.session_state.legs[i]['Vol'] = new_vol
-                    st.session_state.legs[i]['Style'] = new_style
-                    st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
-                    
-                    matched_theo, _ = calculate_price_and_delta(
-                        new_style, leg['Type'], st.session_state.spot_price, new_strike, 
-                        leg['Expiry'], new_vol, leg['ExpDateStr']
-                    )
-                    st.session_state.legs[i]['Entry'] = matched_theo
-                else:
-                    st.session_state.legs[i]['Code'] = "N/A"
+                if not subset.empty:
+                    match = subset[subset['Strike'] == new_strike]
+                    if not match.empty:
+                        match = match.sort_values('Code', ascending=False)
+                        new_vol = float(match.iloc[0]['Vol'])
+                        new_style = match.iloc[0].get('Style', 'American')
+                        
+                        st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
+                        st.session_state.legs[i]['Vol'] = new_vol
+                        st.session_state.legs[i]['Style'] = new_style
+                        st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
+                        
+                        matched_theo, _ = calculate_price_and_delta(
+                            new_style, leg['Type'], st.session_state.spot_price, new_strike, 
+                            leg['Expiry'], new_vol, leg['ExpDateStr']
+                        )
+                        st.session_state.legs[i]['Entry'] = matched_theo
+                    else:
+                        st.session_state.legs[i]['Code'] = "N/A"
                 st.rerun()
                 
         with c[6]: 
