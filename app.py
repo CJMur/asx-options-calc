@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.2 (Precision Pricing Update)
+# VERSION: 1.3.3 (Time-Lock & Stability)
 # ==========================================
 
 import streamlit as st
@@ -86,7 +86,8 @@ st.markdown("""
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
-# --- 2. SESSION STATE & URL PARSER ---
+# --- 2. SESSION STATE ---
+if 'fetch_time' not in st.session_state: st.session_state.fetch_time = get_sydney_time()
 if 'url_loaded' not in st.session_state:
     st.session_state.url_loaded = True
     if "s" in st.query_params:
@@ -309,7 +310,6 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
     if simulated_spot <= 0 or strike <= 0 or time_days < 0:
         return 0.0, 0.0
         
-    # Read dynamic settings
     r = st.session_state.get('user_rate', global_rba_rate) / 100.0
     use_fwd = st.session_state.get('use_fwd_curve', True)
     manual_q = st.session_state.get('manual_yield', 0.0) / 100.0
@@ -336,7 +336,6 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
                 simulated_fwd = S + basis_offset
                 return black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
             else:
-                # If custom forward curve is disabled, use Standard Black Scholes with manual yield
                 q = manual_q
                 price = black_scholes_european(S, K, T, r, v, kind, q)
                 d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
@@ -348,7 +347,9 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
             q = 0.0
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
-                days_to_div = (d_info['date'] - get_sydney_time()).days
+                # Lock division to fetch_time to avoid recalculation jitter
+                eval_time = st.session_state.get('fetch_time', get_sydney_time())
+                days_to_div = (d_info['date'] - eval_time).days
                 if 0 <= days_to_div < time_days:
                     t_div = days_to_div / 365.0
                     div_pv = d_info['amount'] * math.exp(-r * t_div)
@@ -435,7 +436,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.2</div>
+            <div class="header-sub">Option Strategy Builder v1.3.3</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -540,6 +541,9 @@ if do_load or (query and query.upper() != display_val):
             st.session_state.div_info = div_data
             st.session_state.data_source = source
             
+            # FREEZE THE CLOCK: This prevents Streamlit checkboxes from automatically unchecking themselves
+            st.session_state.fetch_time = get_sydney_time()
+            
             load_databases.clear() 
             new_cb = str(uuid.uuid4())[:8] 
             
@@ -585,10 +589,10 @@ if st.session_state.ref_data is not None and not st.session_state.ref_data.empty
             view_mode = st.radio("Strikes View", options=["Standard View (25 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
         
         if current_exp:
-            # FRACTIONAL PRECISION TIME TO EXPIRY (Assuming 4:00 PM close)
+            # TIME-LOCKED DTE: Prevent the UI from resetting due to microscopic clock changes
             target_dt = exp_map[current_exp].replace(hour=16, minute=0)
-            now_syd = get_sydney_time()
-            time_diff_sec = (target_dt - now_syd).total_seconds()
+            locked_now = st.session_state.get('fetch_time', get_sydney_time())
+            time_diff_sec = (target_dt - locked_now).total_seconds()
             days_diff_exact = max(0.0001, time_diff_sec / 86400.0)
             
             day_chain = subset[subset['Expiry'] == exp_map[current_exp]].copy()
@@ -833,9 +837,10 @@ if st.session_state.legs:
         if 'id' not in leg: leg['id'] = str(uuid.uuid4())
         if 'Style' not in leg: leg['Style'] = 'American'
         
-        # Fractional Precision DTE calculation for Strategy row
+        # Time-Locked DTE calculation for Strategy row
         exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
-        time_diff_sec = (exp_dt - get_sydney_time()).total_seconds()
+        locked_now = st.session_state.get('fetch_time', get_sydney_time())
+        time_diff_sec = (exp_dt - locked_now).total_seconds()
         precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
         
         new_theo, new_delta = calculate_price_and_delta(
@@ -1010,7 +1015,11 @@ if st.session_state.legs:
             for leg in st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
-                target_eval_dt = get_sydney_time() + timedelta(days=d)
+                
+                # Time-Locked evaluation for future dates
+                locked_now = st.session_state.get('fetch_time', get_sydney_time())
+                target_eval_dt = locked_now + timedelta(days=d)
+                
                 rem_sec = (exp_dt - target_eval_dt).total_seconds()
                 rem_days = max(0.0001, rem_sec / 86400.0)
                 
@@ -1020,7 +1029,7 @@ if st.session_state.legs:
                 )
                 pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
             
-            col_name = (get_sydney_time() + timedelta(days=d)).strftime("%Y-%m-%d")
+            col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
             if d == 0: col_name = f"Today ({col_name})"
             row[col_name] = pnl
         matrix_data.append(row)
@@ -1077,7 +1086,8 @@ if st.session_state.legs:
         val_tF = 0
         for leg in st.session_state.legs:
             exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
-            precise_days_diff = max(0.0001, (exp_dt - get_sydney_time()).total_seconds() / 86400.0)
+            locked_now = st.session_state.get('fetch_time', get_sydney_time())
+            precise_days_diff = max(0.0001, (exp_dt - locked_now).total_seconds() / 86400.0)
             
             price_t0, _ = calculate_price_and_delta(
                 leg['Style'], leg['Type'], p, leg['Strike'], 
