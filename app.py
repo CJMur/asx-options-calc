@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.3 (Time-Lock & Stability)
+# VERSION: 1.3.4 (Clean UI & Stability)
 # ==========================================
 
 import streamlit as st
@@ -310,10 +310,8 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
     if simulated_spot <= 0 or strike <= 0 or time_days < 0:
         return 0.0, 0.0
         
-    r = st.session_state.get('user_rate', global_rba_rate) / 100.0
-    use_fwd = st.session_state.get('use_fwd_curve', True)
-    manual_q = st.session_state.get('manual_yield', 0.0) / 100.0
-    
+    r = global_rba_rate / 100.0
+    q = 0.0
     is_xjo = (st.session_state.ticker == 'XJO')
     
     try:
@@ -331,31 +329,21 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         
         if is_xjo:
             style = 'EUROPEAN' 
-            if use_fwd and expiry_str_key in st.session_state.fwd_spreads:
+            if expiry_str_key in st.session_state.fwd_spreads:
                 basis_offset = st.session_state.fwd_spreads[expiry_str_key]
                 simulated_fwd = S + basis_offset
                 return black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
             else:
-                q = manual_q
-                price = black_scholes_european(S, K, T, r, v, kind, q)
-                d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
-                if kind == 'Call': delta = math.exp(-q * T) * norm_cdf(d1)
-                else: delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
-                return price, delta
-                
+                q = 0.04
         elif st.session_state.div_info:
-            q = 0.0
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
-                # Lock division to fetch_time to avoid recalculation jitter
                 eval_time = st.session_state.get('fetch_time', get_sydney_time())
                 days_to_div = (d_info['date'] - eval_time).days
                 if 0 <= days_to_div < time_days:
                     t_div = days_to_div / 365.0
                     div_pv = d_info['amount'] * math.exp(-r * t_div)
                     S = max(0.01, S - div_pv)
-        else:
-            q = 0.0
         
         if style.upper() == 'EUROPEAN':
             price = black_scholes_european(S, K, T, r, v, kind, q)
@@ -436,7 +424,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.3</div>
+            <div class="header-sub">Option Strategy Builder v1.3.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -486,13 +474,6 @@ with c3:
     with bc1:
         do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
-# --- PRICING SETTINGS EXPANDER ---
-with st.expander("⚙️ Pricing Engine Settings"):
-    e1, e2, e3 = st.columns(3)
-    st.session_state.user_rate = e1.number_input("Risk-Free Rate (%)", value=float(st.session_state.get('user_rate', global_rba_rate)), step=0.1)
-    st.session_state.use_fwd_curve = e2.checkbox("Use Custom Forward Curve", value=st.session_state.get('use_fwd_curve', True), help="Uncheck to ignore the basis offset in your spreadsheet. This aligns pricing with flat-yield platforms like Tradefloor.")
-    st.session_state.manual_yield = e3.number_input("Manual Div Yield (%)", value=float(st.session_state.get('manual_yield', 0.0)), step=0.1, disabled=st.session_state.use_fwd_curve, help="Used only when the Custom Forward Curve is disabled.")
-
 if do_load or (query and query.upper() != display_val):
     if not query: st.warning("Please enter a ticker or option code.")
     else:
@@ -541,7 +522,6 @@ if do_load or (query and query.upper() != display_val):
             st.session_state.div_info = div_data
             st.session_state.data_source = source
             
-            # FREEZE THE CLOCK: This prevents Streamlit checkboxes from automatically unchecking themselves
             st.session_state.fetch_time = get_sydney_time()
             
             load_databases.clear() 
@@ -589,7 +569,6 @@ if st.session_state.ref_data is not None and not st.session_state.ref_data.empty
             view_mode = st.radio("Strikes View", options=["Standard View (25 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
         
         if current_exp:
-            # TIME-LOCKED DTE: Prevent the UI from resetting due to microscopic clock changes
             target_dt = exp_map[current_exp].replace(hour=16, minute=0)
             locked_now = st.session_state.get('fetch_time', get_sydney_time())
             time_diff_sec = (target_dt - locked_now).total_seconds()
@@ -686,7 +665,7 @@ if not df_view.empty and current_exp:
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
-    editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}_{st.session_state.get('use_fwd_curve', True)}"
+    editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
     
     edited_df = st.data_editor(
         styled_disp,
