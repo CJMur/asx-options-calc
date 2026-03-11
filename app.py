@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.4 (Clean UI & Stability)
+# VERSION: 1.3.5 (Matrix Slider Update)
 # ==========================================
 
 import streamlit as st
@@ -424,7 +424,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.4</div>
+            <div class="header-sub">Option Strategy Builder v1.3.5</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -560,7 +560,6 @@ if st.session_state.ref_data is not None and not st.session_state.ref_data.empty
         
         default_idx = exp_list.index(st.session_state.preselect_expiry) if st.session_state.preselect_expiry in exp_list else None
         
-        # --- VIEW MODE UI ---
         exp_col1, exp_col2 = st.columns([1, 2])
         with exp_col1:
             current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
@@ -616,7 +615,6 @@ if st.session_state.ref_data is not None and not st.session_state.ref_data.empty
             
             df_view['P_Sel'] = False
 
-# UX Warning for missing data logic
 if st.session_state.ticker and st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
     if subset.empty:
         st.warning(f"No valid options found for **{st.session_state.ticker}** expiring on or after today. Please ensure your data export contains current expiries.")
@@ -776,7 +774,6 @@ if st.session_state.legs:
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
-    # --- PORTFOLIO MARGIN SIMULATION ENGINE ---
     scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
     portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
     leg_risk_arrays = []
@@ -807,7 +804,6 @@ if st.session_state.legs:
         portfolio_scenarios += risk_array * leg['Qty']
         
     worst_scenario_idx = np.argmin(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0
-    # -------------------------------------------
 
     total_delta, total_premium, raw_theo_sum, total_margin = 0, 0, 0, 0
     max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -816,7 +812,6 @@ if st.session_state.legs:
         if 'id' not in leg: leg['id'] = str(uuid.uuid4())
         if 'Style' not in leg: leg['Style'] = 'American'
         
-        # Time-Locked DTE calculation for Strategy row
         exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
         locked_now = st.session_state.get('fetch_time', get_sydney_time())
         time_diff_sec = (exp_dt - locked_now).total_seconds()
@@ -969,7 +964,10 @@ if st.session_state.legs:
     st.subheader("Payoff Matrix")
     m1, m2 = st.columns(2)
     time_step = m1.slider("Step (Days)", 1, 30, 1)
-    range_pct = m2.select_slider("Price Step (% per row)", options=[0.005, 0.01, 0.02, 0.03, 0.05], value=0.01, format_func=lambda x: f"{x*100:.1f}%")
+    
+    # EXPANDED PRICE SLIDER WITH 0.5% VISIBLE NOTCHES
+    range_opts = [x / 200.0 for x in range(1, 11)] # 0.005 to 0.05 in steps of 0.005
+    range_pct = m2.select_slider("Price Step (% per row)", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
     
     with m1:
         st.caption("Simulate Volatility Shift:")
@@ -995,7 +993,6 @@ if st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                 exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
                 
-                # Time-Locked evaluation for future dates
                 locked_now = st.session_state.get('fetch_time', get_sydney_time())
                 target_eval_dt = locked_now + timedelta(days=d)
                 
