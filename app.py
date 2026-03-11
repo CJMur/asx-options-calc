@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.1 (Clean Vector Build)
+# VERSION: 1.3.2 (Precision Pricing Update)
 # ==========================================
 
 import streamlit as st
@@ -146,14 +146,12 @@ global_rba_rate = fetch_rba_cash_rate()
 @st.cache_data(ttl=3600)
 def load_databases(opts_url, fwd_url, cb="default"):
     try:
-        # We append the cache-buster to the URL to force GitHub's CDN to give us the latest file
         live_fwd_url = f"{fwd_url}?cb={cb}"
         live_opts_url = f"{opts_url}?cb={cb}"
         
         fwd_df = pd.DataFrame()
         spreads_dict = {}
         
-        # 1. Fetch Forward Curve Safely
         try:
             res_fwd = requests.get(live_fwd_url, timeout=10)
             if res_fwd.status_code == 200 and res_fwd.content.startswith(b'PAR1'):
@@ -175,7 +173,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 for d, v in zip(fwd_dates[valid_mask], fwd_vals[valid_mask]):
                     spreads_dict[d.strftime("%Y-%m-%d")] = v
 
-        # 2. Fetch Options Data with Magic Byte Shield
         df = pd.DataFrame()
         try:
             res_opts = requests.get(live_opts_url, timeout=15)
@@ -192,7 +189,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
         if df.empty:
             return pd.DataFrame(), "error|The Parquet file was downloaded but it is empty.", spreads_dict, "Unknown"
 
-        # 3. Strip invisible spaces from column names to prevent mapping crashes
         df.columns = [str(c).strip() for c in df.columns]
 
         db_date = "Unknown"
@@ -234,7 +230,6 @@ def load_databases(opts_url, fwd_url, cb="default"):
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         
-        # --- CLEAN C-SPEED DATE PARSING (Removed the Thursday Lock Bug) ---
         df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
         
         if 'Vol' in df.columns:
@@ -314,8 +309,11 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
     if simulated_spot <= 0 or strike <= 0 or time_days < 0:
         return 0.0, 0.0
         
-    r = global_rba_rate / 100.0
-    q = 0.0
+    # Read dynamic settings
+    r = st.session_state.get('user_rate', global_rba_rate) / 100.0
+    use_fwd = st.session_state.get('use_fwd_curve', True)
+    manual_q = st.session_state.get('manual_yield', 0.0) / 100.0
+    
     is_xjo = (st.session_state.ticker == 'XJO')
     
     try:
@@ -333,13 +331,21 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
         
         if is_xjo:
             style = 'EUROPEAN' 
-            if expiry_str_key in st.session_state.fwd_spreads:
+            if use_fwd and expiry_str_key in st.session_state.fwd_spreads:
                 basis_offset = st.session_state.fwd_spreads[expiry_str_key]
                 simulated_fwd = S + basis_offset
                 return black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
             else:
-                q = 0.04
+                # If custom forward curve is disabled, use Standard Black Scholes with manual yield
+                q = manual_q
+                price = black_scholes_european(S, K, T, r, v, kind, q)
+                d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
+                if kind == 'Call': delta = math.exp(-q * T) * norm_cdf(d1)
+                else: delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
+                return price, delta
+                
         elif st.session_state.div_info:
+            q = 0.0
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
                 days_to_div = (d_info['date'] - get_sydney_time()).days
@@ -347,6 +353,8 @@ def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vo
                     t_div = days_to_div / 365.0
                     div_pv = d_info['amount'] * math.exp(-r * t_div)
                     S = max(0.01, S - div_pv)
+        else:
+            q = 0.0
         
         if style.upper() == 'EUROPEAN':
             price = black_scholes_european(S, K, T, r, v, kind, q)
@@ -427,7 +435,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.1</div>
+            <div class="header-sub">Option Strategy Builder v1.3.2</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -458,7 +466,6 @@ with c2:
 
 with c3:
     st.write(""); st.write("")
-    
     bc1, bc2 = st.columns([3, 1.2])
     
     with bc2:
@@ -477,67 +484,73 @@ with c3:
 
     with bc1:
         do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
+
+# --- PRICING SETTINGS EXPANDER ---
+with st.expander("⚙️ Pricing Engine Settings"):
+    e1, e2, e3 = st.columns(3)
+    st.session_state.user_rate = e1.number_input("Risk-Free Rate (%)", value=float(st.session_state.get('user_rate', global_rba_rate)), step=0.1)
+    st.session_state.use_fwd_curve = e2.checkbox("Use Custom Forward Curve", value=st.session_state.get('use_fwd_curve', True), help="Uncheck to ignore the basis offset in your spreadsheet. This aligns pricing with flat-yield platforms like Tradefloor.")
+    st.session_state.manual_yield = e3.number_input("Manual Div Yield (%)", value=float(st.session_state.get('manual_yield', 0.0)), step=0.1, disabled=st.session_state.use_fwd_curve, help="Used only when the Custom Forward Curve is disabled.")
+
+if do_load or (query and query.upper() != display_val):
+    if not query: st.warning("Please enter a ticker or option code.")
+    else:
+        query_upper = query.upper().strip()
         
-    if do_load or (query and query.upper() != display_val):
-        if not query: st.warning("Please enter a ticker or option code.")
-        else:
-            query_upper = query.upper().strip()
-            
-            ref = st.session_state.ref_data
-            ticker_to_fetch = query_upper
-            
-            if ref is not None and not ref.empty:
-                match = ref[ref['Code'] == query_upper]
-                if not match.empty:
-                    ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
-                    
-                    if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
-                    
-                    st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
-                    st.session_state.preselect_strike = float(match.iloc[0]['Strike'])
-                    st.session_state.preselect_code = query_upper
-                else:
-                    tickers = ref['Ticker'].unique()
-                    possible_matches = [t for t in tickers if query_upper.startswith(t)]
-                    if possible_matches:
-                        best_match = max(possible_matches, key=len)
-                        if len(query_upper) > len(best_match):
-                            ticker_to_fetch = best_match
-                            if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
-                            st.session_state.preselect_code = query_upper
-                            st.session_state.preselect_expiry = None
-                            st.session_state.preselect_strike = None
-                    else:
+        ref = st.session_state.ref_data
+        ticker_to_fetch = query_upper
+        
+        if ref is not None and not ref.empty:
+            match = ref[ref['Code'] == query_upper]
+            if not match.empty:
+                ticker_to_fetch = str(match.iloc[0]['Ticker']).strip()
+                if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
+                
+                st.session_state.preselect_expiry = match.iloc[0]['Expiry'].strftime("%Y-%m-%d")
+                st.session_state.preselect_strike = float(match.iloc[0]['Strike'])
+                st.session_state.preselect_code = query_upper
+            else:
+                tickers = ref['Ticker'].unique()
+                possible_matches = [t for t in tickers if query_upper.startswith(t)]
+                if possible_matches:
+                    best_match = max(possible_matches, key=len)
+                    if len(query_upper) > len(best_match):
+                        ticker_to_fetch = best_match
                         if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
+                        st.session_state.preselect_code = query_upper
                         st.session_state.preselect_expiry = None
                         st.session_state.preselect_strike = None
-                        st.session_state.preselect_code = None
+                else:
+                    if ticker_to_fetch == 'XJOW': ticker_to_fetch = 'XJO'
+                    st.session_state.preselect_expiry = None
+                    st.session_state.preselect_strike = None
+                    st.session_state.preselect_code = None
 
-            st.session_state.ticker = ticker_to_fetch
+        st.session_state.ticker = ticker_to_fetch
 
-            with st.spinner("Fetching Fresh Market Data..."):
-                source, px, div_data = fetch_data(st.session_state.ticker)
-                
-                if px > 0:
-                    st.session_state.spot_price = px
-                    st.session_state.manual_spot = False
-                elif not st.session_state.manual_spot:
-                    st.warning(f"Could not fetch live price for {st.session_state.ticker}. Please enter it manually.")
-                
-                st.session_state.div_info = div_data
-                st.session_state.data_source = source
-                
-                load_databases.clear() 
-                new_cb = str(uuid.uuid4())[:8] 
-                
-                data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, new_cb)
-                
-                st.session_state.ref_data = data
-                st.session_state.sheet_msg = msg
-                st.session_state.fwd_spreads = ext_spreads
-                st.session_state.data_date = d_date
-                st.session_state.is_market_open = check_market_hours()
-                st.rerun()
+        with st.spinner("Fetching Fresh Market Data..."):
+            source, px, div_data = fetch_data(st.session_state.ticker)
+            
+            if px > 0:
+                st.session_state.spot_price = px
+                st.session_state.manual_spot = False
+            elif not st.session_state.manual_spot:
+                st.warning(f"Could not fetch live price for {st.session_state.ticker}. Please enter it manually.")
+            
+            st.session_state.div_info = div_data
+            st.session_state.data_source = source
+            
+            load_databases.clear() 
+            new_cb = str(uuid.uuid4())[:8] 
+            
+            data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, new_cb)
+            
+            st.session_state.ref_data = data
+            st.session_state.sheet_msg = msg
+            st.session_state.fwd_spreads = ext_spreads
+            st.session_state.data_date = d_date
+            st.session_state.is_market_open = check_market_hours()
+            st.rerun()
 
 # --- 9. CHAIN DISPLAY ---
 df_view = pd.DataFrame()
@@ -572,9 +585,13 @@ if st.session_state.ref_data is not None and not st.session_state.ref_data.empty
             view_mode = st.radio("Strikes View", options=["Standard View (25 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
         
         if current_exp:
-            target_dt = exp_map[current_exp]
-            days_diff = (target_dt - today).days
-            day_chain = subset[subset['Expiry'] == target_dt].copy()
+            # FRACTIONAL PRECISION TIME TO EXPIRY (Assuming 4:00 PM close)
+            target_dt = exp_map[current_exp].replace(hour=16, minute=0)
+            now_syd = get_sydney_time()
+            time_diff_sec = (target_dt - now_syd).total_seconds()
+            days_diff_exact = max(0.0001, time_diff_sec / 86400.0)
+            
+            day_chain = subset[subset['Expiry'] == exp_map[current_exp]].copy()
             
             def calc_row_metrics(row):
                 vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
@@ -583,7 +600,7 @@ if st.session_state.ref_data is not None and not st.session_state.ref_data.empty
                 
                 px, delta = calculate_price_and_delta(
                     style, row['Type'], st.session_state.spot_price, row['Strike'], 
-                    days_diff, vol, current_exp
+                    days_diff_exact, vol, current_exp
                 )
                 
                 return pd.Series([px, delta, vol, margin])
@@ -665,7 +682,7 @@ if not df_view.empty and current_exp:
         'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
     })
 
-    editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
+    editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}_{st.session_state.get('use_fwd_curve', True)}"
     
     edited_df = st.data_editor(
         styled_disp,
@@ -701,7 +718,6 @@ if not df_view.empty and current_exp:
             
     if selected_row_idx is not None:
         row = df_view.iloc[selected_row_idx]
-        days_diff = (datetime.strptime(current_exp, "%Y-%m-%d") - get_sydney_time()).days
         
         st.write("")
         q_c, b1_c, b2_c, _ = st.columns([1.5, 1.5, 1.5, 5], gap="small")
@@ -716,7 +732,6 @@ if not df_view.empty and current_exp:
                 "Type": kind, 
                 "Style": str(style_full),
                 "Strike": float(row['STRIKE']), 
-                "Expiry": days_diff, 
                 "ExpDateStr": current_exp, 
                 "Vol": float(row['C_Vol'] if kind == 'Call' else row['P_Vol']), 
                 "Entry": float(px), 
@@ -772,7 +787,7 @@ if st.session_state.legs:
     with cols_header[5]: st.markdown(f'<div class="trade-header" title="Smart Step Strike">Strike</div>', unsafe_allow_html=True)
     with cols_header[6]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
     with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
-    with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">Delta</div>', unsafe_allow_html=True)
+    with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">POS Delta</div>', unsafe_allow_html=True)
     with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
     with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
     
@@ -817,11 +832,15 @@ if st.session_state.legs:
     for i, leg in enumerate(st.session_state.legs):
         if 'id' not in leg: leg['id'] = str(uuid.uuid4())
         if 'Style' not in leg: leg['Style'] = 'American'
-        if 'ExpDateStr' not in leg: leg['ExpDateStr'] = (get_sydney_time() + timedelta(days=leg['Expiry'])).strftime("%Y-%m-%d")
+        
+        # Fractional Precision DTE calculation for Strategy row
+        exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+        time_diff_sec = (exp_dt - get_sydney_time()).total_seconds()
+        precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
         
         new_theo, new_delta = calculate_price_and_delta(
             leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
-            leg['Expiry'], leg['Vol'], leg['ExpDateStr']
+            precise_days_diff, leg['Vol'], leg['ExpDateStr']
         )
         
         net_delta = leg['Qty'] * new_delta * contract_multiplier
@@ -910,7 +929,7 @@ if st.session_state.legs:
                         
                         matched_theo, _ = calculate_price_and_delta(
                             new_style, leg['Type'], st.session_state.spot_price, new_strike, 
-                            leg['Expiry'], new_vol, leg['ExpDateStr']
+                            precise_days_diff, new_vol, leg['ExpDateStr']
                         )
                         st.session_state.legs[i]['Entry'] = matched_theo
                     else:
@@ -923,7 +942,7 @@ if st.session_state.legs:
                 st.session_state.legs[i]['Vol'] = new_vol_input
                 calibrated_theo, _ = calculate_price_and_delta(
                     leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
-                    leg['Expiry'], new_vol_input, leg['ExpDateStr']
+                    precise_days_diff, new_vol_input, leg['ExpDateStr']
                 )
                 st.session_state.legs[i]['Entry'] = calibrated_theo
                 st.rerun()
@@ -990,7 +1009,11 @@ if st.session_state.legs:
             pnl = 0
             for leg in st.session_state.legs:
                 sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
-                rem_days = max(0, leg['Expiry'] - d)
+                exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+                target_eval_dt = get_sydney_time() + timedelta(days=d)
+                rem_sec = (exp_dt - target_eval_dt).total_seconds()
+                rem_days = max(0.0001, rem_sec / 86400.0)
+                
                 exit_px, _ = calculate_price_and_delta(
                     leg['Style'], leg['Type'], p, leg['Strike'], 
                     rem_days, sim_vol, leg['ExpDateStr']
@@ -1053,9 +1076,12 @@ if st.session_state.legs:
         val_t0 = 0
         val_tF = 0
         for leg in st.session_state.legs:
+            exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+            precise_days_diff = max(0.0001, (exp_dt - get_sydney_time()).total_seconds() / 86400.0)
+            
             price_t0, _ = calculate_price_and_delta(
                 leg['Style'], leg['Type'], p, leg['Strike'], 
-                leg['Expiry'], leg['Vol'], leg['ExpDateStr']
+                precise_days_diff, leg['Vol'], leg['ExpDateStr']
             )
             val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
             price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
