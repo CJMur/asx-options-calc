@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.5 (Matrix Slider Update)
+# VERSION: 1.3.6 (White-Label UI Update)
 # ==========================================
 
 import streamlit as st
@@ -29,6 +29,13 @@ FWD_CURVE_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/fw
 # --- CSS STYLING ---
 st.markdown("""
 <style>
+    /* --- WHITE-LABEL INVISIBILITY CLOAK --- */
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    div[class^="viewerBadge_container"] {display: none !important;}
+    [data-testid="stDecoration"] {display: none !important;}
+
     .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
     
     .header-box {
@@ -424,7 +431,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.5</div>
+            <div class="header-sub">Option Strategy Builder v1.3.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -965,8 +972,7 @@ if st.session_state.legs:
     m1, m2 = st.columns(2)
     time_step = m1.slider("Step (Days)", 1, 30, 1)
     
-    # EXPANDED PRICE SLIDER WITH 0.5% VISIBLE NOTCHES
-    range_opts = [x / 200.0 for x in range(1, 11)] # 0.005 to 0.05 in steps of 0.005
+    range_opts = [x / 200.0 for x in range(1, 11)]
     range_pct = m2.select_slider("Price Step (% per row)", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
     
     with m1:
