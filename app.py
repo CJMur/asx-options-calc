@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.6 (White-Label UI Update)
+# VERSION: 1.3.7 (Dynamic Matrix & UI Clean-up)
 # ==========================================
 
 import streamlit as st
@@ -431,7 +431,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.6</div>
+            <div class="header-sub">Option Strategy Builder v1.3.7</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -933,7 +933,7 @@ if st.session_state.legs:
                 st.session_state.legs[i]['Entry'] = calibrated_theo
                 st.rerun()
                 
-        with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>${new_theo:.3f}</div>", unsafe_allow_html=True)
+        with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
         with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
         with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
@@ -949,7 +949,7 @@ if st.session_state.legs:
     with st.container():
         f = st.columns(h_col_spec)
         with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
-        with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>${strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
+        with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
         with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
         with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
         with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
@@ -969,11 +969,27 @@ if st.session_state.legs:
     # --- MATRIX ---
     st.markdown("---")
     st.subheader("Payoff Matrix")
-    m1, m2 = st.columns(2)
+    m1, m2, m3 = st.columns([1, 1, 1.5])
     time_step = m1.slider("Step (Days)", 1, 30, 1)
     
-    range_opts = [x / 200.0 for x in range(1, 11)]
-    range_pct = m2.select_slider("Price Step (% per row)", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
+    step_type = m2.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True)
+    
+    if step_type == "Percentage (%)":
+        range_opts = [x / 200.0 for x in range(1, 11)]
+        step_val = m3.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
+    else:
+        if st.session_state.spot_price > 1000:
+            pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]
+            default_pt = 50.0
+        elif st.session_state.spot_price > 100:
+            pts_opts = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0]
+            default_pt = 5.0
+        else:
+            pts_opts = [0.10, 0.25, 0.50, 1.00, 2.00, 5.00]
+            default_pt = 1.00
+            
+        if default_pt not in pts_opts: default_pt = pts_opts[0]
+        step_val = m3.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}")
     
     with m1:
         st.caption("Simulate Volatility Shift:")
@@ -984,7 +1000,16 @@ if st.session_state.legs:
         st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
 
     spot = st.session_state.spot_price
-    prices = [spot * (1 + range_pct * i) for i in range(6, -7, -1)]
+    
+    if step_type == "Percentage (%)":
+        prices = [spot * (1 + step_val * i) for i in range(6, -7, -1)]
+        chart_spread = step_val * 8
+        chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 200)
+    else:
+        prices = [spot + (step_val * i) for i in range(6, -7, -1)]
+        chart_spread = step_val * 8
+        chart_prices = np.linspace(spot - chart_spread, spot + chart_spread, 200)
+        
     dates = [d * time_step for d in range(7)]
     
     matrix_data = []
@@ -1057,9 +1082,6 @@ if st.session_state.legs:
 
     # --- ADVANCED CHARTING ENGINE ---
     st.markdown("### Payoff Chart")
-    
-    chart_spread = range_pct * 8
-    chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 200)
     
     pnl_today = []
     pnl_expiry = []
