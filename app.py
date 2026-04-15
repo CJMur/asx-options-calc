@@ -810,4 +810,353 @@ if st.session_state.legs:
         leg_risk_arrays.append(risk_array)
         portfolio_scenarios += risk_array * leg['Qty']
         
-    worst_scenario_idx = np.argmin(portfolio_scenarios) if len(portfolio_scenarios)
+    worst_scenario_idx = np.argmin(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0
+
+    total_delta, total_premium, raw_theo_sum, total_margin = 0, 0, 0, 0
+    max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
+    
+    for i, leg in enumerate(st.session_state.legs):
+        if 'id' not in leg: leg['id'] = str(uuid.uuid4())
+        if 'Style' not in leg: leg['Style'] = 'American'
+        
+        exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+        locked_now = st.session_state.get('fetch_time', get_sydney_time())
+        time_diff_sec = (exp_dt - locked_now).total_seconds()
+        precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
+        
+        new_theo, new_delta = calculate_price_and_delta(
+            leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+            precise_days_diff, leg['Vol'], leg['ExpDateStr']
+        )
+        
+        net_delta = leg['Qty'] * new_delta * contract_multiplier
+        premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
+        row_margin = leg_risk_arrays[i][worst_scenario_idx] * leg['Qty'] if len(leg_risk_arrays[i]) > 0 else 0.0
+        
+        total_delta += net_delta
+        total_premium += premium
+        total_margin += row_margin
+        raw_theo_sum += leg['Qty'] * new_theo
+        
+        p_color = '#4ade80' if premium >= 0 else '#f87171'
+        m_color = '#4ade80' if row_margin >= 0 else '#f87171'
+        
+        row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+        
+        c = st.columns(h_col_spec)
+        
+        with c[0]: 
+            new_qty = st.number_input("Qty", value=int(leg['Qty']), step=1, key=f"qty_{leg['id']}", label_visibility="collapsed")
+            if new_qty != leg['Qty']:
+                st.session_state.legs[i]['Qty'] = new_qty
+                st.rerun()
+                
+        with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
+        with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
+        with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
+        with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
+        
+        with c[5]: 
+            subset_st = pd.DataFrame()
+            if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
+                if tkr == 'XJO':
+                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
+                else:
+                    ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+                    
+                subset_st = st.session_state.ref_data[
+                    ticker_mask & 
+                    (st.session_state.ref_data['Type'] == leg['Type']) & 
+                    (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+                ]
+            
+            available_strikes = sorted(subset_st['Strike'].unique().tolist()) if not subset_st.empty else []
+            current_strike = float(leg['Strike'])
+            
+            if available_strikes:
+                closest_strike = min(available_strikes, key=lambda x: abs(x - current_strike))
+                if abs(closest_strike - current_strike) < 0.01:
+                    current_strike = closest_strike
+                elif current_strike not in available_strikes:
+                    available_strikes.append(current_strike)
+                    available_strikes = sorted(available_strikes)
+            else:
+                available_strikes = [current_strike]
+                
+            current_idx = available_strikes.index(current_strike)
+            
+            sc1, sc2, sc3, _ = st.columns([1.2, 0.6, 0.6, 1.0], gap="small")
+            with sc1:
+                st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{current_strike:.2f}</div>", unsafe_allow_html=True)
+            with sc2:
+                dec = st.button("▼", key=f"dn_{leg['id']}", use_container_width=True)
+            with sc3:
+                inc = st.button("▲", key=f"up_{leg['id']}", use_container_width=True)
+                
+            new_strike = None
+            if dec and current_idx > 0:
+                new_strike = available_strikes[current_idx - 1]
+            elif inc and current_idx < len(available_strikes) - 1:
+                new_strike = available_strikes[current_idx + 1]
+                
+            if new_strike is not None and new_strike != current_strike:
+                st.session_state.legs[i]['Strike'] = new_strike
+                if not subset_st.empty:
+                    match = subset_st[subset_st['Strike'] == new_strike]
+                    if not match.empty:
+                        match = match.sort_values('Code', ascending=False)
+                        new_vol = float(match.iloc[0]['Vol'])
+                        new_style = match.iloc[0].get('Style', 'American')
+                        
+                        st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
+                        st.session_state.legs[i]['Vol'] = new_vol
+                        st.session_state.legs[i]['Style'] = new_style
+                        st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
+                        
+                        matched_theo, _ = calculate_price_and_delta(
+                            new_style, leg['Type'], st.session_state.spot_price, new_strike, 
+                            precise_days_diff, new_vol, leg['ExpDateStr']
+                        )
+                        st.session_state.legs[i]['Entry'] = matched_theo
+                    else:
+                        st.session_state.legs[i]['Code'] = "N/A"
+                st.rerun()
+                
+        with c[6]: 
+            new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"vol_{leg['id']}", label_visibility="collapsed")
+            if new_vol_input != leg['Vol']:
+                st.session_state.legs[i]['Vol'] = new_vol_input
+                calibrated_theo, _ = calculate_price_and_delta(
+                    leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+                    precise_days_diff, new_vol_input, leg['ExpDateStr']
+                )
+                st.session_state.legs[i]['Entry'] = calibrated_theo
+                st.rerun()
+                
+        with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
+        with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
+        with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
+        with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
+        with c[11]:
+            if st.button("✕", key=f"d_{leg['id']}"):
+                st.session_state.legs.pop(i)
+                st.rerun()
+                
+        st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
+
+    strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
+
+    with st.container():
+        f = st.columns(h_col_spec)
+        with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
+        with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
+        with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
+        with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+        with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+
+    # --- URL STATE SYNC ENGINE ---
+    payload = {
+        "t": st.session_state.ticker,
+        "p": st.session_state.spot_price,
+        "m": st.session_state.manual_spot,
+        "l": st.session_state.legs
+    }
+    try:
+        encoded_state = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        st.query_params["s"] = encoded_state
+    except: pass
+
+    # --- MATRIX ---
+    st.markdown("---")
+    st.subheader("Payoff Matrix")
+    
+    # 2-COLUMN LAYOUT
+    m1, m2 = st.columns([1, 1.2], gap="large")
+    
+    with m1:
+        time_step = st.slider("Step (Days)", 1, 30, 1)
+        st.caption("Simulate Volatility Shift:")
+        c_v1, c_v2, c_v3 = st.columns(3)
+        if c_v1.button("IV -10%"): st.session_state.matrix_vol_mod -= 10
+        if c_v2.button("IV Flat"): st.session_state.matrix_vol_mod = 0
+        if c_v3.button("IV +10%"): st.session_state.matrix_vol_mod += 10
+        st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
+
+    with m2:
+        step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True)
+        
+        if step_type == "Percentage (%)":
+            range_opts = [x / 200.0 for x in range(1, 11)]
+            step_val = st.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
+        else:
+            if st.session_state.spot_price > 1000:
+                pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]
+                default_pt = 50.0
+            elif st.session_state.spot_price > 100:
+                pts_opts = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0]
+                default_pt = 5.0
+            else:
+                pts_opts = [0.10, 0.25, 0.50, 1.00, 2.00, 5.00]
+                default_pt = 1.00
+                
+            if default_pt not in pts_opts: default_pt = pts_opts[0]
+            step_val = st.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}")
+
+    spot = st.session_state.spot_price
+    
+    if step_type == "Percentage (%)":
+        prices = [spot * (1 + step_val * i) for i in range(6, -7, -1)]
+        chart_spread = step_val * 8
+        chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 200)
+    else:
+        prices = [spot + (step_val * i) for i in range(6, -7, -1)]
+        chart_spread = step_val * 8
+        chart_prices = np.linspace(spot - chart_spread, spot + chart_spread, 200)
+        
+    dates = [d * time_step for d in range(7)]
+    
+    matrix_data = []
+    for p in prices:
+        is_spot = math.isclose(p, spot, rel_tol=1e-5)
+        row_label = f"» ${p:.2f} (SPOT) «" if is_spot else f"${p:.2f}"
+        
+        row = {"Price": row_label}
+        for d in dates:
+            pnl = 0
+            for leg in st.session_state.legs:
+                sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
+                exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+                
+                locked_now = st.session_state.get('fetch_time', get_sydney_time())
+                target_eval_dt = locked_now + timedelta(days=d)
+                
+                rem_sec = (exp_dt - target_eval_dt).total_seconds()
+                rem_days = max(0.0001, rem_sec / 86400.0)
+                
+                exit_px, _ = calculate_price_and_delta(
+                    leg['Style'], leg['Type'], p, leg['Strike'], 
+                    rem_days, sim_vol, leg['ExpDateStr']
+                )
+                pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
+            
+            col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
+            if d == 0: col_name = f"Today ({col_name})"
+            row[col_name] = pnl
+        matrix_data.append(row)
+        
+    df_mx = pd.DataFrame(matrix_data).set_index("Price")
+    
+    capital_at_risk = total_margin if total_premium >= 0 else abs(total_premium)
+    
+    def format_pnl(val):
+        if capital_at_risk <= 0.001:
+            return f"${val:,.0f} (0.0%)"
+        pct = (val / capital_at_risk) * 100
+        sign = "+" if val > 0 else ""
+        return f"${val:,.0f} ({sign}{pct:.1f}%)"
+
+    def make_heatmap(df):
+        max_val = df.max().max()
+        min_val = df.min().min()
+        abs_max = max(abs(max_val), abs(min_val), 1)
+        
+        styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+        for idx in df.index:
+            is_spot = "SPOT" in str(idx)
+            for col in df.columns:
+                val = df.loc[idx, col]
+                s = ""
+                if val > 0:
+                    intensity = min(val / abs_max, 1.0)
+                    alpha = 0.05 + 0.35 * intensity
+                    s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
+                elif val < 0:
+                    intensity = min(abs(val) / abs_max, 1.0)
+                    alpha = 0.05 + 0.35 * intensity
+                    s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
+                
+                if is_spot:
+                    s += "font-weight: bold; "
+                    
+                styles_df.loc[idx, col] = s
+        return styles_df
+
+    st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
+
+    # --- ADVANCED CHARTING ENGINE ---
+    st.markdown("### Payoff Chart")
+    
+    pnl_today = []
+    pnl_expiry = []
+    for p in chart_prices:
+        val_t0 = 0
+        val_tF = 0
+        for leg in st.session_state.legs:
+            exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+            locked_now = st.session_state.get('fetch_time', get_sydney_time())
+            precise_days_diff = max(0.0001, (exp_dt - locked_now).total_seconds() / 86400.0)
+            
+            price_t0, _ = calculate_price_and_delta(
+                leg['Style'], leg['Type'], p, leg['Strike'], 
+                precise_days_diff, leg['Vol'], leg['ExpDateStr']
+            )
+            val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
+            price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
+            val_tF += (price_tf - leg['Entry']) * leg['Qty'] * contract_multiplier
+        pnl_today.append(val_t0)
+        pnl_expiry.append(val_tF)
+        
+    breakevens = []
+    for i in range(len(chart_prices)-1):
+        if pnl_expiry[i] * pnl_expiry[i+1] < 0:
+            x1, x2 = chart_prices[i], chart_prices[i+1]
+            y1, y2 = pnl_expiry[i], pnl_expiry[i+1]
+            x_zero = x1 - y1 * (x2 - x1) / (y2 - y1) 
+            breakevens.append(x_zero)
+        
+    fig = go.Figure()
+    
+    fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(74, 222, 128, 0.08)", layer="below", line_width=0)
+    fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
+    
+    for be in breakevens:
+        fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
+        fig.add_annotation(
+            x=be, y=0, text=f"BE: ${be:.2f}",
+            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor="#10b981",
+            ax=0, ay=-40, bgcolor="#0f172a", bordercolor="#10b981", font=dict(color="#10b981", size=11)
+        )
+    
+    fig.add_trace(go.Scatter(
+        x=chart_prices, y=pnl_today, name="Today", 
+        line=dict(color='#0050FF', width=3),
+        hovertemplate="Price: $%{x:.2f}<br>P&L: $%{y:.2f}"
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=chart_prices, y=pnl_expiry, name="Expiry", 
+        line=dict(color='#1DBFD2', dash='dash', width=3),
+        hovertemplate="Price: $%{x:.2f}<br>P&L: $%{y:.2f}"
+    ))
+    
+    fig.add_vline(x=spot, line_dash="dot", line_color="grey")
+    
+    max_pnl = max(max(pnl_expiry), max(pnl_today))
+    min_pnl = min(min(pnl_expiry), min(pnl_today))
+    padding = max(abs(max_pnl), abs(min_pnl)) * 0.1
+    
+    fig.update_layout(
+        height=450, 
+        template="plotly_white", 
+        margin=dict(t=30, b=30),
+        xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"),
+        yaxis=dict(
+            title="Profit / Loss ($)", tickprefix="$", 
+            zeroline=True, zerolinewidth=2, zerolinecolor='black',
+            range=[min_pnl - padding, max_pnl + padding]
+        )
+    )
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    if "s" in st.query_params:
+        del st.query_params["s"]
