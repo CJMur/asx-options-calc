@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.8 (Matrix UI Grouping)
+# VERSION: 1.3.9 (Matrix UI Alignment)
 # ==========================================
 
 import streamlit as st
@@ -431,7 +431,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.8</div>
+            <div class="header-sub">Option Strategy Builder v1.3.9</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -975,6 +975,7 @@ if st.session_state.legs:
     
     with m1:
         time_step = st.slider("Step (Days)", 1, 30, 1)
+        st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
         st.caption("Simulate Volatility Shift:")
         c_v1, c_v2, c_v3 = st.columns(3)
         if c_v1.button("IV -10%"): st.session_state.matrix_vol_mod -= 10
@@ -983,11 +984,14 @@ if st.session_state.legs:
         st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
 
     with m2:
+        slider_placeholder = st.empty()
+        
+        st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
         step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True)
         
         if step_type == "Percentage (%)":
             range_opts = [x / 200.0 for x in range(1, 11)]
-            step_val = st.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
+            step_val = slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
         else:
             if st.session_state.spot_price > 1000:
                 pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]
@@ -1000,7 +1004,7 @@ if st.session_state.legs:
                 default_pt = 1.00
                 
             if default_pt not in pts_opts: default_pt = pts_opts[0]
-            step_val = st.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}")
+            step_val = slider_placeholder.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}")
 
     spot = st.session_state.spot_price
     
