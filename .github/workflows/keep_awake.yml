@@ -2,9 +2,9 @@ name: Keep Streamlit Awake Bot
 
 on:
   schedule:
-    # Runs automatically every 3 days at midnight UTC
-    - cron: '0 0 */3 * *'
-  workflow_dispatch: # Allows you to trigger it manually if you want
+    # Runs automatically every 4 hours
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
 
 jobs:
   ping-app:
