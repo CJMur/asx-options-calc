@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.10 (Margin Engine & UI Polish)
+# VERSION: 1.3.11 (Total Margin & Search Polish)
 # ==========================================
 
 import streamlit as st
@@ -24,6 +24,28 @@ st.set_page_config(layout="wide", page_title="TradersCircle Options")
 # Direct GitHub Raw CDN URLs
 OPTIONS_SHEET_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/options_data.parquet"
 FWD_CURVE_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/fwd_curve.parquet"
+
+# --- TOP ASX NAMES DICTIONARY ---
+ASX_NAMES = {
+    "XJO": "S&P/ASX 200 Index", "BHP": "BHP Group Limited", "CBA": "Commonwealth Bank",
+    "CSL": "CSL Limited", "NAB": "National Australia Bank", "WBC": "Westpac Banking Corp",
+    "ANZ": "ANZ Group Holdings", "MQG": "Macquarie Group", "WES": "Wesfarmers Limited",
+    "TLS": "Telstra Group", "WOW": "Woolworths Group", "RIO": "Rio Tinto",
+    "FMG": "Fortescue Metals", "QAN": "Qantas Airways", "WTC": "Woodside Energy",
+    "GMG": "Goodman Group", "COL": "Coles Group", "BXB": "Brambles Limited",
+    "STO": "Santos Limited", "TCL": "WiseTech Global", "XRO": "Xero Limited",
+    "CPU": "Computershare", "ALL": "Aristocrat Leisure", "NCM": "Newmont",
+    "SUN": "Suncorp Group", "IAG": "Insurance Australia", "RHC": "Ramsay Health Care",
+    "SHL": "Sonic Healthcare", "MIN": "Mineral Resources", "PLS": "Pilbara Minerals",
+    "A2M": "The a2 Milk Company", "AGL": "AGL Energy", "ALD": "Ampol Limited",
+    "AMC": "Amcor", "AMP": "AMP Limited", "APA": "APA Group", "EDV": "Endeavour Group", 
+    "EVN": "Evolution Mining", "FLT": "Flight Centre", "IEL": "IDP Education", 
+    "ILU": "Iluka Resources", "IPL": "Incitec Pivot", "JBH": "JB Hi-Fi", "JHX": "James Hardie", 
+    "LLC": "Lendlease Group", "ORG": "Origin Energy", "ORI": "Orica Limited", "QBE": "QBE Insurance",
+    "REH": "Reece Limited", "RMD": "ResMed Inc", "S32": "South32 Limited",
+    "SCG": "Scentre Group", "SEK": "Seek Limited", "SGP": "Stockland",
+    "TAH": "Tabcorp Holdings", "TWE": "Treasury Wine Estates"
+}
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -430,7 +452,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.10</div>
+            <div class="header-sub">Option Strategy Builder v1.3.11</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -450,14 +472,17 @@ tickers_list = []
 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
     tickers_list = sorted(st.session_state.ref_data['Ticker'].dropna().unique().tolist())
 
-c1, c2, c3, c4 = st.columns([1.2, 1.2, 1, 1.5], gap="medium")
+# Spacing optimized to [2.0, 0.9, 0.7, 1.4] to prevent button wrap and give search bar room
+c1, c2, c3, c4 = st.columns([2.0, 0.9, 0.7, 1.4], gap="medium")
 
 with c1: 
     default_idx = 0
     if st.session_state.ticker in tickers_list:
         default_idx = tickers_list.index(st.session_state.ticker) + 1
         
-    asset_sel = st.selectbox("Search Underlying Asset:", options=["-- Select Asset --"] + tickers_list, index=default_idx)
+    # Inject full stock names into the dropdown
+    asset_options = ["-- Select Asset --"] + [f"{t} - {ASX_NAMES.get(t, 'Underlying Asset')}" for t in tickers_list]
+    asset_sel = st.selectbox("Search Underlying Asset:", options=asset_options, index=default_idx)
 
 with c2:
     code_sel = st.text_input("Or Search Specific Code:", value=st.session_state.preselect_code if st.session_state.preselect_code else "", placeholder="e.g., BHPJ84")
@@ -472,7 +497,7 @@ with c3:
 
 with c4:
     st.write(""); st.write("")
-    bc1, bc2 = st.columns([3, 1.2])
+    bc1, bc2 = st.columns([2.5, 1.2]) # Added more space to bc2 to fit RESTART button
     
     with bc2:
         if st.button("🔄 RESTART", use_container_width=True):
@@ -491,7 +516,7 @@ with c4:
     with bc1:
         do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
-query = code_sel.strip() if code_sel.strip() else (asset_sel if asset_sel != "-- Select Asset --" else "")
+query = code_sel.strip() if code_sel.strip() else (asset_sel.split(' - ')[0] if asset_sel != "-- Select Asset --" else "")
 
 if do_load or (query and query.upper() != (st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker)):
     if not query: st.warning("Please select an asset or enter an option code.")
@@ -793,7 +818,7 @@ if st.session_state.legs:
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
-    # Calculate Complete Portfolio Margin Offset
+    # TRUE PORTFOLIO MARGIN CALCULATION
     scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
     portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
     leg_risk_arrays = []
@@ -822,9 +847,14 @@ if st.session_state.legs:
             
         leg_risk_arrays.append(risk_array)
         portfolio_scenarios += risk_array * leg['Qty']
-        
-    worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-    total_margin = min(0.0, worst_portfolio_loss)
+    
+    # NEW MARGIN LOGIC: Only apply margin if there is Naked/Short risk in the portfolio
+    has_short = any(leg['Qty'] < 0 for leg in st.session_state.legs)
+    if has_short:
+        worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
+        total_margin = min(0.0, worst_portfolio_loss)
+    else:
+        total_margin = 0.0
 
     total_delta, total_premium, raw_theo_sum = 0, 0, 0
     max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -846,7 +876,7 @@ if st.session_state.legs:
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
         
-        # Individual Row Margin Display
+        # Individual Row Margin Display (Long legs = $0 Margin)
         if leg['Qty'] > 0:
             row_margin = 0.0
         else:
@@ -908,9 +938,10 @@ if st.session_state.legs:
             with sc1:
                 st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{current_strike:.2f}</div>", unsafe_allow_html=True)
             with sc2:
-                dec = st.button("▼", key=f"dn_{leg['id']}", use_container_width=True, type="tertiary")
+                # Updated to large solid arrows and transparent background
+                dec = st.button("⬇️", key=f"dn_{leg['id']}", use_container_width=True, type="tertiary")
             with sc3:
-                inc = st.button("▲", key=f"up_{leg['id']}", use_container_width=True, type="tertiary")
+                inc = st.button("⬆️", key=f"up_{leg['id']}", use_container_width=True, type="tertiary")
                 
             new_strike = None
             if dec and current_idx > 0:
@@ -957,6 +988,7 @@ if st.session_state.legs:
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
         with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
         with c[11]:
+            # Updated to transparent cross button
             if st.button("✕", key=f"d_{leg['id']}", type="tertiary"):
                 st.session_state.legs.pop(i)
                 st.rerun()
@@ -996,6 +1028,7 @@ if st.session_state.legs:
         time_step = st.slider("Step (Days)", 1, 30, 1)
         st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
         
+        # Converted Vol buttons to consistent Radio Toggles
         vol_opts = ["IV -10%", "IV Flat", "IV +10%"]
         current_vol_idx = 1
         if st.session_state.matrix_vol_mod == -10.0: current_vol_idx = 0
