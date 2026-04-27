@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.11 (Total Margin & Search Polish)
+# VERSION: 1.3.12 (Debit Spread Margin Patch)
 # ==========================================
 
 import streamlit as st
@@ -452,7 +452,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.11</div>
+            <div class="header-sub">Option Strategy Builder v1.3.12</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -848,13 +848,28 @@ if st.session_state.legs:
         leg_risk_arrays.append(risk_array)
         portfolio_scenarios += risk_array * leg['Qty']
     
-    # NEW MARGIN LOGIC: Only apply margin if there is Naked/Short risk in the portfolio
+    # NEW MARGIN LOGIC: Detect covered spreads and apply portfolio risk arrays
+    total_margin = 0.0
     has_short = any(leg['Qty'] < 0 for leg in st.session_state.legs)
     if has_short:
-        worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-        total_margin = min(0.0, worst_portfolio_loss)
-    else:
-        total_margin = 0.0
+        is_covered_debit_spread = False
+        if len(st.session_state.legs) == 2:
+            l1, l2 = st.session_state.legs[0], st.session_state.legs[1]
+            if l1['Type'] == l2['Type'] and l1['ExpDateStr'] == l2['ExpDateStr']:
+                long_leg = l1 if l1['Qty'] > 0 else (l2 if l2['Qty'] > 0 else None)
+                short_leg = l1 if l1['Qty'] < 0 else (l2 if l2['Qty'] < 0 else None)
+                
+                if long_leg and short_leg and abs(long_leg['Qty']) >= abs(short_leg['Qty']):
+                    if long_leg['Type'] == 'Call' and long_leg['Strike'] <= short_leg['Strike']:
+                        is_covered_debit_spread = True
+                    elif long_leg['Type'] == 'Put' and long_leg['Strike'] >= short_leg['Strike']:
+                        is_covered_debit_spread = True
+                        
+        if is_covered_debit_spread:
+            total_margin = 0.0
+        else:
+            worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
+            total_margin = min(0.0, worst_portfolio_loss)
 
     total_delta, total_premium, raw_theo_sum = 0, 0, 0
     max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
