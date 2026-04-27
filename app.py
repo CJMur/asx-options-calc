@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.9 (Matrix UI Alignment)
+# VERSION: 1.3.10 (Margin Engine & UI Polish)
 # ==========================================
 
 import streamlit as st
@@ -16,7 +16,6 @@ import requests
 import re
 import json
 import base64
-import concurrent.futures
 import io
 
 # --- 1. CONFIGURATION & THEME ---
@@ -137,7 +136,7 @@ TOOLTIPS = {
     "Margin": "The estimated portfolio collateral required to hold this specific strategy."
 }
 
-# --- 3. DATA ENGINE (CLEAN PARQUET ENGINE) ---
+# --- 3. DATA ENGINE ---
 @st.cache_data(ttl=86400)
 def fetch_rba_cash_rate():
     try:
@@ -431,7 +430,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.9</div>
+            <div class="header-sub">Option Strategy Builder v1.3.10</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -447,12 +446,23 @@ if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.st
     st.error(f"**Data Engine Warning:** {st.session_state.sheet_msg.split('|')[1]}")
 
 # --- 7. CONTROLS ---
-c1, c2, c3 = st.columns([1, 1, 2], gap="medium")
+tickers_list = []
+if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
+    tickers_list = sorted(st.session_state.ref_data['Ticker'].dropna().unique().tolist())
+
+c1, c2, c3, c4 = st.columns([1.2, 1.2, 1, 1.5], gap="medium")
+
 with c1: 
-    display_val = st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker
-    query = st.text_input("Ticker or Option Code", value=display_val, placeholder="e.g., BHP or BHPJ84")
+    default_idx = 0
+    if st.session_state.ticker in tickers_list:
+        default_idx = tickers_list.index(st.session_state.ticker) + 1
+        
+    asset_sel = st.selectbox("Search Underlying Asset:", options=["-- Select Asset --"] + tickers_list, index=default_idx)
 
 with c2:
+    code_sel = st.text_input("Or Search Specific Code:", value=st.session_state.preselect_code if st.session_state.preselect_code else "", placeholder="e.g., BHPJ84")
+
+with c3:
     if st.session_state.ticker:
         new_spot = st.number_input("Spot Price ($)", value=float(st.session_state.spot_price), format="%.2f", step=0.01)
         if new_spot != st.session_state.spot_price:
@@ -460,7 +470,7 @@ with c2:
             st.session_state.manual_spot = True
     else: st.write("")
 
-with c3:
+with c4:
     st.write(""); st.write("")
     bc1, bc2 = st.columns([3, 1.2])
     
@@ -481,8 +491,10 @@ with c3:
     with bc1:
         do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
-if do_load or (query and query.upper() != display_val):
-    if not query: st.warning("Please enter a ticker or option code.")
+query = code_sel.strip() if code_sel.strip() else (asset_sel if asset_sel != "-- Select Asset --" else "")
+
+if do_load or (query and query.upper() != (st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker)):
+    if not query: st.warning("Please select an asset or enter an option code.")
     else:
         query_upper = query.upper().strip()
         
@@ -781,6 +793,7 @@ if st.session_state.legs:
     
     st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
+    # Calculate Complete Portfolio Margin Offset
     scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
     portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
     leg_risk_arrays = []
@@ -810,9 +823,10 @@ if st.session_state.legs:
         leg_risk_arrays.append(risk_array)
         portfolio_scenarios += risk_array * leg['Qty']
         
-    worst_scenario_idx = np.argmin(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0
+    worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
+    total_margin = min(0.0, worst_portfolio_loss)
 
-    total_delta, total_premium, raw_theo_sum, total_margin = 0, 0, 0, 0
+    total_delta, total_premium, raw_theo_sum = 0, 0, 0
     max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
     
     for i, leg in enumerate(st.session_state.legs):
@@ -831,11 +845,16 @@ if st.session_state.legs:
         
         net_delta = leg['Qty'] * new_delta * contract_multiplier
         premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
-        row_margin = leg_risk_arrays[i][worst_scenario_idx] * leg['Qty'] if len(leg_risk_arrays[i]) > 0 else 0.0
+        
+        # Individual Row Margin Display
+        if leg['Qty'] > 0:
+            row_margin = 0.0
+        else:
+            row_risk = leg_risk_arrays[i] * leg['Qty']
+            row_margin = min(0.0, np.min(row_risk)) if len(row_risk) > 0 else 0.0
         
         total_delta += net_delta
         total_premium += premium
-        total_margin += row_margin
         raw_theo_sum += leg['Qty'] * new_theo
         
         p_color = '#4ade80' if premium >= 0 else '#f87171'
@@ -889,9 +908,9 @@ if st.session_state.legs:
             with sc1:
                 st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{current_strike:.2f}</div>", unsafe_allow_html=True)
             with sc2:
-                dec = st.button("▼", key=f"dn_{leg['id']}", use_container_width=True)
+                dec = st.button("▼", key=f"dn_{leg['id']}", use_container_width=True, type="tertiary")
             with sc3:
-                inc = st.button("▲", key=f"up_{leg['id']}", use_container_width=True)
+                inc = st.button("▲", key=f"up_{leg['id']}", use_container_width=True, type="tertiary")
                 
             new_strike = None
             if dec and current_idx > 0:
@@ -938,7 +957,7 @@ if st.session_state.legs:
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
         with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
         with c[11]:
-            if st.button("✕", key=f"d_{leg['id']}"):
+            if st.button("✕", key=f"d_{leg['id']}", type="tertiary"):
                 st.session_state.legs.pop(i)
                 st.rerun()
                 
@@ -976,12 +995,16 @@ if st.session_state.legs:
     with m1:
         time_step = st.slider("Step (Days)", 1, 30, 1)
         st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-        st.caption("Simulate Volatility Shift:")
-        c_v1, c_v2, c_v3 = st.columns(3)
-        if c_v1.button("IV -10%"): st.session_state.matrix_vol_mod -= 10
-        if c_v2.button("IV Flat"): st.session_state.matrix_vol_mod = 0
-        if c_v3.button("IV +10%"): st.session_state.matrix_vol_mod += 10
-        st.caption(f"Current Shift: {st.session_state.matrix_vol_mod:+}%")
+        
+        vol_opts = ["IV -10%", "IV Flat", "IV +10%"]
+        current_vol_idx = 1
+        if st.session_state.matrix_vol_mod == -10.0: current_vol_idx = 0
+        elif st.session_state.matrix_vol_mod == 10.0: current_vol_idx = 2
+        
+        vol_shift_sel = st.radio("Simulate Volatility Shift", vol_opts, index=current_vol_idx, horizontal=True)
+        if vol_shift_sel == "IV -10%": st.session_state.matrix_vol_mod = -10.0
+        elif vol_shift_sel == "IV +10%": st.session_state.matrix_vol_mod = 10.0
+        else: st.session_state.matrix_vol_mod = 0.0
 
     with m2:
         slider_placeholder = st.empty()
