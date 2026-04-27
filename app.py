@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.12 (Debit Spread Margin Patch)
+# VERSION: 1.3.13 (Header Layout Fix)
 # ==========================================
 
 import streamlit as st
@@ -452,7 +452,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.12</div>
+            <div class="header-sub">Option Strategy Builder v1.3.13</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -472,15 +472,14 @@ tickers_list = []
 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
     tickers_list = sorted(st.session_state.ref_data['Ticker'].dropna().unique().tolist())
 
-# Spacing optimized to [2.0, 0.9, 0.7, 1.4] to prevent button wrap and give search bar room
-c1, c2, c3, c4 = st.columns([2.0, 0.9, 0.7, 1.4], gap="medium")
+# NEW SPACING: [1.4, 0.8, 0.7, 1.6]
+c1, c2, c3, c4 = st.columns([1.4, 0.8, 0.7, 1.6], gap="medium")
 
 with c1: 
     default_idx = 0
     if st.session_state.ticker in tickers_list:
         default_idx = tickers_list.index(st.session_state.ticker) + 1
         
-    # Inject full stock names into the dropdown
     asset_options = ["-- Select Asset --"] + [f"{t} - {ASX_NAMES.get(t, 'Underlying Asset')}" for t in tickers_list]
     asset_sel = st.selectbox("Search Underlying Asset:", options=asset_options, index=default_idx)
 
@@ -497,7 +496,7 @@ with c3:
 
 with c4:
     st.write(""); st.write("")
-    bc1, bc2 = st.columns([2.5, 1.2]) # Added more space to bc2 to fit RESTART button
+    bc1, bc2 = st.columns([2.5, 1.2]) 
     
     with bc2:
         if st.button("🔄 RESTART", use_container_width=True):
@@ -953,7 +952,6 @@ if st.session_state.legs:
             with sc1:
                 st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{current_strike:.2f}</div>", unsafe_allow_html=True)
             with sc2:
-                # Updated to large solid arrows and transparent background
                 dec = st.button("⬇️", key=f"dn_{leg['id']}", use_container_width=True, type="tertiary")
             with sc3:
                 inc = st.button("⬆️", key=f"up_{leg['id']}", use_container_width=True, type="tertiary")
@@ -1003,7 +1001,6 @@ if st.session_state.legs:
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
         with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
         with c[11]:
-            # Updated to transparent cross button
             if st.button("✕", key=f"d_{leg['id']}", type="tertiary"):
                 st.session_state.legs.pop(i)
                 st.rerun()
