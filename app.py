@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.13 (Header Layout Fix)
+# VERSION: 1.3.14 (XJO Default & Search Clean-up)
 # ==========================================
 
 import streamlit as st
@@ -123,7 +123,8 @@ if 'url_loaded' not in st.session_state:
             encoded_state = st.query_params["s"]
             decoded_json = base64.urlsafe_b64decode(encoded_state.encode()).decode()
             payload = json.loads(decoded_json)
-            st.session_state.ticker = payload.get("t", "")
+            st.session_state.ticker = payload.get("t", "XJO")
+            if not st.session_state.ticker: st.session_state.ticker = "XJO"
             st.session_state.spot_price = payload.get("p", 0.0)
             st.session_state.manual_spot = payload.get("m", False)
             st.session_state.legs = payload.get("l", [])
@@ -131,7 +132,7 @@ if 'url_loaded' not in st.session_state:
             pass
 
 if 'legs' not in st.session_state: st.session_state.legs = [] 
-if 'ticker' not in st.session_state: st.session_state.ticker = "" 
+if 'ticker' not in st.session_state: st.session_state.ticker = "XJO" 
 if 'spot_price' not in st.session_state: st.session_state.spot_price = 0.0
 if 'chain_obj' not in st.session_state: st.session_state.chain_obj = None
 if 'ref_data' not in st.session_state: st.session_state.ref_data = None
@@ -452,7 +453,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.13</div>
+            <div class="header-sub">Option Strategy Builder v1.3.14</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -472,19 +473,23 @@ tickers_list = []
 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
     tickers_list = sorted(st.session_state.ref_data['Ticker'].dropna().unique().tolist())
 
-# NEW SPACING: [1.4, 0.8, 0.7, 1.6]
 c1, c2, c3, c4 = st.columns([1.4, 0.8, 0.7, 1.6], gap="medium")
 
 with c1: 
+    # Force XJO default, remove "-- Select Asset --" entirely
+    asset_options = [f"{t} - {ASX_NAMES.get(t, 'Underlying Asset')}" for t in tickers_list]
+    if not asset_options:
+        asset_options = ["XJO - S&P/ASX 200 Index"]
+        
     default_idx = 0
     if st.session_state.ticker in tickers_list:
-        default_idx = tickers_list.index(st.session_state.ticker) + 1
+        default_idx = tickers_list.index(st.session_state.ticker)
         
-    asset_options = ["-- Select Asset --"] + [f"{t} - {ASX_NAMES.get(t, 'Underlying Asset')}" for t in tickers_list]
     asset_sel = st.selectbox("Search Underlying Asset:", options=asset_options, index=default_idx)
 
 with c2:
-    code_sel = st.text_input("Or Search Specific Code:", value=st.session_state.preselect_code if st.session_state.preselect_code else "", placeholder="e.g., BHPJ84")
+    # Removed the placeholder text
+    code_sel = st.text_input("Or Search Specific Code:", value=st.session_state.preselect_code if st.session_state.preselect_code else "")
 
 with c3:
     if st.session_state.ticker:
@@ -515,7 +520,7 @@ with c4:
     with bc1:
         do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
-query = code_sel.strip() if code_sel.strip() else (asset_sel.split(' - ')[0] if asset_sel != "-- Select Asset --" else "")
+query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
 if do_load or (query and query.upper() != (st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker)):
     if not query: st.warning("Please select an asset or enter an option code.")
@@ -952,6 +957,7 @@ if st.session_state.legs:
             with sc1:
                 st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{current_strike:.2f}</div>", unsafe_allow_html=True)
             with sc2:
+                # Updated to large solid arrows and transparent background
                 dec = st.button("⬇️", key=f"dn_{leg['id']}", use_container_width=True, type="tertiary")
             with sc3:
                 inc = st.button("⬆️", key=f"up_{leg['id']}", use_container_width=True, type="tertiary")
@@ -1001,6 +1007,7 @@ if st.session_state.legs:
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
         with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
         with c[11]:
+            # Updated to transparent cross button
             if st.button("✕", key=f"d_{leg['id']}", type="tertiary"):
                 st.session_state.legs.pop(i)
                 st.rerun()
