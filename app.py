@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.14 (XJO Default & Search Clean-up)
+# VERSION: 1.3.15 (Pandas Optimization)
 # ==========================================
 
 import streamlit as st
@@ -197,7 +197,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 elif clean_c in ['fwd expiry', 'expiry', 'xjo forward yield', 'forward yield']: fwd_date_col = col
 
             if spread_col and fwd_date_col:
-                fwd_dates = pd.to_datetime(fwd_df[fwd_date_col], dayfirst=True, errors='coerce')
+                fwd_dates = pd.to_datetime(fwd_df[fwd_date_col], dayfirst=True, errors='coerce', format='mixed')
                 fwd_vals = pd.to_numeric(fwd_df[spread_col].astype(str).str.replace(',', ''), errors='coerce')
                 valid_mask = fwd_dates.notna() & fwd_vals.notna()
                 for d, v in zip(fwd_dates[valid_mask], fwd_vals[valid_mask]):
@@ -260,7 +260,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
             
         df['Strike'] = pd.to_numeric(df['Strike'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').round(3)
         
-        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce').dt.normalize()
+        df['Expiry'] = pd.to_datetime(df['Expiry'], dayfirst=True, errors='coerce', format='mixed').dt.normalize()
         
         if 'Vol' in df.columns:
             df['Vol'] = pd.to_numeric(df['Vol'].astype(str).str.replace('%', ''), errors='coerce')
@@ -453,7 +453,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.14</div>
+            <div class="header-sub">Option Strategy Builder v1.3.15</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -957,7 +957,6 @@ if st.session_state.legs:
             with sc1:
                 st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{current_strike:.2f}</div>", unsafe_allow_html=True)
             with sc2:
-                # Updated to large solid arrows and transparent background
                 dec = st.button("⬇️", key=f"dn_{leg['id']}", use_container_width=True, type="tertiary")
             with sc3:
                 inc = st.button("⬆️", key=f"up_{leg['id']}", use_container_width=True, type="tertiary")
@@ -1007,7 +1006,6 @@ if st.session_state.legs:
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
         with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
         with c[11]:
-            # Updated to transparent cross button
             if st.button("✕", key=f"d_{leg['id']}", type="tertiary"):
                 st.session_state.legs.pop(i)
                 st.rerun()
