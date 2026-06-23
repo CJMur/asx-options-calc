@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.15 (Pandas Optimization)
+# VERSION: 1.3.16 (Dynamic Ticker Dictionary)
 # ==========================================
 
 import streamlit as st
@@ -35,16 +35,21 @@ ASX_NAMES = {
     "GMG": "Goodman Group", "COL": "Coles Group", "BXB": "Brambles Limited",
     "STO": "Santos Limited", "TCL": "WiseTech Global", "XRO": "Xero Limited",
     "CPU": "Computershare", "ALL": "Aristocrat Leisure", "NCM": "Newmont",
-    "SUN": "Suncorp Group", "IAG": "Insurance Australia", "RHC": "Ramsay Health Care",
-    "SHL": "Sonic Healthcare", "MIN": "Mineral Resources", "PLS": "Pilbara Minerals",
-    "A2M": "The a2 Milk Company", "AGL": "AGL Energy", "ALD": "Ampol Limited",
-    "AMC": "Amcor", "AMP": "AMP Limited", "APA": "APA Group", "EDV": "Endeavour Group", 
-    "EVN": "Evolution Mining", "FLT": "Flight Centre", "IEL": "IDP Education", 
-    "ILU": "Iluka Resources", "IPL": "Incitec Pivot", "JBH": "JB Hi-Fi", "JHX": "James Hardie", 
-    "LLC": "Lendlease Group", "ORG": "Origin Energy", "ORI": "Orica Limited", "QBE": "QBE Insurance",
+    "NEM": "Newmont Corporation", "SUN": "Suncorp Group", "IAG": "Insurance Australia", 
+    "RHC": "Ramsay Health Care", "SHL": "Sonic Healthcare", "MIN": "Mineral Resources", 
+    "PLS": "Pilbara Minerals", "A2M": "The a2 Milk Company", "AGL": "AGL Energy", 
+    "ALD": "Ampol Limited", "AMC": "Amcor", "AMP": "AMP Limited", "APA": "APA Group", 
+    "EDV": "Endeavour Group", "EVN": "Evolution Mining", "FLT": "Flight Centre", 
+    "IEL": "IDP Education", "ILU": "Iluka Resources", "IPL": "Incitec Pivot", 
+    "JBH": "JB Hi-Fi", "JHX": "James Hardie", "LLC": "Lendlease Group", 
+    "ORG": "Origin Energy", "ORI": "Orica Limited", "QBE": "QBE Insurance",
     "REH": "Reece Limited", "RMD": "ResMed Inc", "S32": "South32 Limited",
     "SCG": "Scentre Group", "SEK": "Seek Limited", "SGP": "Stockland",
-    "TAH": "Tabcorp Holdings", "TWE": "Treasury Wine Estates"
+    "TAH": "Tabcorp Holdings", "TWE": "Treasury Wine Estates",
+    "NXT": "NextDC Limited", "PDN": "Paladin Energy", "PNI": "Pinnacle Investment",
+    "PRU": "Perseus Mining", "ZIP": "Zip Co Limited", "WEB": "Webjet Limited",
+    "BOQ": "Bank of Queensland", "BEN": "Bendigo and Adelaide Bank", 
+    "LTM": "Arcadium Lithium", "CAR": "CAR Group Limited", "ALQ": "ALS Limited"
 }
 
 # --- CSS STYLING ---
@@ -453,7 +458,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.15</div>
+            <div class="header-sub">Option Strategy Builder v1.3.16</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -477,7 +482,7 @@ c1, c2, c3, c4 = st.columns([1.4, 0.8, 0.7, 1.6], gap="medium")
 
 with c1: 
     # Force XJO default, remove "-- Select Asset --" entirely
-    asset_options = [f"{t} - {ASX_NAMES.get(t, 'Underlying Asset')}" for t in tickers_list]
+    asset_options = [f"{t} - {ASX_NAMES[t]}" if t in ASX_NAMES else t for t in tickers_list]
     if not asset_options:
         asset_options = ["XJO - S&P/ASX 200 Index"]
         
