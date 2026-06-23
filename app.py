@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.18 (UI Polish)
+# VERSION: 1.3.19 (Sleek Strategy Alignment)
 # ==========================================
 
 import streamlit as st
@@ -27,116 +27,35 @@ FWD_CURVE_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/fw
 
 # --- TOP ASX NAMES DICTIONARY ---
 ASX_NAMES = {
-    "A2M": "The a2 Milk Company",
-    "AGL": "AGL Energy",
-    "ALD": "Ampol Limited",
-    "ALL": "Aristocrat Leisure",
-    "AMC": "Amcor",
-    "AMP": "AMP Limited",
-    "ANN": "Ansell Limited",
-    "ANZ": "ANZ Group Holdings",
-    "APA": "APA Group",
-    "ASX": "ASX Limited",
-    "AZJ": "Aurizon Holdings",
-    "BEN": "Bendigo and Adelaide Bank",
-    "BGL": "Bellevue Gold",
-    "BHP": "BHP Group",
-    "BOQ": "Bank of Queensland",
-    "BPT": "Beach Energy",
-    "BSL": "BlueScope Steel",
-    "BXB": "Brambles Limited",
-    "CAR": "CAR Group Limited",
-    "CBA": "Commonwealth Bank",
-    "COL": "Coles Group",
-    "CPU": "Computershare",
-    "CSL": "CSL Limited",
-    "CTD": "Corporate Travel Management",
-    "CWY": "Cleanaway Waste Management",
-    "DMP": "Domino's Pizza Enterprises",
-    "DNL": "Downer EDI",
-    "DRO": "DroneShield",
-    "DXS": "Dexus",
-    "EDV": "Endeavour Group",
-    "EVN": "Evolution Mining",
-    "FLT": "Flight Centre",
-    "FMG": "Fortescue Metals",
-    "FPH": "Fisher & Paykel Healthcare",
-    "GMG": "Goodman Group",
-    "GOLD": "Global X Physical Gold",
-    "GPT": "GPT Group",
-    "GYG": "Guzman y Gomez",
-    "HUB": "HUB24",
-    "HVN": "Harvey Norman",
-    "IAG": "Insurance Australia",
-    "IEL": "IDP Education",
-    "IGO": "IGO Limited",
-    "ILU": "Iluka Resources",
-    "IVV": "iShares S&P 500 ETF",
-    "JBH": "JB Hi-Fi",
-    "JHX": "James Hardie",
-    "LLC": "Lendlease Group",
-    "LOV": "Lovisa Holdings",
-    "LYC": "Lynas Rare Earths",
-    "MGR": "Mirvac Group",
-    "MIN": "Mineral Resources",
-    "MPL": "Medibank Private",
-    "MQG": "Macquarie Group",
-    "MSB": "Mesoblast",
-    "MTS": "Metcash",
-    "NAB": "National Australia Bank",
-    "NDQ": "BetaShares NASDAQ 100 ETF",
-    "NEC": "Nine Entertainment Co.",
-    "NHC": "New Hope Corporation",
-    "NST": "Northern Star Resources",
-    "NWL": "Netwealth Group",
-    "NXT": "NextDC Limited",
-    "ORG": "Origin Energy",
-    "ORI": "Orica Limited",
-    "PDN": "Paladin Energy",
-    "PLS": "Pilbara Minerals",
-    "PNI": "Pinnacle Investment",
-    "PRU": "Perseus Mining",
-    "QAN": "Qantas Airways",
-    "QBE": "QBE Insurance",
-    "QUB": "Qube Holdings",
-    "REH": "Reece Limited",
-    "RHC": "Ramsay Health Care",
-    "RIO": "Rio Tinto",
-    "RRL": "Regis Resources",
-    "S32": "South32 Limited",
-    "SCG": "Scentre Group",
-    "SDF": "Steadfast Group",
-    "SEK": "Seek Limited",
-    "SFR": "Sandfire Resources",
-    "SGH": "Seven Group Holdings",
-    "SGM": "Sims Limited",
-    "SGP": "Stockland",
-    "SHL": "Sonic Healthcare",
-    "SIG": "Sigma Healthcare",
-    "SOL": "Washington H. Soul Pattinson",
-    "STO": "Santos Limited",
-    "STW": "SPDR S&P/ASX 200 Fund",
-    "SUN": "Suncorp Group",
-    "TAH": "Tabcorp Holdings",
-    "TCL": "Transurban Group",
-    "TLC": "The Lottery Corporation",
-    "TLS": "Telstra Group",
-    "TLX": "Telix Pharmaceuticals",
-    "TNE": "Technology One",
-    "TPG": "TPG Telecom",
-    "TWE": "Treasury Wine Estates",
-    "VAU": "Vaneck Gold Bullion",
-    "WBC": "Westpac Banking Corp",
-    "WDS": "Woodside Energy Group",
-    "WES": "Wesfarmers Limited",
-    "WHC": "Whitehaven Coal",
-    "WOR": "Worley Limited",
-    "WOW": "Woolworths Group",
-    "WTC": "WiseTech Global",
-    "XJO": "S&P/ASX 200 Index",
-    "XRO": "Xero Limited",
-    "YAL": "Yancoal Australia",
-    "ZIP": "Zip Co Limited"
+    "A2M": "The a2 Milk Company", "AGL": "AGL Energy", "ALD": "Ampol Limited", "ALL": "Aristocrat Leisure",
+    "AMC": "Amcor", "AMP": "AMP Limited", "ANN": "Ansell Limited", "ANZ": "ANZ Group Holdings",
+    "APA": "APA Group", "ASX": "ASX Limited", "AZJ": "Aurizon Holdings", "BEN": "Bendigo and Adelaide Bank",
+    "BGL": "Bellevue Gold", "BHP": "BHP Group", "BOQ": "Bank of Queensland", "BPT": "Beach Energy",
+    "BSL": "BlueScope Steel", "BXB": "Brambles Limited", "CAR": "CAR Group Limited", "CBA": "Commonwealth Bank",
+    "COL": "Coles Group", "CPU": "Computershare", "CSL": "CSL Limited", "CTD": "Corporate Travel Management",
+    "CWY": "Cleanaway Waste Management", "DMP": "Domino's Pizza Enterprises", "DNL": "Downer EDI",
+    "DRO": "DroneShield", "DXS": "Dexus", "EDV": "Endeavour Group", "EVN": "Evolution Mining",
+    "FLT": "Flight Centre", "FMG": "Fortescue Metals", "FPH": "Fisher & Paykel Healthcare",
+    "GMG": "Goodman Group", "GOLD": "Global X Physical Gold", "GPT": "GPT Group", "GYG": "Guzman y Gomez",
+    "HUB": "HUB24", "HVN": "Harvey Norman", "IAG": "Insurance Australia", "IEL": "IDP Education",
+    "IGO": "IGO Limited", "ILU": "Iluka Resources", "IVV": "iShares S&P 500 ETF", "JBH": "JB Hi-Fi",
+    "JHX": "James Hardie", "LLC": "Lendlease Group", "LOV": "Lovisa Holdings", "LYC": "Lynas Rare Earths",
+    "MGR": "Mirvac Group", "MIN": "Mineral Resources", "MPL": "Medibank Private", "MQG": "Macquarie Group",
+    "MSB": "Mesoblast", "MTS": "Metcash", "NAB": "National Australia Bank", "NDQ": "BetaShares NASDAQ 100 ETF",
+    "NEC": "Nine Entertainment Co.", "NHC": "New Hope Corporation", "NST": "Northern Star Resources",
+    "NWL": "Netwealth Group", "NXT": "NextDC Limited", "ORG": "Origin Energy", "ORI": "Orica Limited",
+    "PDN": "Paladin Energy", "PLS": "Pilbara Minerals", "PNI": "Pinnacle Investment", "PRU": "Perseus Mining",
+    "QAN": "Qantas Airways", "QBE": "QBE Insurance", "QUB": "Qube Holdings", "REH": "Reece Limited",
+    "RHC": "Ramsay Health Care", "RIO": "Rio Tinto", "RRL": "Regis Resources", "S32": "South32 Limited",
+    "SCG": "Scentre Group", "SDF": "Steadfast Group", "SEK": "Seek Limited", "SFR": "Sandfire Resources",
+    "SGH": "Seven Group Holdings", "SGM": "Sims Limited", "SGP": "Stockland", "SHL": "Sonic Healthcare",
+    "SIG": "Sigma Healthcare", "SOL": "Washington H. Soul Pattinson", "STO": "Santos Limited",
+    "STW": "SPDR S&P/ASX 200 Fund", "SUN": "Suncorp Group", "TAH": "Tabcorp Holdings", "TCL": "Transurban Group",
+    "TLC": "The Lottery Corporation", "TLS": "Telstra Group", "TLX": "Telix Pharmaceuticals",
+    "TNE": "Technology One", "TPG": "TPG Telecom", "TWE": "Treasury Wine Estates", "VAU": "Vaneck Gold Bullion",
+    "WBC": "Westpac Banking Corp", "WDS": "Woodside Energy Group", "WES": "Wesfarmers Limited",
+    "WHC": "Whitehaven Coal", "WOR": "Worley Limited", "WOW": "Woolworths Group", "WTC": "WiseTech Global",
+    "XJO": "S&P/ASX 200 Index", "XRO": "Xero Limited", "YAL": "Yancoal Australia", "ZIP": "Zip Co Limited"
 }
 
 # --- CSS STYLING ---
@@ -192,9 +111,17 @@ st.markdown("""
         margin-bottom: 5px; cursor: help; user-select: none;
     }
     
+    /* --- PRECISION ROW ALIGNMENT FIX --- */
     .strategy-text { 
-        user-select: none; display: flex; align-items: center; 
-        min-height: 40px; padding: 0 8px; border-radius: 4px; width: 100%;
+        user-select: none; 
+        display: flex; 
+        align-items: center; 
+        height: 39px; /* Matches exact height of Streamlit Native Inputs */
+        padding: 0 10px; 
+        border-radius: 6px; 
+        width: 100%;
+        margin-top: 1px; /* Optical push down to match Streamlit fields perfectly */
+        font-size: 14.5px;
     }
     
     /* Horizontal Radio Button Styling */
@@ -556,7 +483,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.18</div>
+            <div class="header-sub">Option Strategy Builder v1.3.19</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -579,7 +506,6 @@ if st.session_state.ref_data is not None and not st.session_state.ref_data.empty
 c1, c2, c3, c4 = st.columns([1.4, 0.8, 0.7, 1.6], gap="medium")
 
 with c1: 
-    # Force XJO default, remove "-- Select Asset --" entirely
     asset_options = [f"{t} - {ASX_NAMES[t]}" if t in ASX_NAMES else t for t in tickers_list]
     if not asset_options:
         asset_options = ["XJO - S&P/ASX 200 Index"]
@@ -591,7 +517,6 @@ with c1:
     asset_sel = st.selectbox("Search Underlying Asset:", options=asset_options, index=default_idx)
 
 with c2:
-    # Removed the placeholder text
     code_sel = st.text_input("Or Search Specific Code:", value=st.session_state.preselect_code if st.session_state.preselect_code else "")
 
 with c3:
@@ -807,7 +732,6 @@ if not df_view.empty and current_exp:
                 s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
                 
             styles.append(s)
-        return styles.copy()
         return styles
 
     styled_disp = disp.style.apply(highlight_itm, axis=1).format({
@@ -909,7 +833,8 @@ if st.session_state.legs:
     
     contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
     
-    h_col_spec = [0.8, 1.1, 0.7, 0.9, 1.2, 2.7, 1.2, 1.2, 1.2, 1.4, 1.6, 0.5]
+    # Updated Clean Ratios for precise alignment
+    h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.3, 1.2, 1.1, 1.0, 1.0, 1.3, 1.4, 0.4]
     cols_header = st.columns(h_col_spec)
     
     with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
@@ -917,7 +842,7 @@ if st.session_state.legs:
     with cols_header[2]: st.markdown('<div class="trade-header" title="American or European">Style</div>', unsafe_allow_html=True)
     with cols_header[3]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
     with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
-    with cols_header[5]: st.markdown(f'<div class="trade-header" title="Smart Step Strike">Strike</div>', unsafe_allow_html=True)
+    with cols_header[5]: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
     with cols_header[6]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
     with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
     with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">POS Delta</div>', unsafe_allow_html=True)
@@ -1057,21 +982,17 @@ if st.session_state.legs:
                 
             current_idx = available_strikes.index(current_strike)
             
-            sc1, sc2, sc3, _ = st.columns([1.2, 0.6, 0.6, 1.0], gap="small")
-            with sc1:
-                st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{current_strike:.2f}</div>", unsafe_allow_html=True)
-            with sc2:
-                dec = st.button("⬇️", key=f"dn_{leg['id']}", use_container_width=True, type="tertiary")
-            with sc3:
-                inc = st.button("⬆️", key=f"up_{leg['id']}", use_container_width=True, type="tertiary")
-                
-            new_strike = None
-            if dec and current_idx > 0:
-                new_strike = available_strikes[current_idx - 1]
-            elif inc and current_idx < len(available_strikes) - 1:
-                new_strike = available_strikes[current_idx + 1]
-                
-            if new_strike is not None and new_strike != current_strike:
+            # --- SLEEK NEW DROPDOWN INSTEAD OF ARROWS ---
+            new_strike = st.selectbox(
+                "Strike", 
+                options=available_strikes, 
+                index=current_idx, 
+                key=f"stk_{leg['id']}", 
+                label_visibility="collapsed", 
+                format_func=lambda x: f"{x:.2f}"
+            )
+            
+            if new_strike != current_strike:
                 st.session_state.legs[i]['Strike'] = new_strike
                 if not subset_st.empty:
                     match = subset_st[subset_st['Strike'] == new_strike]
@@ -1110,7 +1031,9 @@ if st.session_state.legs:
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
         with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
         with c[11]:
-            if st.button("✕", key=f"d_{leg['id']}", type="tertiary"):
+            # Perfect center-aligned delete button
+            st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
+            if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                 st.session_state.legs.pop(i)
                 st.rerun()
                 
