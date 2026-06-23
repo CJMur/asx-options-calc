@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.19 (Sleek Strategy Alignment)
+# VERSION: 1.3.20 (Strategy Layout Polish)
 # ==========================================
 
 import streamlit as st
@@ -90,6 +90,23 @@ st.markdown("""
     }
     div[data-testid="stButton"] button[kind="secondary"] {
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1; font-weight: bold;
+    }
+    
+    /* --- X BUTTON ALIGNMENT & HOVER --- */
+    div[data-testid="stButton"] button[kind="tertiary"] {
+        height: 39px !important;
+        min-height: 39px !important;
+        padding: 0 !important;
+        margin-top: 1px !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #94a3b8 !important;
+    }
+    div[data-testid="stButton"] button[kind="tertiary"]:hover {
+        color: #f87171 !important;
+        background-color: rgba(248, 113, 113, 0.1) !important;
+        border-color: transparent !important;
     }
     
     /* --- SLIDER COLOR FIX (Electric Blue) --- */
@@ -483,7 +500,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.19</div>
+            <div class="header-sub">Option Strategy Builder v1.3.20</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1031,13 +1048,13 @@ if st.session_state.legs:
         with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
         with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
         with c[11]:
-            # Perfect center-aligned delete button
-            st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
+            # Clean centered delete button mapping to precise heights
             if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                 st.session_state.legs.pop(i)
                 st.rerun()
                 
-        st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
+        # This exact negative top margin pulls up the line to "eat" the empty space left by Streamlit components
+        st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
     strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
 
