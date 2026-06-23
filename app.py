@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.17 (Complete Stock Dictionary)
+# VERSION: 1.3.18 (UI Polish)
 # ==========================================
 
 import streamlit as st
@@ -199,6 +199,17 @@ st.markdown("""
     
     /* Horizontal Radio Button Styling */
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
+
+    /* --- NUMBER INPUT BORDER FIX --- */
+    div[data-testid="stNumberInputStepUp"], 
+    div[data-testid="stNumberInputStepDown"] {
+        border: none !important;
+        background-color: transparent !important;
+    }
+    div[data-baseweb="input"] {
+        border: 1px solid #334155 !important;
+        border-radius: 6px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -545,7 +556,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.17</div>
+            <div class="header-sub">Option Strategy Builder v1.3.18</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -796,6 +807,7 @@ if not df_view.empty and current_exp:
                 s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
                 
             styles.append(s)
+        return styles.copy()
         return styles
 
     styled_disp = disp.style.apply(highlight_itm, axis=1).format({
