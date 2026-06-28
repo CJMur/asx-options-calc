@@ -5,3 +5,4 @@ base="dark"
 [server]
 enableCORS = false
 enableXsrfProtection = false
+maxUploadSize = 5
