@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.23 (Portfolio Upload Fix & Polish)
+# VERSION: 1.3.24 (Portfolio Net Theo Display)
 # ==========================================
 
 import streamlit as st
@@ -503,7 +503,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.23</div>
+            <div class="header-sub">Option Strategy Builder v1.3.24</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1442,12 +1442,28 @@ with tab_portfolio:
             
         with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
             
-            c_head1, c_head2 = st.columns([1, 1])
+            # --- CALCULATE NET THEOS ---
+            max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
+            raw_entry_sum = sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])
+            net_entry_theo = raw_entry_sum / max_qty if max_qty != 0 else 0.0
+            
+            has_live = any('Current_Theo' in leg for leg in strat['legs'])
+            if has_live:
+                raw_live_sum = sum([leg['Qty'] * leg.get('Current_Theo', leg['Entry']) for leg in strat['legs']])
+                net_live_theo = raw_live_sum / max_qty if max_qty != 0 else 0.0
+            
+            # --- HEADER COLUMNS ---
+            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1])
             with c_head1:
                 st.markdown(f"**Spot at Entry:** ${strat['spot_at_entry']:.2f}")
             with c_head2:
+                st.markdown(f"**Net Entry Theo:** {net_entry_theo:.3f}")
+            with c_head3:
                 if 'current_spot' in strat:
                     st.markdown(f"**Current Spot:** ${strat['current_spot']:.2f}")
+            with c_head4:
+                if has_live:
+                    st.markdown(f"**Net Live Theo:** {net_live_theo:.3f}")
             
             leg_data = []
             for leg in strat['legs']:
