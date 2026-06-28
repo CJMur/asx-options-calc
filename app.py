@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.22 (Live Mark-to-Market Portfolio)
+# VERSION: 1.3.23 (Portfolio Upload Fix & Polish)
 # ==========================================
 
 import streamlit as st
@@ -164,6 +164,7 @@ def get_sydney_time():
 # --- 2. SESSION STATE ---
 if 'portfolio' not in st.session_state: st.session_state.portfolio = []
 if 'portfolio_last_refresh' not in st.session_state: st.session_state.portfolio_last_refresh = None
+if 'last_upload_hash' not in st.session_state: st.session_state.last_upload_hash = None
 if 'fetch_time' not in st.session_state: st.session_state.fetch_time = get_sydney_time()
 if 'url_loaded' not in st.session_state:
     st.session_state.url_loaded = True
@@ -502,7 +503,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.22</div>
+            <div class="header-sub">Option Strategy Builder v1.3.23</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -519,7 +520,7 @@ if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.st
 
 
 # --- TABS LAYOUT ---
-tab_builder, tab_portfolio = st.tabs(["🏗️ Strategy Builder", "💼 Portfolio Tracker"])
+tab_builder, tab_portfolio = st.tabs(["🧮 Strategy Builder", "💼 Portfolio Tracker"])
 
 with tab_builder:
     # --- 7. CONTROLS ---
@@ -563,6 +564,7 @@ with tab_builder:
                 saved_date = st.session_state.get('data_date', 'Unknown')
                 saved_port = st.session_state.get('portfolio', [])
                 saved_refresh = st.session_state.get('portfolio_last_refresh', None)
+                saved_hash = st.session_state.get('last_upload_hash', None)
                 
                 st.session_state.clear() 
                 
@@ -571,6 +573,7 @@ with tab_builder:
                 st.session_state.data_date = saved_date
                 st.session_state.portfolio = saved_port
                 st.session_state.portfolio_last_refresh = saved_refresh
+                st.session_state.last_upload_hash = saved_hash
                 st.rerun()
 
         with bc1:
@@ -1378,40 +1381,44 @@ with tab_portfolio:
     with ctrl_c3:
         uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
         if uploaded_file is not None:
-            try:
-                df_up = pd.read_csv(uploaded_file)
-                new_port = []
-                for strat_id, group in df_up.groupby('StrategyID'):
-                    strat_name = group['StrategyName'].iloc[0]
-                    ticker = group['Ticker'].iloc[0] if 'Ticker' in group.columns else 'Unknown'
-                    entry_spot = group['EntrySpot'].iloc[0]
-                    legs = []
-                    for _, row in group.iterrows():
-                        legs.append({
-                            "id": str(row['LegID']),
-                            "Qty": int(row['Qty']),
-                            "Type": str(row['Type']),
-                            "Style": str(row['Style']),
-                            "Strike": float(row['Strike']),
-                            "ExpDateStr": str(row['Expiry']),
-                            "Vol": float(row['Vol']),
-                            "Entry": float(row['EntryPrice']),
-                            "Code": str(row['Code']),
-                            "Delta": 0.0,
-                            "MarginUnit": 0.0
+            # File Upload Loop Breaker
+            file_hash = hash(uploaded_file.getvalue())
+            if st.session_state.last_upload_hash != file_hash:
+                try:
+                    df_up = pd.read_csv(uploaded_file)
+                    new_port = []
+                    for strat_id, group in df_up.groupby('StrategyID'):
+                        strat_name = group['StrategyName'].iloc[0]
+                        ticker = group['Ticker'].iloc[0] if 'Ticker' in group.columns else 'Unknown'
+                        entry_spot = group['EntrySpot'].iloc[0]
+                        legs = []
+                        for _, row in group.iterrows():
+                            legs.append({
+                                "id": str(row['LegID']),
+                                "Qty": int(row['Qty']),
+                                "Type": str(row['Type']),
+                                "Style": str(row['Style']),
+                                "Strike": float(row['Strike']),
+                                "ExpDateStr": str(row['Expiry']),
+                                "Vol": float(row['Vol']),
+                                "Entry": float(row['EntryPrice']),
+                                "Code": str(row['Code']),
+                                "Delta": 0.0,
+                                "MarginUnit": 0.0
+                            })
+                        new_port.append({
+                            "id": str(strat_id),
+                            "name": str(strat_name),
+                            "ticker": str(ticker),
+                            "spot_at_entry": float(entry_spot),
+                            "legs": legs
                         })
-                    new_port.append({
-                        "id": str(strat_id),
-                        "name": str(strat_name),
-                        "ticker": str(ticker),
-                        "spot_at_entry": float(entry_spot),
-                        "legs": legs
-                    })
-                st.session_state.portfolio = new_port
-                st.session_state.portfolio_last_refresh = None
-                st.success("Portfolio Loaded! Click Refresh to see live values.")
-            except Exception as e:
-                st.error(f"Error loading file: {e}")
+                    st.session_state.portfolio = new_port
+                    st.session_state.portfolio_last_refresh = None
+                    st.session_state.last_upload_hash = file_hash
+                    st.success("Portfolio Loaded! Click Refresh to see live values.")
+                except Exception as e:
+                    st.error(f"Error loading file: {e}")
 
     # Display Timestamp Status
     if st.session_state.portfolio_last_refresh:
