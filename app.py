@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.21 (Tabs & Portfolio Module)
+# VERSION: 1.3.22 (Live Mark-to-Market Portfolio)
 # ==========================================
 
 import streamlit as st
@@ -163,6 +163,7 @@ def get_sydney_time():
 
 # --- 2. SESSION STATE ---
 if 'portfolio' not in st.session_state: st.session_state.portfolio = []
+if 'portfolio_last_refresh' not in st.session_state: st.session_state.portfolio_last_refresh = None
 if 'fetch_time' not in st.session_state: st.session_state.fetch_time = get_sydney_time()
 if 'url_loaded' not in st.session_state:
     st.session_state.url_loaded = True
@@ -501,7 +502,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.21</div>
+            <div class="header-sub">Option Strategy Builder v1.3.22</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -561,6 +562,7 @@ with tab_builder:
                 saved_fwd = st.session_state.get('fwd_spreads', {})
                 saved_date = st.session_state.get('data_date', 'Unknown')
                 saved_port = st.session_state.get('portfolio', [])
+                saved_refresh = st.session_state.get('portfolio_last_refresh', None)
                 
                 st.session_state.clear() 
                 
@@ -568,6 +570,7 @@ with tab_builder:
                 st.session_state.fwd_spreads = saved_fwd
                 st.session_state.data_date = saved_date
                 st.session_state.portfolio = saved_port
+                st.session_state.portfolio_last_refresh = saved_refresh
                 st.rerun()
 
         with bc1:
@@ -1303,9 +1306,50 @@ with tab_builder:
 with tab_portfolio:
     st.markdown("### Saved Strategies")
     
-    # Portfolio Control Center (CSV Export/Import)
-    io_c1, io_c2 = st.columns([1, 1])
-    with io_c1:
+    # Portfolio Control Center
+    ctrl_c1, ctrl_c2, ctrl_c3 = st.columns([1.2, 1, 1])
+    
+    with ctrl_c1:
+        if st.session_state.portfolio:
+            if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
+                with st.spinner("Fetching live market data..."):
+                    orig_manual = st.session_state.manual_spot
+                    st.session_state.manual_spot = False
+                    
+                    refresh_time = get_sydney_time()
+                    st.session_state.portfolio_last_refresh = refresh_time
+                    
+                    for strat in st.session_state.portfolio:
+                        ticker = strat.get('ticker', 'XJO')
+                        _, spot, _ = fetch_data(ticker)
+                        strat['current_spot'] = spot if spot > 0 else strat['spot_at_entry']
+                        
+                        contract_multiplier = 10 if ticker == 'XJO' else 100
+                        strat_pnl = 0.0
+                        
+                        for leg in strat['legs']:
+                            exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+                            time_diff_sec = (exp_dt - refresh_time).total_seconds()
+                            precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
+                            
+                            cur_theo, _ = calculate_price_and_delta(
+                                leg['Style'], leg['Type'], strat['current_spot'], leg['Strike'], 
+                                precise_days_diff, leg['Vol'], leg['ExpDateStr']
+                            )
+                            leg['Current_Theo'] = cur_theo
+                            
+                            leg_pnl = (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
+                            leg['Live_PnL'] = leg_pnl
+                            strat_pnl += leg_pnl
+                            
+                        strat['Live_PnL'] = strat_pnl
+                        
+                    st.session_state.manual_spot = orig_manual
+                    st.rerun()
+        else:
+            st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
+            
+    with ctrl_c2:
         if st.session_state.portfolio:
             flat_port = []
             for strat in st.session_state.portfolio:
@@ -1327,12 +1371,12 @@ with tab_portfolio:
                     })
             df_port = pd.DataFrame(flat_port)
             csv_port = df_port.to_csv(index=False)
-            st.download_button("💾 Download Portfolio (CSV Backup)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", use_container_width=True)
+            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", use_container_width=True)
         else:
-            st.info("Your Portfolio is currently empty. Build a trade and save it!")
+            st.button("💾 Download Backup (CSV)", disabled=True, use_container_width=True)
             
-    with io_c2:
-        uploaded_file = st.file_uploader("📂 Upload Portfolio (CSV)", type=["csv"], label_visibility="collapsed")
+    with ctrl_c3:
+        uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
         if uploaded_file is not None:
             try:
                 df_up = pd.read_csv(uploaded_file)
@@ -1364,22 +1408,43 @@ with tab_portfolio:
                         "legs": legs
                     })
                 st.session_state.portfolio = new_port
-                st.success("Portfolio Loaded Successfully!")
+                st.session_state.portfolio_last_refresh = None
+                st.success("Portfolio Loaded! Click Refresh to see live values.")
             except Exception as e:
                 st.error(f"Error loading file: {e}")
+
+    # Display Timestamp Status
+    if st.session_state.portfolio_last_refresh:
+        t_str = st.session_state.portfolio_last_refresh.strftime("%d %b %Y, %I:%M %p AEST")
+        st.info(f"⏱️ **Live Snapshot Taken:** {t_str}")
+    elif st.session_state.portfolio:
+        st.info("ℹ️ Click 'Refresh Live Prices' to load current market data and calculate your Open P&L.")
 
     st.markdown("---")
     
     # Portfolio Display Engine
     for i, strat in enumerate(st.session_state.portfolio):
         ticker_display = strat.get('ticker', 'Unknown')
-        with st.expander(f"📁 **{strat['name']}** ({ticker_display})", expanded=True):
-            st.markdown(f"**Spot Price at Entry:** ${strat['spot_at_entry']:.2f}")
+        
+        pnl_str = ""
+        if 'Live_PnL' in strat:
+            val = strat['Live_PnL']
+            emoji = "🟢" if val >= 0 else "🔴"
+            sign = "+" if val >= 0 else ""
+            pnl_str = f" | {emoji} Open P&L: {sign}${val:,.2f}"
             
-            # Simple, clean dataframe to display the saved legs
+        with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
+            
+            c_head1, c_head2 = st.columns([1, 1])
+            with c_head1:
+                st.markdown(f"**Spot at Entry:** ${strat['spot_at_entry']:.2f}")
+            with c_head2:
+                if 'current_spot' in strat:
+                    st.markdown(f"**Current Spot:** ${strat['current_spot']:.2f}")
+            
             leg_data = []
             for leg in strat['legs']:
-                leg_data.append({
+                row = {
                     "Code": leg['Code'],
                     "Action": "Buy" if leg['Qty'] > 0 else "Sell",
                     "Qty": abs(leg['Qty']),
@@ -1387,9 +1452,28 @@ with tab_portfolio:
                     "Strike": f"${leg['Strike']:.2f}",
                     "Expiry": leg['ExpDateStr'],
                     "Entry Theo": f"${leg['Entry']:.3f}"
-                })
+                }
+                
+                if 'Current_Theo' in leg:
+                    row["Live Theo"] = f"${leg['Current_Theo']:.3f}"
+                    val = leg['Live_PnL']
+                    sign = "+" if val >= 0 else ""
+                    row["Open P&L"] = f"{sign}${val:,.2f}"
+                    
+                leg_data.append(row)
+                
+            df_display = pd.DataFrame(leg_data)
             
-            st.dataframe(pd.DataFrame(leg_data), hide_index=True, use_container_width=True)
+            def color_pnl(val):
+                if isinstance(val, str) and "$" in val:
+                    if "+" in val: return 'color: #4ade80; font-weight:bold;'
+                    elif "-" in val: return 'color: #f87171; font-weight:bold;'
+                return ''
+                
+            if "Open P&L" in df_display.columns:
+                st.dataframe(df_display.style.map(color_pnl, subset=['Open P&L']), hide_index=True, use_container_width=True)
+            else:
+                st.dataframe(df_display, hide_index=True, use_container_width=True)
             
             # Strategy Actions
             a_c1, a_c2, a_c3 = st.columns([1, 1, 2])
