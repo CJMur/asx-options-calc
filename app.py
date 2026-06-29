@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.26 (Sequential Loading Fix)
+# VERSION: 1.3.27 (Flow & State Sync Polish)
 # ==========================================
 
 import streamlit as st
@@ -44,7 +44,7 @@ ASX_NAMES = {
     "MSB": "Mesoblast", "MTS": "Metcash", "NAB": "National Australia Bank", "NDQ": "BetaShares NASDAQ 100 ETF",
     "NEC": "Nine Entertainment Co.", "NHC": "New Hope Corporation", "NST": "Northern Star Resources",
     "NWL": "Netwealth Group", "NXT": "NextDC Limited", "ORG": "Origin Energy", "ORI": "Orica Limited",
-    "PDN": "Paladin Energy", "PLS": "Pilbara Minerals", "PNI": "Pinnacle Investment", "PRU": "Perseus Mining",
+    "PDN": "Paladin Energy", "PLS": "Pilbara Minerals", "PNI": "P Pinnacle Investment", "PRU": "Perseus Mining",
     "QAN": "Qantas Airways", "QBE": "QBE Insurance", "QUB": "Qube Holdings", "REH": "Reece Limited",
     "RHC": "Ramsay Health Care", "RIO": "Rio Tinto", "RRL": "Regis Resources", "S32": "South32 Limited",
     "SCG": "Scentre Group", "SDF": "Steadfast Group", "SEK": "Seek Limited", "SFR": "Sandfire Resources",
@@ -505,7 +505,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.26</div>
+            <div class="header-sub">Option Strategy Builder v1.3.27</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -585,7 +585,11 @@ with tab_builder:
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
     # Explicit Loading Logic
-    if do_load:
+    trigger_search = do_load
+    if query and query.upper() != (st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker):
+        trigger_search = True
+
+    if trigger_search:
         if not query: st.warning("Please select an asset or enter an option code.")
         else:
             query_upper = query.upper().strip()
@@ -1510,12 +1514,35 @@ with tab_portfolio:
             a_c1, a_c2, a_c3 = st.columns([1, 1, 2])
             with a_c1:
                 if st.button("📤 Load into Builder", key=f"load_{strat['id']}", use_container_width=True):
-                    st.session_state.ticker = ticker_display
-                    st.session_state.spot_price = strat['spot_at_entry']
-                    st.session_state.manual_spot = True
-                    st.session_state.legs = [leg.copy() for leg in strat['legs']]
-                    st.session_state.options_loaded = True
-                    st.success("Loaded! Click the 'Strategy Builder' tab at the top to view it.")
+                    with st.spinner("Loading Strategy and Refreshing Prices..."):
+                        st.session_state.ticker = ticker_display
+                        st.session_state.manual_spot = False
+                        st.session_state.legs = [leg.copy() for leg in strat['legs']]
+                        st.session_state.options_loaded = True
+                        
+                        # Refresh live price
+                        source, px, div_data = fetch_data(ticker_display)
+                        if px > 0:
+                            st.session_state.spot_price = px
+                        else:
+                            st.session_state.spot_price = strat['spot_at_entry']
+                            st.session_state.manual_spot = True
+                        st.session_state.div_info = div_data
+                        st.session_state.fetch_time = get_sydney_time()
+                        
+                        # Fetch fresh options data
+                        data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
+                        st.session_state.ref_data = data
+                        st.session_state.sheet_msg = msg
+                        st.session_state.fwd_spreads = ext_spreads
+                        st.session_state.data_date = d_date
+                        
+                        # Clear preselects
+                        st.session_state.preselect_code = None
+                        st.session_state.preselect_expiry = None
+                        st.session_state.preselect_strike = None
+                    st.rerun()
+                    
             with a_c2:
                 if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
