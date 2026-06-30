@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.27 (Flow & State Sync Polish)
+# VERSION: 1.3.28 (Browser Caching & Layout Polish)
 # ==========================================
 
 import streamlit as st
@@ -17,6 +17,12 @@ import re
 import json
 import base64
 import io
+
+try:
+    from streamlit_javascript import st_javascript
+    HAS_JS = True
+except ImportError:
+    HAS_JS = False
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -44,7 +50,7 @@ ASX_NAMES = {
     "MSB": "Mesoblast", "MTS": "Metcash", "NAB": "National Australia Bank", "NDQ": "BetaShares NASDAQ 100 ETF",
     "NEC": "Nine Entertainment Co.", "NHC": "New Hope Corporation", "NST": "Northern Star Resources",
     "NWL": "Netwealth Group", "NXT": "NextDC Limited", "ORG": "Origin Energy", "ORI": "Orica Limited",
-    "PDN": "Paladin Energy", "PLS": "Pilbara Minerals", "PNI": "P Pinnacle Investment", "PRU": "Perseus Mining",
+    "PDN": "Paladin Energy", "PLS": "Pilbara Minerals", "PNI": "Pinnacle Investment", "PRU": "Perseus Mining",
     "QAN": "Qantas Airways", "QBE": "QBE Insurance", "QUB": "Qube Holdings", "REH": "Reece Limited",
     "RHC": "Ramsay Health Care", "RIO": "Rio Tinto", "RRL": "Regis Resources", "S32": "South32 Limited",
     "SCG": "Scentre Group", "SDF": "Steadfast Group", "SEK": "Seek Limited", "SFR": "Sandfire Resources",
@@ -61,7 +67,6 @@ ASX_NAMES = {
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    /* --- WHITE-LABEL INVISIBILITY CLOAK --- */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
@@ -92,7 +97,6 @@ st.markdown("""
         background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1; font-weight: bold;
     }
     
-    /* --- X BUTTON ALIGNMENT & HOVER --- */
     div[data-testid="stButton"] button[kind="tertiary"] {
         height: 39px !important;
         min-height: 39px !important;
@@ -109,14 +113,12 @@ st.markdown("""
         border-color: transparent !important;
     }
     
-    /* --- SLIDER COLOR FIX (Electric Blue) --- */
     div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
     div[role="slider"] { background-color: #0050FF !important; border: none !important; box-shadow: none !important; }
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
     div[data-testid="stSlider"] p { color: white !important; }
     input[type=range] { accent-color: #0050FF !important; }
     
-    /* Dataframe Row Selection Highlight (Teal) */
     [data-testid="stDataFrame"] [aria-selected="true"] > div {
         background-color: rgba(29, 191, 210, 0.4) !important;
         color: white !important;
@@ -128,7 +130,6 @@ st.markdown("""
         margin-bottom: 5px; cursor: help; user-select: none;
     }
     
-    /* --- PRECISION ROW ALIGNMENT FIX --- */
     .strategy-text { 
         user-select: none; 
         display: flex; 
@@ -141,10 +142,8 @@ st.markdown("""
         font-size: 14.5px;
     }
     
-    /* Horizontal Radio Button Styling */
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
 
-    /* --- NUMBER INPUT BORDER FIX --- */
     div[data-testid="stNumberInputStepUp"], 
     div[data-testid="stNumberInputStepDown"] {
         border: none !important;
@@ -161,11 +160,32 @@ st.markdown("""
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
-# --- 2. SESSION STATE ---
+# --- 2. SESSION STATE & BROWSER CACHING ---
 if 'options_loaded' not in st.session_state: st.session_state.options_loaded = False
 if 'portfolio' not in st.session_state: st.session_state.portfolio = []
 if 'portfolio_last_refresh' not in st.session_state: st.session_state.portfolio_last_refresh = None
 if 'last_upload_hash' not in st.session_state: st.session_state.last_upload_hash = None
+if 'ls_loaded' not in st.session_state: st.session_state.ls_loaded = False
+if 'trigger_ls_save' not in st.session_state: st.session_state.trigger_ls_save = False
+
+# Read Portfolio from Browser Cache on Boot
+if HAS_JS and not st.session_state.ls_loaded:
+    raw_ls = st_javascript("localStorage.getItem('tc_portfolio_v2');")
+    if raw_ls == 0:
+        pass # Waiting for JS to execute
+    elif raw_ls:
+        try:
+            decoded = base64.b64decode(raw_ls).decode()
+            st.session_state.portfolio = json.loads(decoded)
+        except: 
+            pass
+        st.session_state.ls_loaded = True
+        st.rerun()
+    else:
+        st.session_state.ls_loaded = True
+elif not HAS_JS:
+    st.session_state.ls_loaded = True
+
 if 'fetch_time' not in st.session_state: st.session_state.fetch_time = get_sydney_time()
 if 'url_loaded' not in st.session_state:
     st.session_state.url_loaded = True
@@ -505,7 +525,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.27</div>
+            <div class="header-sub">Option Strategy Builder v1.3.28</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -577,6 +597,7 @@ with tab_builder:
                 st.session_state.portfolio_last_refresh = saved_refresh
                 st.session_state.last_upload_hash = saved_hash
                 st.session_state.options_loaded = False
+                st.session_state.ls_loaded = True
                 st.rerun()
 
         with bc1:
@@ -1077,7 +1098,7 @@ with tab_builder:
                         st.session_state.legs.pop(i)
                         st.rerun()
                         
-                st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
+            st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
             strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
 
@@ -1088,6 +1109,24 @@ with tab_builder:
                 with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
                 with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
                 with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+
+            # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
+            st.markdown("---")
+            st.subheader("💾 Save to Portfolio")
+            s_c1, s_c2 = st.columns([3, 1])
+            with s_c1:
+                strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
+            with s_c2:
+                if st.button("Save Strategy", type="primary", use_container_width=True):
+                    st.session_state.portfolio.append({
+                        "id": str(uuid.uuid4()),
+                        "name": strat_name,
+                        "ticker": st.session_state.ticker,
+                        "spot_at_entry": st.session_state.spot_price,
+                        "legs": [leg.copy() for leg in st.session_state.legs]
+                    })
+                    st.session_state.trigger_ls_save = True 
+                    st.success(f"Saved! Switch to the Portfolio Tracker tab to view it.")
 
             # --- URL STATE SYNC ENGINE ---
             payload = {
@@ -1299,23 +1338,6 @@ with tab_builder:
                 )
             )
             st.plotly_chart(fig, use_container_width=True)
-            
-            # --- NEW: SAVE TO PORTFOLIO MODULE ---
-            st.markdown("---")
-            st.subheader("💾 Save to Portfolio")
-            s_c1, s_c2 = st.columns([3, 1])
-            with s_c1:
-                strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
-            with s_c2:
-                if st.button("Save Strategy", type="primary", use_container_width=True):
-                    st.session_state.portfolio.append({
-                        "id": str(uuid.uuid4()),
-                        "name": strat_name,
-                        "ticker": st.session_state.ticker,
-                        "spot_at_entry": st.session_state.spot_price,
-                        "legs": [leg.copy() for leg in st.session_state.legs]
-                    })
-                    st.success(f"Saved! Switch to the Portfolio Tracker tab to view it.")
 
 # --- NEW TAB: PORTFOLIO TRACKER ---
 with tab_portfolio:
@@ -1360,6 +1382,7 @@ with tab_portfolio:
                         strat['Live_PnL'] = strat_pnl
                         
                     st.session_state.manual_spot = orig_manual
+                    st.session_state.trigger_ls_save = True
                     st.rerun()
         else:
             st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
@@ -1393,7 +1416,6 @@ with tab_portfolio:
     with ctrl_c3:
         uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
         if uploaded_file is not None:
-            # File Upload Loop Breaker
             file_hash = hash(uploaded_file.getvalue())
             if st.session_state.last_upload_hash != file_hash:
                 try:
@@ -1428,11 +1450,11 @@ with tab_portfolio:
                     st.session_state.portfolio = new_port
                     st.session_state.portfolio_last_refresh = None
                     st.session_state.last_upload_hash = file_hash
+                    st.session_state.trigger_ls_save = True
                     st.success("Portfolio Loaded! Click Refresh to see live values.")
                 except Exception as e:
                     st.error(f"Error loading file: {e}")
 
-    # Display Timestamp Status
     if st.session_state.portfolio_last_refresh:
         t_str = st.session_state.portfolio_last_refresh.strftime("%d %b %Y, %I:%M %p AEST")
         st.info(f"⏱️ **Live Snapshot Taken:** {t_str}")
@@ -1454,7 +1476,6 @@ with tab_portfolio:
             
         with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
             
-            # --- CALCULATE NET THEOS ---
             max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
             raw_entry_sum = sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])
             net_entry_theo = raw_entry_sum / max_qty if max_qty != 0 else 0.0
@@ -1464,7 +1485,6 @@ with tab_portfolio:
                 raw_live_sum = sum([leg['Qty'] * leg.get('Current_Theo', leg['Entry']) for leg in strat['legs']])
                 net_live_theo = raw_live_sum / max_qty if max_qty != 0 else 0.0
             
-            # --- HEADER COLUMNS ---
             c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1])
             with c_head1:
                 st.markdown(f"**Spot at Entry:** ${strat['spot_at_entry']:.2f}")
@@ -1486,11 +1506,11 @@ with tab_portfolio:
                     "Type": leg['Type'],
                     "Strike": f"${leg['Strike']:.2f}",
                     "Expiry": leg['ExpDateStr'],
-                    "Entry Theo": f"${leg['Entry']:.3f}"
+                    "Entry Theo": f"{leg['Entry']:.3f}"
                 }
                 
                 if 'Current_Theo' in leg:
-                    row["Live Theo"] = f"${leg['Current_Theo']:.3f}"
+                    row["Live Theo"] = f"{leg['Current_Theo']:.3f}"
                     val = leg['Live_PnL']
                     sign = "+" if val >= 0 else ""
                     row["Open P&L"] = f"{sign}${val:,.2f}"
@@ -1510,7 +1530,6 @@ with tab_portfolio:
             else:
                 st.dataframe(df_display, hide_index=True, use_container_width=True)
             
-            # Strategy Actions
             a_c1, a_c2, a_c3 = st.columns([1, 1, 2])
             with a_c1:
                 if st.button("📤 Load into Builder", key=f"load_{strat['id']}", use_container_width=True):
@@ -1520,7 +1539,6 @@ with tab_portfolio:
                         st.session_state.legs = [leg.copy() for leg in strat['legs']]
                         st.session_state.options_loaded = True
                         
-                        # Refresh live price
                         source, px, div_data = fetch_data(ticker_display)
                         if px > 0:
                             st.session_state.spot_price = px
@@ -1530,14 +1548,12 @@ with tab_portfolio:
                         st.session_state.div_info = div_data
                         st.session_state.fetch_time = get_sydney_time()
                         
-                        # Fetch fresh options data
                         data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
                         st.session_state.ref_data = data
                         st.session_state.sheet_msg = msg
                         st.session_state.fwd_spreads = ext_spreads
                         st.session_state.data_date = d_date
                         
-                        # Clear preselects
                         st.session_state.preselect_code = None
                         st.session_state.preselect_expiry = None
                         st.session_state.preselect_strike = None
@@ -1546,4 +1562,12 @@ with tab_portfolio:
             with a_c2:
                 if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
+                    st.session_state.trigger_ls_save = True
                     st.rerun()
+
+# --- BROWSER CACHE SYNC ENGINE ---
+if st.session_state.trigger_ls_save:
+    if HAS_JS:
+        port_str = base64.b64encode(json.dumps(st.session_state.portfolio).encode()).decode()
+        st_javascript(f"localStorage.setItem('tc_portfolio_v2', '{port_str}'); 'saved';")
+    st.session_state.trigger_ls_save = False
