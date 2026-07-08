@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.37 (Portfolio Theo Matrix Feature)
+# VERSION: 1.3.38 (Matrix Control Alignment)
 # ==========================================
 
 import streamlit as st
@@ -526,7 +526,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.37</div>
+            <div class="header-sub">Option Strategy Builder v1.3.38</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1565,19 +1565,22 @@ elif current_view == "💼 Portfolio Tracker":
                     elif vol_shift_sel == "IV +10%": mx_vol_mod = 10.0
 
                 with mx_c2:
+                    mx_slider_placeholder = st.empty()
+                    
+                    st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
                     mx_step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True, key=f"mx_st_{strat['id']}")
                     
                     spot = strat.get('current_spot', strat['spot_at_entry'])
                     if mx_step_type == "Percentage (%)":
                         range_opts = [x / 200.0 for x in range(1, 11)]
-                        mx_step_val = st.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%", key=f"mx_sv_{strat['id']}")
+                        mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%", key=f"mx_sv_{strat['id']}")
                         prices = [spot * (1 + mx_step_val * j) for j in range(6, -7, -1)]
                     else:
                         if spot > 1000: pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]; default_pt = 50.0
                         elif spot > 100: pts_opts = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0]; default_pt = 5.0
                         else: pts_opts = [0.10, 0.25, 0.50, 1.00, 2.00, 5.00]; default_pt = 1.00
                         if default_pt not in pts_opts: default_pt = pts_opts[0]
-                        mx_step_val = st.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}", key=f"mx_sv_{strat['id']}")
+                        mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}", key=f"mx_sv_{strat['id']}")
                         prices = [spot + (mx_step_val * j) for j in range(6, -7, -1)]
 
                 mx_dates = [d * mx_time_step for d in range(8)] 
