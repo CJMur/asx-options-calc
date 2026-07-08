@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.38 (Matrix Control Alignment)
+# VERSION: 1.3.39 (Ticker Isolation & Math Fix)
 # ==========================================
 
 import streamlit as st
@@ -408,13 +408,13 @@ def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
     if option_type == 'Call': return bs_price 
     else: return max(bs_price, max(0, K - S))
 
-def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
+def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
     if simulated_spot <= 0 or strike <= 0 or time_days < 0:
         return 0.0, 0.0
         
     r = global_rba_rate / 100.0
     q = 0.0
-    is_xjo = (st.session_state.ticker == 'XJO')
+    is_xjo = (ticker_symbol == 'XJO')
     
     try:
         S = float(simulated_spot)
@@ -526,7 +526,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.38</div>
+            <div class="header-sub">Option Strategy Builder v1.3.39</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -731,7 +731,7 @@ if current_view == "🧮 Strategy Builder":
                         margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                         
                         px, delta = calculate_price_and_delta(
-                            style, row['Type'], st.session_state.spot_price, row['Strike'], 
+                            st.session_state.ticker, style, row['Type'], st.session_state.spot_price, row['Strike'], 
                             days_diff_exact, vol, current_exp
                         )
                         
@@ -990,7 +990,7 @@ if current_view == "🧮 Strategy Builder":
                 precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
                 
                 new_theo, new_delta = calculate_price_and_delta(
-                    leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+                    st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
                     precise_days_diff, leg['Vol'], leg['ExpDateStr']
                 )
                 
@@ -1079,7 +1079,7 @@ if current_view == "🧮 Strategy Builder":
                                 st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
                                 
                                 matched_theo, _ = calculate_price_and_delta(
-                                    new_style, leg['Type'], st.session_state.spot_price, new_strike, 
+                                    st.session_state.ticker, new_style, leg['Type'], st.session_state.spot_price, new_strike, 
                                     precise_days_diff, new_vol, leg['ExpDateStr']
                                 )
                                 st.session_state.legs[i]['Entry'] = matched_theo
@@ -1092,7 +1092,7 @@ if current_view == "🧮 Strategy Builder":
                     if new_vol_input != leg['Vol']:
                         st.session_state.legs[i]['Vol'] = new_vol_input
                         calibrated_theo, _ = calculate_price_and_delta(
-                            leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+                            st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
                             precise_days_diff, new_vol_input, leg['ExpDateStr']
                         )
                         st.session_state.legs[i]['Entry'] = calibrated_theo
@@ -1225,7 +1225,7 @@ if current_view == "🧮 Strategy Builder":
                         rem_days = max(0.0001, rem_sec / 86400.0)
                         
                         exit_px, _ = calculate_price_and_delta(
-                            leg['Style'], leg['Type'], p, leg['Strike'], 
+                            st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], 
                             rem_days, sim_vol, leg['ExpDateStr']
                         )
                         pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
@@ -1288,7 +1288,7 @@ if current_view == "🧮 Strategy Builder":
                     precise_days_diff = max(0.0001, (exp_dt - locked_now).total_seconds() / 86400.0)
                     
                     price_t0, _ = calculate_price_and_delta(
-                        leg['Style'], leg['Type'], p, leg['Strike'], 
+                        st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], 
                         precise_days_diff, leg['Vol'], leg['ExpDateStr']
                     )
                     val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
@@ -1379,7 +1379,7 @@ elif current_view == "💼 Portfolio Tracker":
                             precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
                             
                             cur_theo, _ = calculate_price_and_delta(
-                                leg['Style'], leg['Type'], strat['current_spot'], leg['Strike'], 
+                                ticker, leg['Style'], leg['Type'], strat['current_spot'], leg['Strike'], 
                                 precise_days_diff, leg['Vol'], leg['ExpDateStr']
                             )
                             leg['Current_Theo'] = cur_theo
@@ -1540,12 +1540,10 @@ elif current_view == "💼 Portfolio Tracker":
             else:
                 st.dataframe(df_display, hide_index=True, use_container_width=True)
             
-            a_c1, a_c2 = st.columns([1, 5])
-            with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
-                    st.session_state.portfolio.pop(i)
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
+            if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
+                st.session_state.portfolio.pop(i)
+                st.session_state.trigger_ls_save = True
+                st.rerun()
 
             # --- PORTFOLIO THEO MATRIX ---
             show_matrix = st.checkbox("📈 Show Theoretical Price Matrix", key=f"show_mx_{strat['id']}")
@@ -1598,7 +1596,10 @@ elif current_view == "💼 Portfolio Tracker":
                             target_eval_dt = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
                             rem_days = max(0.0001, (exp_dt - target_eval_dt).total_seconds() / 86400.0)
                             
-                            exit_px, _ = calculate_price_and_delta(leg['Style'], leg['Type'], p, leg['Strike'], rem_days, sim_vol, leg['ExpDateStr'])
+                            exit_px, _ = calculate_price_and_delta(
+                                ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], 
+                                rem_days, sim_vol, leg['ExpDateStr']
+                            )
                             net_theo_sum += exit_px * leg['Qty']
                         
                         col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
