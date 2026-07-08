@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.29 (Builder State Collision Fix)
+# VERSION: 1.3.28 (Browser Caching & Layout Polish)
 # ==========================================
 
 import streamlit as st
@@ -525,7 +525,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.29</div>
+            <div class="header-sub">Option Strategy Builder v1.3.28</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1098,7 +1098,7 @@ with tab_builder:
                         st.session_state.legs.pop(i)
                         st.rerun()
                         
-                st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
+            st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
             strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
 
@@ -1455,7 +1455,6 @@ with tab_portfolio:
                 except Exception as e:
                     st.error(f"Error loading file: {e}")
 
-    # Display Timestamp Status
     if st.session_state.portfolio_last_refresh:
         t_str = st.session_state.portfolio_last_refresh.strftime("%d %b %Y, %I:%M %p AEST")
         st.info(f"⏱️ **Live Snapshot Taken:** {t_str}")
@@ -1535,36 +1534,17 @@ with tab_portfolio:
             with a_c1:
                 if st.button("📤 Load into Builder", key=f"load_{strat['id']}", use_container_width=True):
                     with st.spinner("Loading Strategy and Refreshing Prices..."):
-                        # 1. Grab what we want to keep
-                        saved_port = st.session_state.get('portfolio', [])
-                        saved_refresh = st.session_state.get('portfolio_last_refresh', None)
-                        saved_hash = st.session_state.get('last_upload_hash', None)
-                        
-                        # 2. Nuke the session state (HARD RESTART)
-                        st.session_state.clear()
-                        st.query_params.clear()
-                        
-                        # 3. Restore portfolio data
-                        st.session_state.portfolio = saved_port
-                        st.session_state.portfolio_last_refresh = saved_refresh
-                        st.session_state.last_upload_hash = saved_hash
-                        st.session_state.ls_loaded = True
-                        
-                        # 4. Inject the target strategy
                         st.session_state.ticker = ticker_display
+                        st.session_state.manual_spot = False
                         st.session_state.legs = [leg.copy() for leg in strat['legs']]
                         st.session_state.options_loaded = True
-                        st.session_state.editor_reset = 1
                         
-                        # 5. Fetch fresh market data & options sheet
                         source, px, div_data = fetch_data(ticker_display)
                         if px > 0:
                             st.session_state.spot_price = px
-                            st.session_state.manual_spot = False
                         else:
                             st.session_state.spot_price = strat['spot_at_entry']
                             st.session_state.manual_spot = True
-                            
                         st.session_state.div_info = div_data
                         st.session_state.fetch_time = get_sydney_time()
                         
@@ -1574,6 +1554,9 @@ with tab_portfolio:
                         st.session_state.fwd_spreads = ext_spreads
                         st.session_state.data_date = d_date
                         
+                        st.session_state.preselect_code = None
+                        st.session_state.preselect_expiry = None
+                        st.session_state.preselect_strike = None
                     st.rerun()
                     
             with a_c2:
