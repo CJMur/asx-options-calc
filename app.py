@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.36 (Streamlined Portfolio Tracker)
+# VERSION: 1.3.37 (Portfolio Theo Matrix Feature)
 # ==========================================
 
 import streamlit as st
@@ -526,7 +526,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.36</div>
+            <div class="header-sub">Option Strategy Builder v1.3.37</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1546,6 +1546,74 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
+
+            # --- PORTFOLIO THEO MATRIX ---
+            show_matrix = st.checkbox("📈 Show Theoretical Price Matrix", key=f"show_mx_{strat['id']}")
+            if show_matrix:
+                st.markdown("##### Theoretical Net Theo Matrix")
+                
+                mx_c1, mx_c2 = st.columns([1, 1.2], gap="large")
+                with mx_c1:
+                    mx_time_step = st.slider("Step (Days)", 1, 30, 1, key=f"mx_ts_{strat['id']}")
+                    st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+                    
+                    vol_opts = ["IV -10%", "IV Flat", "IV +10%"]
+                    vol_shift_sel = st.radio("Simulate Volatility Shift", vol_opts, index=1, horizontal=True, key=f"mx_vs_{strat['id']}")
+                    
+                    mx_vol_mod = 0.0
+                    if vol_shift_sel == "IV -10%": mx_vol_mod = -10.0
+                    elif vol_shift_sel == "IV +10%": mx_vol_mod = 10.0
+
+                with mx_c2:
+                    mx_step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True, key=f"mx_st_{strat['id']}")
+                    
+                    spot = strat.get('current_spot', strat['spot_at_entry'])
+                    if mx_step_type == "Percentage (%)":
+                        range_opts = [x / 200.0 for x in range(1, 11)]
+                        mx_step_val = st.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%", key=f"mx_sv_{strat['id']}")
+                        prices = [spot * (1 + mx_step_val * j) for j in range(6, -7, -1)]
+                    else:
+                        if spot > 1000: pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]; default_pt = 50.0
+                        elif spot > 100: pts_opts = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0]; default_pt = 5.0
+                        else: pts_opts = [0.10, 0.25, 0.50, 1.00, 2.00, 5.00]; default_pt = 1.00
+                        if default_pt not in pts_opts: default_pt = pts_opts[0]
+                        mx_step_val = st.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}", key=f"mx_sv_{strat['id']}")
+                        prices = [spot + (mx_step_val * j) for j in range(6, -7, -1)]
+
+                mx_dates = [d * mx_time_step for d in range(8)] 
+                
+                matrix_data = []
+                for p in prices:
+                    is_spot = math.isclose(p, spot, rel_tol=1e-5)
+                    row_label = f"» ${p:.2f} (SPOT) «" if is_spot else f"${p:.2f}"
+                    row = {"Price": row_label}
+                    for d in mx_dates:
+                        net_theo_sum = 0
+                        for leg in strat['legs']:
+                            sim_vol = max(1.0, leg['Vol'] + mx_vol_mod)
+                            exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+                            target_eval_dt = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
+                            rem_days = max(0.0001, (exp_dt - target_eval_dt).total_seconds() / 86400.0)
+                            
+                            exit_px, _ = calculate_price_and_delta(leg['Style'], leg['Type'], p, leg['Strike'], rem_days, sim_vol, leg['ExpDateStr'])
+                            net_theo_sum += exit_px * leg['Qty']
+                        
+                        col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
+                        if d == 0: col_name = f"Today ({col_name})"
+                        row[col_name] = net_theo_sum / max_qty if max_qty != 0 else 0.0
+                    matrix_data.append(row)
+                    
+                df_mx = pd.DataFrame(matrix_data).set_index("Price")
+                
+                def highlight_spot(df):
+                    styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+                    for idx in df.index:
+                        if "SPOT" in str(idx):
+                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+                    return styles_df
+
+                format_dict = {col: "{:.3f}" for col in df_mx.columns}
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
