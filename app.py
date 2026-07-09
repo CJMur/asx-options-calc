@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.40 (Dynamic IV Refresh)
+# VERSION: 1.3.40 (Stable Rollback + 30 Strikes)
 # ==========================================
 
 import streamlit as st
@@ -1363,27 +1363,19 @@ elif current_view == "💼 Portfolio Tracker":
     with ctrl_c1:
         if st.session_state.portfolio:
             if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
-                with st.spinner("Fetching live market data and updating Volatility..."):
+                with st.spinner("Fetching live market data..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
                     
                     refresh_time = get_sydney_time()
                     st.session_state.portfolio_last_refresh = refresh_time
                     
-                    # --- FETCH FRESH PARQUET DATA ONCE FOR ALL TRADES ---
-                    load_databases.clear() 
-                    data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
-                    st.session_state.ref_data = data
-                    st.session_state.sheet_msg = msg
-                    st.session_state.fwd_spreads = ext_spreads
-                    st.session_state.data_date = d_date
-                    
                     for strat in st.session_state.portfolio:
                         ticker = strat.get('ticker', 'XJO')
                         _, spot, _ = fetch_data(ticker)
                         strat['current_spot'] = spot if spot > 0 else strat['spot_at_entry']
                         
-                        contract_multiplier = 100
+                        contract_multiplier = 10 if ticker == 'XJO' else 100
                         strat_pnl = 0.0
                         
                         for leg in strat['legs']:
@@ -1391,19 +1383,11 @@ elif current_view == "💼 Portfolio Tracker":
                             time_diff_sec = (exp_dt - refresh_time).total_seconds()
                             precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
                             
-                            # --- DYNAMIC IV UPDATE ---
-                            current_vol = leg['Vol'] # Default to entry IV
-                            if not data.empty:
-                                match = data[data['Code'] == leg['Code']]
-                                if not match.empty:
-                                    current_vol = float(match.iloc[0]['Vol'])
-                            
                             cur_theo, _ = calculate_price_and_delta(
                                 ticker, leg['Style'], leg['Type'], strat['current_spot'], leg['Strike'], 
-                                precise_days_diff, current_vol, leg['ExpDateStr']
+                                precise_days_diff, leg['Vol'], leg['ExpDateStr']
                             )
                             leg['Current_Theo'] = cur_theo
-                            leg['Current_Vol'] = current_vol 
                             
                             leg_pnl = (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
                             leg['Live_PnL'] = leg_pnl
@@ -1561,86 +1545,55 @@ elif current_view == "💼 Portfolio Tracker":
             else:
                 st.dataframe(df_display, hide_index=True, use_container_width=True)
             
-            a_c1, a_c2 = st.columns([1, 5])
+            a_c1, a_c2, a_c3 = st.columns([1, 1, 2])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
+                if st.button("📤 Load into Builder", key=f"load_{strat['id']}", use_container_width=True):
+                    with st.spinner("Loading Strategy and Refreshing Prices..."):
+                        # Nuke memory but preserve portfolio
+                        saved_port = st.session_state.get('portfolio', [])
+                        saved_refresh = st.session_state.get('portfolio_last_refresh', None)
+                        saved_hash = st.session_state.get('last_upload_hash', None)
+                        
+                        st.session_state.clear()
+                        st.query_params.clear()
+                        
+                        # Restore
+                        st.session_state.portfolio = saved_port
+                        st.session_state.portfolio_last_refresh = saved_refresh
+                        st.session_state.last_upload_hash = saved_hash
+                        st.session_state.ls_loaded = True
+                        
+                        # Inject strat
+                        st.session_state.ticker = ticker_display
+                        st.session_state.legs = [leg.copy() for leg in strat['legs']]
+                        st.session_state.options_loaded = True
+                        st.session_state.editor_reset = 1
+                        
+                        # Fetch fresh data
+                        source, px, div_data = fetch_data(ticker_display)
+                        if px > 0:
+                            st.session_state.spot_price = px
+                            st.session_state.manual_spot = False
+                        else:
+                            st.session_state.spot_price = strat['spot_at_entry']
+                            st.session_state.manual_spot = True
+                            
+                        st.session_state.div_info = div_data
+                        st.session_state.fetch_time = get_sydney_time()
+                        
+                        data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
+                        st.session_state.ref_data = data
+                        st.session_state.sheet_msg = msg
+                        st.session_state.fwd_spreads = ext_spreads
+                        st.session_state.data_date = d_date
+                        
+                    st.rerun()
+                    
+            with a_c2:
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
-
-            # --- PORTFOLIO THEO MATRIX ---
-            show_matrix = st.checkbox("📈 Show Theoretical Price Matrix", key=f"show_mx_{strat['id']}")
-            if show_matrix:
-                st.markdown("##### Theoretical Net Theo Matrix")
-                
-                mx_c1, mx_c2 = st.columns([1, 1.2], gap="large")
-                with mx_c1:
-                    mx_time_step = st.slider("Step (Days)", 1, 30, 1, key=f"mx_ts_{strat['id']}")
-                    st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-                    
-                    vol_opts = ["IV -10%", "IV Flat", "IV +10%"]
-                    vol_shift_sel = st.radio("Simulate Volatility Shift", vol_opts, index=1, horizontal=True, key=f"mx_vs_{strat['id']}")
-                    
-                    mx_vol_mod = 0.0
-                    if vol_shift_sel == "IV -10%": mx_vol_mod = -10.0
-                    elif vol_shift_sel == "IV +10%": mx_vol_mod = 10.0
-
-                with mx_c2:
-                    mx_slider_placeholder = st.empty()
-                    
-                    st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-                    mx_step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True, key=f"mx_st_{strat['id']}")
-                    
-                    spot = strat.get('current_spot', strat['spot_at_entry'])
-                    if mx_step_type == "Percentage (%)":
-                        range_opts = [x / 200.0 for x in range(1, 11)]
-                        mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%", key=f"mx_sv_{strat['id']}")
-                        prices = [spot * (1 + mx_step_val * j) for j in range(6, -7, -1)]
-                    else:
-                        if spot > 1000: pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]; default_pt = 50.0
-                        elif spot > 100: pts_opts = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0]; default_pt = 5.0
-                        else: pts_opts = [0.10, 0.25, 0.50, 1.00, 2.00, 5.00]; default_pt = 1.00
-                        if default_pt not in pts_opts: default_pt = pts_opts[0]
-                        mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}", key=f"mx_sv_{strat['id']}")
-                        prices = [spot + (mx_step_val * j) for j in range(6, -7, -1)]
-
-                mx_dates = [d * mx_time_step for d in range(8)] 
-                
-                matrix_data = []
-                for p in prices:
-                    is_spot = math.isclose(p, spot, rel_tol=1e-5)
-                    row_label = f"» ${p:.2f} (SPOT) «" if is_spot else f"${p:.2f}"
-                    row = {"Price": row_label}
-                    for d in mx_dates:
-                        net_theo_sum = 0
-                        for leg in strat['legs']:
-                            sim_vol = max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod)
-                            exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
-                            target_eval_dt = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
-                            rem_days = max(0.0001, (exp_dt - target_eval_dt).total_seconds() / 86400.0)
-                            
-                            exit_px, _ = calculate_price_and_delta(
-                                ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], 
-                                rem_days, sim_vol, leg['ExpDateStr']
-                            )
-                            net_theo_sum += exit_px * leg['Qty']
-                        
-                        col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
-                        if d == 0: col_name = f"Today ({col_name})"
-                        row[col_name] = net_theo_sum / max_qty if max_qty != 0 else 0.0
-                    matrix_data.append(row)
-                    
-                df_mx = pd.DataFrame(matrix_data).set_index("Price")
-                
-                def highlight_spot(df):
-                    styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
-                    for idx in df.index:
-                        if "SPOT" in str(idx):
-                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
-                    return styles_df
-
-                format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
