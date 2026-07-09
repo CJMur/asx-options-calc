@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.40 (Stable Rollback + 30 Strikes)
+# VERSION: 1.3.28 (Browser Caching & Layout Polish)
 # ==========================================
 
 import streamlit as st
@@ -142,7 +142,6 @@ st.markdown("""
         font-size: 14.5px;
     }
     
-    /* Sleek Navigation Radio Buttons */
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
 
     div[data-testid="stNumberInputStepUp"], 
@@ -408,13 +407,13 @@ def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
     if option_type == 'Call': return bs_price 
     else: return max(bs_price, max(0, K - S))
 
-def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
+def calculate_price_and_delta(style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
     if simulated_spot <= 0 or strike <= 0 or time_days < 0:
         return 0.0, 0.0
         
     r = global_rba_rate / 100.0
     q = 0.0
-    is_xjo = (ticker_symbol == 'XJO')
+    is_xjo = (st.session_state.ticker == 'XJO')
     
     try:
         S = float(simulated_spot)
@@ -427,7 +426,6 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             delta = 0.0
             if kind == 'Call' and S > K: delta = 1.0
             elif kind == 'Put' and S < K: delta = -1.0
-            if is_xjo: price /= 10.0
             return price, delta
         
         if is_xjo:
@@ -435,8 +433,7 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             if expiry_str_key in st.session_state.fwd_spreads:
                 basis_offset = st.session_state.fwd_spreads[expiry_str_key]
                 simulated_fwd = S + basis_offset
-                price, delta = black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
-                return price / 10.0, delta
+                return black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
             else:
                 q = 0.04
         elif st.session_state.div_info:
@@ -459,9 +456,6 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             delta = math.exp(-q * T) * norm_cdf(d1)
         else:
             delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
-            
-        if is_xjo:
-            price /= 10.0
             
         return price, delta
     except: 
@@ -531,7 +525,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.40</div>
+            <div class="header-sub">Option Strategy Builder v1.3.28</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -547,19 +541,10 @@ if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.st
     st.error(f"**Data Engine Warning:** {st.session_state.sheet_msg.split('|')[1]}")
 
 
-# ==========================================
-# 🗂️ PYTHON NAVIGATION ROUTER
-# ==========================================
+# --- TABS LAYOUT ---
+tab_builder, tab_portfolio = st.tabs(["🧮 Strategy Builder", "💼 Portfolio Tracker"])
 
-current_view = st.radio(
-    "Navigation", 
-    ["🧮 Strategy Builder", "💼 Portfolio Tracker"], 
-    horizontal=True, 
-    label_visibility="collapsed"
-)
-st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
-
-if current_view == "🧮 Strategy Builder":
+with tab_builder:
     # --- 7. CONTROLS ---
     tickers_list = []
     if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
@@ -720,7 +705,7 @@ if current_view == "🧮 Strategy Builder":
                     current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
                 with exp_col2:
                     st.write("<div style='height: 29px;'></div>", unsafe_allow_html=True) 
-                    view_mode = st.radio("Strikes View", options=["Standard View (30 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
+                    view_mode = st.radio("Strikes View", options=["Standard View (25 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
                 
                 if current_exp:
                     target_dt = exp_map[current_exp].replace(hour=16, minute=0)
@@ -736,7 +721,7 @@ if current_view == "🧮 Strategy Builder":
                         margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
                         
                         px, delta = calculate_price_and_delta(
-                            st.session_state.ticker, style, row['Type'], st.session_state.spot_price, row['Strike'], 
+                            style, row['Type'], st.session_state.spot_price, row['Strike'], 
                             days_diff_exact, vol, current_exp
                         )
                         
@@ -777,8 +762,8 @@ if current_view == "🧮 Strategy Builder":
         if not df_view.empty and current_exp:
             center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
                 
-            if view_mode == "Standard View (30 Strikes)":
-                radius = 15
+            if view_mode == "Standard View (25 Strikes)":
+                radius = 12
             else:
                 radius = len(df_view) 
 
@@ -910,7 +895,7 @@ if current_view == "🧮 Strategy Builder":
             st.markdown("---")
             st.subheader("Strategy")
             
-            contract_multiplier = 100
+            contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
             
             h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.3, 1.2, 1.1, 1.0, 1.0, 1.3, 1.4, 0.4]
             cols_header = st.columns(h_col_spec)
@@ -995,7 +980,7 @@ if current_view == "🧮 Strategy Builder":
                 precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
                 
                 new_theo, new_delta = calculate_price_and_delta(
-                    st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+                    leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
                     precise_days_diff, leg['Vol'], leg['ExpDateStr']
                 )
                 
@@ -1084,7 +1069,7 @@ if current_view == "🧮 Strategy Builder":
                                 st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
                                 
                                 matched_theo, _ = calculate_price_and_delta(
-                                    st.session_state.ticker, new_style, leg['Type'], st.session_state.spot_price, new_strike, 
+                                    new_style, leg['Type'], st.session_state.spot_price, new_strike, 
                                     precise_days_diff, new_vol, leg['ExpDateStr']
                                 )
                                 st.session_state.legs[i]['Entry'] = matched_theo
@@ -1097,7 +1082,7 @@ if current_view == "🧮 Strategy Builder":
                     if new_vol_input != leg['Vol']:
                         st.session_state.legs[i]['Vol'] = new_vol_input
                         calibrated_theo, _ = calculate_price_and_delta(
-                            st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+                            leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
                             precise_days_diff, new_vol_input, leg['ExpDateStr']
                         )
                         st.session_state.legs[i]['Entry'] = calibrated_theo
@@ -1230,7 +1215,7 @@ if current_view == "🧮 Strategy Builder":
                         rem_days = max(0.0001, rem_sec / 86400.0)
                         
                         exit_px, _ = calculate_price_and_delta(
-                            st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], 
+                            leg['Style'], leg['Type'], p, leg['Strike'], 
                             rem_days, sim_vol, leg['ExpDateStr']
                         )
                         pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
@@ -1293,7 +1278,7 @@ if current_view == "🧮 Strategy Builder":
                     precise_days_diff = max(0.0001, (exp_dt - locked_now).total_seconds() / 86400.0)
                     
                     price_t0, _ = calculate_price_and_delta(
-                        st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], 
+                        leg['Style'], leg['Type'], p, leg['Strike'], 
                         precise_days_diff, leg['Vol'], leg['ExpDateStr']
                     )
                     val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
@@ -1354,7 +1339,8 @@ if current_view == "🧮 Strategy Builder":
             )
             st.plotly_chart(fig, use_container_width=True)
 
-elif current_view == "💼 Portfolio Tracker":
+# --- NEW TAB: PORTFOLIO TRACKER ---
+with tab_portfolio:
     st.markdown("### Saved Strategies")
     
     # Portfolio Control Center
@@ -1384,7 +1370,7 @@ elif current_view == "💼 Portfolio Tracker":
                             precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
                             
                             cur_theo, _ = calculate_price_and_delta(
-                                ticker, leg['Style'], leg['Type'], strat['current_spot'], leg['Strike'], 
+                                leg['Style'], leg['Type'], strat['current_spot'], leg['Strike'], 
                                 precise_days_diff, leg['Vol'], leg['ExpDateStr']
                             )
                             leg['Current_Theo'] = cur_theo
@@ -1469,7 +1455,6 @@ elif current_view == "💼 Portfolio Tracker":
                 except Exception as e:
                     st.error(f"Error loading file: {e}")
 
-    # Display Timestamp Status
     if st.session_state.portfolio_last_refresh:
         t_str = st.session_state.portfolio_last_refresh.strftime("%d %b %Y, %I:%M %p AEST")
         st.info(f"⏱️ **Live Snapshot Taken:** {t_str}")
@@ -1549,35 +1534,17 @@ elif current_view == "💼 Portfolio Tracker":
             with a_c1:
                 if st.button("📤 Load into Builder", key=f"load_{strat['id']}", use_container_width=True):
                     with st.spinner("Loading Strategy and Refreshing Prices..."):
-                        # Nuke memory but preserve portfolio
-                        saved_port = st.session_state.get('portfolio', [])
-                        saved_refresh = st.session_state.get('portfolio_last_refresh', None)
-                        saved_hash = st.session_state.get('last_upload_hash', None)
-                        
-                        st.session_state.clear()
-                        st.query_params.clear()
-                        
-                        # Restore
-                        st.session_state.portfolio = saved_port
-                        st.session_state.portfolio_last_refresh = saved_refresh
-                        st.session_state.last_upload_hash = saved_hash
-                        st.session_state.ls_loaded = True
-                        
-                        # Inject strat
                         st.session_state.ticker = ticker_display
+                        st.session_state.manual_spot = False
                         st.session_state.legs = [leg.copy() for leg in strat['legs']]
                         st.session_state.options_loaded = True
-                        st.session_state.editor_reset = 1
                         
-                        # Fetch fresh data
                         source, px, div_data = fetch_data(ticker_display)
                         if px > 0:
                             st.session_state.spot_price = px
-                            st.session_state.manual_spot = False
                         else:
                             st.session_state.spot_price = strat['spot_at_entry']
                             st.session_state.manual_spot = True
-                            
                         st.session_state.div_info = div_data
                         st.session_state.fetch_time = get_sydney_time()
                         
@@ -1587,6 +1554,9 @@ elif current_view == "💼 Portfolio Tracker":
                         st.session_state.fwd_spreads = ext_spreads
                         st.session_state.data_date = d_date
                         
+                        st.session_state.preselect_code = None
+                        st.session_state.preselect_expiry = None
+                        st.session_state.preselect_strike = None
                     st.rerun()
                     
             with a_c2:
@@ -1598,8 +1568,6 @@ elif current_view == "💼 Portfolio Tracker":
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
     if HAS_JS:
-        js_save_container = st.empty()
-        with js_save_container:
-            port_str = base64.b64encode(json.dumps(st.session_state.portfolio).encode()).decode()
-            st_javascript(f"localStorage.setItem('tc_portfolio_v2', '{port_str}'); 'saved';")
+        port_str = base64.b64encode(json.dumps(st.session_state.portfolio).encode()).decode()
+        st_javascript(f"localStorage.setItem('tc_portfolio_v2', '{port_str}'); 'saved';")
     st.session_state.trigger_ls_save = False
