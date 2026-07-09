@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.39 (Ticker Isolation & Math Fix)
+# VERSION: 1.3.40 (Dynamic IV Refresh)
 # ==========================================
 
 import streamlit as st
@@ -427,6 +427,7 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             delta = 0.0
             if kind == 'Call' and S > K: delta = 1.0
             elif kind == 'Put' and S < K: delta = -1.0
+            if is_xjo: price /= 10.0
             return price, delta
         
         if is_xjo:
@@ -434,7 +435,8 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             if expiry_str_key in st.session_state.fwd_spreads:
                 basis_offset = st.session_state.fwd_spreads[expiry_str_key]
                 simulated_fwd = S + basis_offset
-                return black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
+                price, delta = black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
+                return price / 10.0, delta
             else:
                 q = 0.04
         elif st.session_state.div_info:
@@ -457,6 +459,9 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             delta = math.exp(-q * T) * norm_cdf(d1)
         else:
             delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
+            
+        if is_xjo:
+            price /= 10.0
             
         return price, delta
     except: 
@@ -526,7 +531,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.39</div>
+            <div class="header-sub">Option Strategy Builder v1.3.40</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -543,7 +548,7 @@ if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.st
 
 
 # ==========================================
-# 🗂️ PYTHON NAVIGATION ROUTER (Replaces st.tabs)
+# 🗂️ PYTHON NAVIGATION ROUTER
 # ==========================================
 
 current_view = st.radio(
@@ -715,7 +720,7 @@ if current_view == "🧮 Strategy Builder":
                     current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
                 with exp_col2:
                     st.write("<div style='height: 29px;'></div>", unsafe_allow_html=True) 
-                    view_mode = st.radio("Strikes View", options=["Standard View (25 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
+                    view_mode = st.radio("Strikes View", options=["Standard View (30 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
                 
                 if current_exp:
                     target_dt = exp_map[current_exp].replace(hour=16, minute=0)
@@ -772,8 +777,8 @@ if current_view == "🧮 Strategy Builder":
         if not df_view.empty and current_exp:
             center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
                 
-            if view_mode == "Standard View (25 Strikes)":
-                radius = 12
+            if view_mode == "Standard View (30 Strikes)":
+                radius = 15
             else:
                 radius = len(df_view) 
 
@@ -905,7 +910,7 @@ if current_view == "🧮 Strategy Builder":
             st.markdown("---")
             st.subheader("Strategy")
             
-            contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
+            contract_multiplier = 100
             
             h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.3, 1.2, 1.1, 1.0, 1.0, 1.3, 1.4, 0.4]
             cols_header = st.columns(h_col_spec)
@@ -1358,19 +1363,27 @@ elif current_view == "💼 Portfolio Tracker":
     with ctrl_c1:
         if st.session_state.portfolio:
             if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
-                with st.spinner("Fetching live market data..."):
+                with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
                     
                     refresh_time = get_sydney_time()
                     st.session_state.portfolio_last_refresh = refresh_time
                     
+                    # --- FETCH FRESH PARQUET DATA ONCE FOR ALL TRADES ---
+                    load_databases.clear() 
+                    data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
+                    st.session_state.ref_data = data
+                    st.session_state.sheet_msg = msg
+                    st.session_state.fwd_spreads = ext_spreads
+                    st.session_state.data_date = d_date
+                    
                     for strat in st.session_state.portfolio:
                         ticker = strat.get('ticker', 'XJO')
                         _, spot, _ = fetch_data(ticker)
                         strat['current_spot'] = spot if spot > 0 else strat['spot_at_entry']
                         
-                        contract_multiplier = 10 if ticker == 'XJO' else 100
+                        contract_multiplier = 100
                         strat_pnl = 0.0
                         
                         for leg in strat['legs']:
@@ -1378,11 +1391,19 @@ elif current_view == "💼 Portfolio Tracker":
                             time_diff_sec = (exp_dt - refresh_time).total_seconds()
                             precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
                             
+                            # --- DYNAMIC IV UPDATE ---
+                            current_vol = leg['Vol'] # Default to entry IV
+                            if not data.empty:
+                                match = data[data['Code'] == leg['Code']]
+                                if not match.empty:
+                                    current_vol = float(match.iloc[0]['Vol'])
+                            
                             cur_theo, _ = calculate_price_and_delta(
                                 ticker, leg['Style'], leg['Type'], strat['current_spot'], leg['Strike'], 
-                                precise_days_diff, leg['Vol'], leg['ExpDateStr']
+                                precise_days_diff, current_vol, leg['ExpDateStr']
                             )
                             leg['Current_Theo'] = cur_theo
+                            leg['Current_Vol'] = current_vol 
                             
                             leg_pnl = (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
                             leg['Live_PnL'] = leg_pnl
@@ -1540,10 +1561,12 @@ elif current_view == "💼 Portfolio Tracker":
             else:
                 st.dataframe(df_display, hide_index=True, use_container_width=True)
             
-            if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
-                st.session_state.portfolio.pop(i)
-                st.session_state.trigger_ls_save = True
-                st.rerun()
+            a_c1, a_c2 = st.columns([1, 5])
+            with a_c1:
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
+                    st.session_state.portfolio.pop(i)
+                    st.session_state.trigger_ls_save = True
+                    st.rerun()
 
             # --- PORTFOLIO THEO MATRIX ---
             show_matrix = st.checkbox("📈 Show Theoretical Price Matrix", key=f"show_mx_{strat['id']}")
@@ -1591,7 +1614,7 @@ elif current_view == "💼 Portfolio Tracker":
                     for d in mx_dates:
                         net_theo_sum = 0
                         for leg in strat['legs']:
-                            sim_vol = max(1.0, leg['Vol'] + mx_vol_mod)
+                            sim_vol = max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod)
                             exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
                             target_eval_dt = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
                             rem_days = max(0.0001, (exp_dt - target_eval_dt).total_seconds() / 86400.0)
