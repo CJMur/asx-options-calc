@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.39 (Ticker Isolation & Math Fix)
+# VERSION: 1.3.39 (XJO Scaling & 30 Strikes)
 # ==========================================
 
 import streamlit as st
@@ -427,6 +427,7 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             delta = 0.0
             if kind == 'Call' and S > K: delta = 1.0
             elif kind == 'Put' and S < K: delta = -1.0
+            if is_xjo: price /= 10.0
             return price, delta
         
         if is_xjo:
@@ -434,7 +435,8 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             if expiry_str_key in st.session_state.fwd_spreads:
                 basis_offset = st.session_state.fwd_spreads[expiry_str_key]
                 simulated_fwd = S + basis_offset
-                return black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
+                price, delta = black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
+                return price / 10.0, delta
             else:
                 q = 0.04
         elif st.session_state.div_info:
@@ -457,6 +459,9 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             delta = math.exp(-q * T) * norm_cdf(d1)
         else:
             delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
+            
+        if is_xjo:
+            price /= 10.0
             
         return price, delta
     except: 
@@ -543,7 +548,7 @@ if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.st
 
 
 # ==========================================
-# 🗂️ PYTHON NAVIGATION ROUTER (Replaces st.tabs)
+# 🗂️ PYTHON NAVIGATION ROUTER
 # ==========================================
 
 current_view = st.radio(
@@ -715,7 +720,7 @@ if current_view == "🧮 Strategy Builder":
                     current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
                 with exp_col2:
                     st.write("<div style='height: 29px;'></div>", unsafe_allow_html=True) 
-                    view_mode = st.radio("Strikes View", options=["Standard View (25 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
+                    view_mode = st.radio("Strikes View", options=["Standard View (30 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
                 
                 if current_exp:
                     target_dt = exp_map[current_exp].replace(hour=16, minute=0)
@@ -772,8 +777,8 @@ if current_view == "🧮 Strategy Builder":
         if not df_view.empty and current_exp:
             center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
                 
-            if view_mode == "Standard View (25 Strikes)":
-                radius = 12
+            if view_mode == "Standard View (30 Strikes)":
+                radius = 15
             else:
                 radius = len(df_view) 
 
@@ -905,7 +910,7 @@ if current_view == "🧮 Strategy Builder":
             st.markdown("---")
             st.subheader("Strategy")
             
-            contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
+            contract_multiplier = 100
             
             h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.3, 1.2, 1.1, 1.0, 1.0, 1.3, 1.4, 0.4]
             cols_header = st.columns(h_col_spec)
@@ -1370,7 +1375,7 @@ elif current_view == "💼 Portfolio Tracker":
                         _, spot, _ = fetch_data(ticker)
                         strat['current_spot'] = spot if spot > 0 else strat['spot_at_entry']
                         
-                        contract_multiplier = 10 if ticker == 'XJO' else 100
+                        contract_multiplier = 100
                         strat_pnl = 0.0
                         
                         for leg in strat['legs']:
