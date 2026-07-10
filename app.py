@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.42 (The Definitive Merge)
+# VERSION: 1.3.43 (Pristine Radio Router & XJO Fix)
 # ==========================================
 
 import streamlit as st
@@ -142,6 +142,7 @@ st.markdown("""
         font-size: 14.5px;
     }
     
+    /* Sleek Navigation Radio Buttons */
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
 
     div[data-testid="stNumberInputStepUp"], 
@@ -526,7 +527,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.42</div>
+            <div class="header-sub">Option Strategy Builder v1.3.43</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -542,10 +543,19 @@ if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.st
     st.error(f"**Data Engine Warning:** {st.session_state.sheet_msg.split('|')[1]}")
 
 
-# --- TABS LAYOUT ---
-tab_builder, tab_portfolio = st.tabs(["🧮 Strategy Builder", "💼 Portfolio Tracker"])
+# ==========================================
+# 🗂️ PYTHON NAVIGATION ROUTER
+# ==========================================
 
-with tab_builder:
+current_view = st.radio(
+    "Navigation", 
+    ["🧮 Strategy Builder", "💼 Portfolio Tracker"], 
+    horizontal=True, 
+    label_visibility="collapsed"
+)
+st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+
+if current_view == "🧮 Strategy Builder":
     # --- 7. CONTROLS ---
     tickers_list = []
     if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
@@ -1340,7 +1350,7 @@ with tab_builder:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-with tab_portfolio:
+elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
     
     # Portfolio Control Center
@@ -1349,7 +1359,7 @@ with tab_portfolio:
     with ctrl_c1:
         if st.session_state.portfolio:
             if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
-                with st.spinner("Fetching live market data..."):
+                with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
                     
@@ -1547,12 +1557,10 @@ with tab_portfolio:
             else:
                 st.dataframe(df_display, hide_index=True, use_container_width=True)
             
-            a_c1, a_c2 = st.columns([1, 5])
-            with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
-                    st.session_state.portfolio.pop(i)
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
+            if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
+                st.session_state.portfolio.pop(i)
+                st.session_state.trigger_ls_save = True
+                st.rerun()
 
             # --- PORTFOLIO THEO MATRIX ---
             show_matrix = st.checkbox("📈 Show Theoretical Price Matrix", key=f"show_mx_{strat['id']}")
