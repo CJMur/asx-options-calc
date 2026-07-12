@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.44 (Multi-Leg Chain & Auto-Sort)
+# VERSION: 1.3.45 (Split Checkbox Multi-Select)
 # ==========================================
 
 import streamlit as st
@@ -527,7 +527,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.44</div>
+            <div class="header-sub">Option Strategy Builder v1.3.45</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -748,7 +748,8 @@ if current_view == "🧮 Strategy Builder":
                     all_strikes = sorted(list(set(calls.index) | set(puts.index)))
                     df_view = pd.DataFrame({'STRIKE': all_strikes})
                     
-                    df_view.insert(0, 'C_Action', "-")
+                    df_view.insert(0, 'C_Buy', False)
+                    df_view.insert(1, 'C_Sell', False)
                     
                     df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
                     df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
@@ -764,7 +765,8 @@ if current_view == "🧮 Strategy Builder":
                     df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
                     df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
                     
-                    df_view['P_Action'] = "-"
+                    df_view['P_Buy'] = False
+                    df_view['P_Sell'] = False
 
         if st.session_state.ticker and st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
             if subset.empty:
@@ -785,7 +787,7 @@ if current_view == "🧮 Strategy Builder":
             
             st.markdown(f"**Chain: {current_exp}**")
             
-            disp = df_view[['C_Action', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Action']].copy()
+            disp = df_view[['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Buy', 'P_Sell']].copy()
             
             def highlight_itm(row):
                 spot = st.session_state.spot_price
@@ -795,9 +797,9 @@ if current_view == "🧮 Strategy Builder":
                 styles = []
                 for col in row.index:
                     s = ""
-                    if col in ['C_Action', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
+                    if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
                         s += "background-color: rgba(74, 222, 128, 0.10); "
-                    elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Action'] and strike > spot:
+                    elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot:
                         s += "background-color: rgba(74, 222, 128, 0.10); "
                     
                     if col == 'STRIKE':
@@ -819,7 +821,8 @@ if current_view == "🧮 Strategy Builder":
             edited_df = st.data_editor(
                 styled_disp,
                 column_config={
-                    "C_Action": st.column_config.SelectboxColumn("Call", options=["-", "Buy", "Sell"], default="-"),
+                    "C_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
+                    "C_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
                     "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
                     "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
                     "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
@@ -829,47 +832,42 @@ if current_view == "🧮 Strategy Builder":
                     "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
                     "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
                     "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
-                    "P_Action": st.column_config.SelectboxColumn("Put", options=["-", "Buy", "Sell"], default="-"),
+                    "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
+                    "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
                 },
                 hide_index=True, use_container_width=True, key=editor_key,
                 disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
             )
             
             selected_legs = []
+            conflict = False
+            
             for idx in range(len(edited_df)):
                 row = df_view.iloc[idx]
                 edited_row = edited_df.iloc[idx]
                 
-                c_action = edited_row.get('C_Action', '-')
-                p_action = edited_row.get('P_Action', '-')
+                c_buy = edited_row.get('C_Buy', False)
+                c_sell = edited_row.get('C_Sell', False)
+                p_buy = edited_row.get('P_Buy', False)
+                p_sell = edited_row.get('P_Sell', False)
                 
-                if c_action in ['Buy', 'Sell']:
-                    selected_legs.append({
-                        "side": c_action,
-                        "kind": "Call",
-                        "px": row['C_Price'],
-                        "code_hint": str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A",
-                        "delta_val": row['C_Delta'],
-                        "style_full": str(row['C_Style_Full']),
-                        "strike": float(row['STRIKE']),
-                        "vol": float(row['C_Vol']),
-                        "margin": float(row['C_Margin'])
-                    })
-                
-                if p_action in ['Buy', 'Sell']:
-                    selected_legs.append({
-                        "side": p_action,
-                        "kind": "Put",
-                        "px": row['P_Price'],
-                        "code_hint": str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A",
-                        "delta_val": row['P_Delta'],
-                        "style_full": str(row['P_Style_Full']),
-                        "strike": float(row['STRIKE']),
-                        "vol": float(row['P_Vol']),
-                        "margin": float(row['P_Margin'])
-                    })
+                if c_buy and c_sell: 
+                    conflict = True
+                elif c_buy:
+                    selected_legs.append({"side": "Buy", "kind": "Call", "row": row})
+                elif c_sell:
+                    selected_legs.append({"side": "Sell", "kind": "Call", "row": row})
+                    
+                if p_buy and p_sell: 
+                    conflict = True
+                elif p_buy:
+                    selected_legs.append({"side": "Buy", "kind": "Put", "row": row})
+                elif p_sell:
+                    selected_legs.append({"side": "Sell", "kind": "Put", "row": row})
 
-            if len(selected_legs) > 4:
+            if conflict:
+                st.error("⚠️ Conflict detected: You cannot select both 'Buy' and 'Sell' for the same exact option contract. Please uncheck one.")
+            elif len(selected_legs) > 4:
                 st.warning("⚠️ Please select a maximum of 4 legs at once.")
             elif len(selected_legs) > 0:
                 st.write("")
@@ -877,20 +875,38 @@ if current_view == "🧮 Strategy Builder":
                 with b_c1:
                     if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
+                            r = leg['row']
+                            kind = leg['kind']
+                            
+                            if kind == 'Call':
+                                px = r['C_Price']
+                                code = r['C_Code']
+                                delta = r['C_Delta']
+                                style = r['C_Style_Full']
+                                vol = r['C_Vol']
+                                margin = r['C_Margin']
+                            else:
+                                px = r['P_Price']
+                                code = r['P_Code']
+                                delta = r['P_Delta']
+                                style = r['P_Style_Full']
+                                vol = r['P_Vol']
+                                margin = r['P_Margin']
+                                
                             st.session_state.legs.append({
                                 "id": str(uuid.uuid4()),
                                 "Qty": 1 if leg['side'] == "Buy" else -1, 
-                                "Type": leg['kind'], 
-                                "Style": leg['style_full'],
-                                "Strike": leg['strike'], 
+                                "Type": kind, 
+                                "Style": str(style),
+                                "Strike": float(r['STRIKE']), 
                                 "ExpDateStr": current_exp, 
-                                "Vol": leg['vol'], 
-                                "Entry": float(leg['px']), 
-                                "Code": leg['code_hint'], 
-                                "Delta": float(leg['delta_val']), 
-                                "MarginUnit": float(leg['margin'])
+                                "Vol": float(vol), 
+                                "Entry": float(px), 
+                                "Code": str(code) if pd.notna(code) else "N/A", 
+                                "Delta": float(delta), 
+                                "MarginUnit": float(margin)
                             })
-                        
+                            
                         # Apply the sorting rule (Low to High Strike)
                         st.session_state.legs = sorted(st.session_state.legs, key=lambda x: float(x['Strike']))
                         
@@ -902,454 +918,454 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.editor_reset += 1
                         st.rerun()
 
-        # --- 10. STRATEGY ---
-        if st.session_state.legs:
-            st.markdown("---")
-            st.subheader("Strategy")
-            
-            contract_multiplier = 100
-            
-            h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.3, 1.2, 1.1, 1.0, 1.0, 1.3, 1.4, 0.4]
-            cols_header = st.columns(h_col_spec)
-            
-            with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
-            with cols_header[1]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
-            with cols_header[2]: st.markdown('<div class="trade-header" title="American or European">Style</div>', unsafe_allow_html=True)
-            with cols_header[3]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
-            with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
-            with cols_header[5]: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
-            with cols_header[6]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
-            with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
-            with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">POS Delta</div>', unsafe_allow_html=True)
-            with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
-            with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
-            
-            st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
+    # --- 10. STRATEGY ---
+    if st.session_state.legs:
+        st.markdown("---")
+        st.subheader("Strategy")
+        
+        contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
+        
+        h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.3, 1.2, 1.1, 1.0, 1.0, 1.3, 1.4, 0.4]
+        cols_header = st.columns(h_col_spec)
+        
+        with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
+        with cols_header[1]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
+        with cols_header[2]: st.markdown('<div class="trade-header" title="American or European">Style</div>', unsafe_allow_html=True)
+        with cols_header[3]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
+        with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
+        with cols_header[5]: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
+        with cols_header[6]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
+        with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
+        with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">POS Delta</div>', unsafe_allow_html=True)
+        with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
+        with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
+        
+        st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
-            # TRUE PORTFOLIO MARGIN CALCULATION
-            scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
-            portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
-            leg_risk_arrays = []
+        # TRUE PORTFOLIO MARGIN CALCULATION
+        scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
+        portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
+        leg_risk_arrays = []
+        
+        tkr = st.session_state.ticker.replace(".AX", "")
+        
+        for leg in st.session_state.legs:
+            match = pd.DataFrame()
+            if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
+                if tkr == 'XJO':
+                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
+                else:
+                    ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+
+                match = st.session_state.ref_data[
+                    ticker_mask & 
+                    (st.session_state.ref_data['Type'] == leg['Type']) & 
+                    (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
+                    (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+                ]
             
-            tkr = st.session_state.ticker.replace(".AX", "")
+            if not match.empty and scen_cols:
+                risk_array = match.iloc[0][scen_cols].values.astype(float)
+            else:
+                risk_array = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
+                
+            leg_risk_arrays.append(risk_array)
+            portfolio_scenarios += risk_array * leg['Qty']
+        
+        # NEW MARGIN LOGIC: Detect covered spreads and apply portfolio risk arrays
+        total_margin = 0.0
+        has_short = any(leg['Qty'] < 0 for leg in st.session_state.legs)
+        if has_short:
+            is_covered_debit_spread = False
+            if len(st.session_state.legs) == 2:
+                l1, l2 = st.session_state.legs[0], st.session_state.legs[1]
+                if l1['Type'] == l2['Type'] and l1['ExpDateStr'] == l2['ExpDateStr']:
+                    long_leg = l1 if l1['Qty'] > 0 else (l2 if l2['Qty'] > 0 else None)
+                    short_leg = l1 if l1['Qty'] < 0 else (l2 if l2['Qty'] < 0 else None)
+                    
+                    if long_leg and short_leg and abs(long_leg['Qty']) >= abs(short_leg['Qty']):
+                        if long_leg['Type'] == 'Call' and long_leg['Strike'] <= short_leg['Strike']:
+                            is_covered_debit_spread = True
+                        elif long_leg['Type'] == 'Put' and long_leg['Strike'] >= short_leg['Strike']:
+                            is_covered_debit_spread = True
+                            
+            if is_covered_debit_spread:
+                total_margin = 0.0
+            else:
+                worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
+                total_margin = min(0.0, worst_portfolio_loss)
+
+        total_delta, total_premium, raw_theo_sum = 0, 0, 0
+        max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
+        
+        for i, leg in enumerate(st.session_state.legs):
+            if 'id' not in leg: leg['id'] = str(uuid.uuid4())
+            if 'Style' not in leg: leg['Style'] = 'American'
             
-            for leg in st.session_state.legs:
-                match = pd.DataFrame()
+            exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+            locked_now = st.session_state.get('fetch_time', get_sydney_time())
+            time_diff_sec = (exp_dt - locked_now).total_seconds()
+            precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
+            
+            new_theo, new_delta = calculate_price_and_delta(
+                st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+                precise_days_diff, leg['Vol'], leg['ExpDateStr']
+            )
+            
+            net_delta = leg['Qty'] * new_delta * contract_multiplier
+            premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
+            
+            # Individual Row Margin Display
+            if leg['Qty'] > 0:
+                row_margin = 0.0
+            else:
+                row_risk = leg_risk_arrays[i] * leg['Qty']
+                row_margin = min(0.0, np.min(row_risk)) if len(row_risk) > 0 else 0.0
+            
+            total_delta += net_delta
+            total_premium += premium
+            raw_theo_sum += leg['Qty'] * new_theo
+            
+            p_color = '#4ade80' if premium >= 0 else '#f87171'
+            m_color = '#4ade80' if row_margin >= 0 else '#f87171'
+            
+            row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+            
+            c = st.columns(h_col_spec)
+            
+            with c[0]: 
+                new_qty = st.number_input("Qty", value=int(leg['Qty']), step=1, key=f"qty_{leg['id']}", label_visibility="collapsed")
+                if new_qty != leg['Qty']:
+                    st.session_state.legs[i]['Qty'] = new_qty
+                    st.rerun()
+                    
+            with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
+            with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
+            with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
+            with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
+            
+            with c[5]: 
+                subset_st = pd.DataFrame()
                 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                     if tkr == 'XJO':
                         ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
                     else:
                         ticker_mask = st.session_state.ref_data['Ticker'] == tkr
-
-                    match = st.session_state.ref_data[
+                        
+                    subset_st = st.session_state.ref_data[
                         ticker_mask & 
                         (st.session_state.ref_data['Type'] == leg['Type']) & 
-                        (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
                         (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
                     ]
                 
-                if not match.empty and scen_cols:
-                    risk_array = match.iloc[0][scen_cols].values.astype(float)
+                available_strikes = sorted(subset_st['Strike'].unique().tolist()) if not subset_st.empty else []
+                current_strike = float(leg['Strike'])
+                
+                if available_strikes:
+                    closest_strike = min(available_strikes, key=lambda x: abs(x - current_strike))
+                    if abs(closest_strike - current_strike) < 0.01:
+                        current_strike = closest_strike
+                    elif current_strike not in available_strikes:
+                        available_strikes.append(current_strike)
+                        available_strikes = sorted(available_strikes)
                 else:
-                    risk_array = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
+                    available_strikes = [current_strike]
                     
-                leg_risk_arrays.append(risk_array)
-                portfolio_scenarios += risk_array * leg['Qty']
-            
-            # NEW MARGIN LOGIC: Detect covered spreads and apply portfolio risk arrays
-            total_margin = 0.0
-            has_short = any(leg['Qty'] < 0 for leg in st.session_state.legs)
-            if has_short:
-                is_covered_debit_spread = False
-                if len(st.session_state.legs) == 2:
-                    l1, l2 = st.session_state.legs[0], st.session_state.legs[1]
-                    if l1['Type'] == l2['Type'] and l1['ExpDateStr'] == l2['ExpDateStr']:
-                        long_leg = l1 if l1['Qty'] > 0 else (l2 if l2['Qty'] > 0 else None)
-                        short_leg = l1 if l1['Qty'] < 0 else (l2 if l2['Qty'] < 0 else None)
-                        
-                        if long_leg and short_leg and abs(long_leg['Qty']) >= abs(short_leg['Qty']):
-                            if long_leg['Type'] == 'Call' and long_leg['Strike'] <= short_leg['Strike']:
-                                is_covered_debit_spread = True
-                            elif long_leg['Type'] == 'Put' and long_leg['Strike'] >= short_leg['Strike']:
-                                is_covered_debit_spread = True
-                                
-                if is_covered_debit_spread:
-                    total_margin = 0.0
-                else:
-                    worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-                    total_margin = min(0.0, worst_portfolio_loss)
-
-            total_delta, total_premium, raw_theo_sum = 0, 0, 0
-            max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
-            
-            for i, leg in enumerate(st.session_state.legs):
-                if 'id' not in leg: leg['id'] = str(uuid.uuid4())
-                if 'Style' not in leg: leg['Style'] = 'American'
+                current_idx = available_strikes.index(current_strike)
                 
-                exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
-                locked_now = st.session_state.get('fetch_time', get_sydney_time())
-                time_diff_sec = (exp_dt - locked_now).total_seconds()
-                precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
-                
-                new_theo, new_delta = calculate_price_and_delta(
-                    st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
-                    precise_days_diff, leg['Vol'], leg['ExpDateStr']
+                new_strike = st.selectbox(
+                    "Strike", 
+                    options=available_strikes, 
+                    index=current_idx, 
+                    key=f"stk_{leg['id']}", 
+                    label_visibility="collapsed", 
+                    format_func=lambda x: f"{x:.2f}"
                 )
                 
-                net_delta = leg['Qty'] * new_delta * contract_multiplier
-                premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
-                
-                # Individual Row Margin Display
-                if leg['Qty'] > 0:
-                    row_margin = 0.0
-                else:
-                    row_risk = leg_risk_arrays[i] * leg['Qty']
-                    row_margin = min(0.0, np.min(row_risk)) if len(row_risk) > 0 else 0.0
-                
-                total_delta += net_delta
-                total_premium += premium
-                raw_theo_sum += leg['Qty'] * new_theo
-                
-                p_color = '#4ade80' if premium >= 0 else '#f87171'
-                m_color = '#4ade80' if row_margin >= 0 else '#f87171'
-                
-                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
-                
-                c = st.columns(h_col_spec)
-                
-                with c[0]: 
-                    new_qty = st.number_input("Qty", value=int(leg['Qty']), step=1, key=f"qty_{leg['id']}", label_visibility="collapsed")
-                    if new_qty != leg['Qty']:
-                        st.session_state.legs[i]['Qty'] = new_qty
-                        st.rerun()
-                        
-                with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
-                with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
-                with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
-                with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
-                
-                with c[5]: 
-                    subset_st = pd.DataFrame()
-                    if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
-                        if tkr == 'XJO':
-                            ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW'])
-                        else:
-                            ticker_mask = st.session_state.ref_data['Ticker'] == tkr
+                if new_strike != current_strike:
+                    st.session_state.legs[i]['Strike'] = new_strike
+                    if not subset_st.empty:
+                        match = subset_st[subset_st['Strike'] == new_strike]
+                        if not match.empty:
+                            match = match.sort_values('Code', ascending=False)
+                            new_vol = float(match.iloc[0]['Vol'])
+                            new_style = match.iloc[0].get('Style', 'American')
                             
-                        subset_st = st.session_state.ref_data[
-                            ticker_mask & 
-                            (st.session_state.ref_data['Type'] == leg['Type']) & 
-                            (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-                        ]
+                            st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
+                            st.session_state.legs[i]['Vol'] = new_vol
+                            st.session_state.legs[i]['Style'] = new_style
+                            st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
+                            
+                            matched_theo, _ = calculate_price_and_delta(
+                                st.session_state.ticker, new_style, leg['Type'], st.session_state.spot_price, new_strike, 
+                                precise_days_diff, new_vol, leg['ExpDateStr']
+                            )
+                            st.session_state.legs[i]['Entry'] = matched_theo
+                        else:
+                            st.session_state.legs[i]['Code'] = "N/A"
+                    st.rerun()
                     
-                    available_strikes = sorted(subset_st['Strike'].unique().tolist()) if not subset_st.empty else []
-                    current_strike = float(leg['Strike'])
-                    
-                    if available_strikes:
-                        closest_strike = min(available_strikes, key=lambda x: abs(x - current_strike))
-                        if abs(closest_strike - current_strike) < 0.01:
-                            current_strike = closest_strike
-                        elif current_strike not in available_strikes:
-                            available_strikes.append(current_strike)
-                            available_strikes = sorted(available_strikes)
-                    else:
-                        available_strikes = [current_strike]
-                        
-                    current_idx = available_strikes.index(current_strike)
-                    
-                    new_strike = st.selectbox(
-                        "Strike", 
-                        options=available_strikes, 
-                        index=current_idx, 
-                        key=f"stk_{leg['id']}", 
-                        label_visibility="collapsed", 
-                        format_func=lambda x: f"{x:.2f}"
+            with c[6]: 
+                new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"vol_{leg['id']}", label_visibility="collapsed")
+                if new_vol_input != leg['Vol']:
+                    st.session_state.legs[i]['Vol'] = new_vol_input
+                    calibrated_theo, _ = calculate_price_and_delta(
+                        st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
+                        precise_days_diff, new_vol_input, leg['ExpDateStr']
                     )
+                    st.session_state.legs[i]['Entry'] = calibrated_theo
+                    st.rerun()
                     
-                    if new_strike != current_strike:
-                        st.session_state.legs[i]['Strike'] = new_strike
-                        if not subset_st.empty:
-                            match = subset_st[subset_st['Strike'] == new_strike]
-                            if not match.empty:
-                                match = match.sort_values('Code', ascending=False)
-                                new_vol = float(match.iloc[0]['Vol'])
-                                new_style = match.iloc[0].get('Style', 'American')
-                                
-                                st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
-                                st.session_state.legs[i]['Vol'] = new_vol
-                                st.session_state.legs[i]['Style'] = new_style
-                                st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
-                                
-                                matched_theo, _ = calculate_price_and_delta(
-                                    st.session_state.ticker, new_style, leg['Type'], st.session_state.spot_price, new_strike, 
-                                    precise_days_diff, new_vol, leg['ExpDateStr']
-                                )
-                                st.session_state.legs[i]['Entry'] = matched_theo
-                            else:
-                                st.session_state.legs[i]['Code'] = "N/A"
-                        st.rerun()
-                        
-                with c[6]: 
-                    new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"vol_{leg['id']}", label_visibility="collapsed")
-                    if new_vol_input != leg['Vol']:
-                        st.session_state.legs[i]['Vol'] = new_vol_input
-                        calibrated_theo, _ = calculate_price_and_delta(
-                            st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], 
-                            precise_days_diff, new_vol_input, leg['ExpDateStr']
-                        )
-                        st.session_state.legs[i]['Entry'] = calibrated_theo
-                        st.rerun()
-                        
-                with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
-                with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
-                with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
-                with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
-                with c[11]:
-                    st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
-                        st.session_state.legs.pop(i)
-                        st.rerun()
-                        
-            st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
+            with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
+            with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
+            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
+            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
+            with c[11]:
+                st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
+                    st.session_state.legs.pop(i)
+                    st.rerun()
+                    
+        st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
-            strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
+        strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
 
-            with st.container():
-                f = st.columns(h_col_spec)
-                with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
-                with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
-                with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-                with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
-                with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+        with st.container():
+            f = st.columns(h_col_spec)
+            with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
+            with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
+            with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
-            # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
-            st.markdown("---")
-            st.subheader("💾 Save to Portfolio")
-            s_c1, s_c2 = st.columns([3, 1])
-            with s_c1:
-                strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
-            with s_c2:
-                if st.button("Save Strategy", type="primary", use_container_width=True):
-                    st.session_state.portfolio.append({
-                        "id": str(uuid.uuid4()),
-                        "name": strat_name,
-                        "ticker": st.session_state.ticker,
-                        "spot_at_entry": st.session_state.spot_price,
-                        "legs": [leg.copy() for leg in st.session_state.legs]
-                    })
-                    st.session_state.trigger_ls_save = True 
-                    st.success(f"Saved! Switch to the Portfolio Tracker tab to view it.")
+        # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
+        st.markdown("---")
+        st.subheader("💾 Save to Portfolio")
+        s_c1, s_c2 = st.columns([3, 1])
+        with s_c1:
+            strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
+        with s_c2:
+            if st.button("Save Strategy", type="primary", use_container_width=True):
+                st.session_state.portfolio.append({
+                    "id": str(uuid.uuid4()),
+                    "name": strat_name,
+                    "ticker": st.session_state.ticker,
+                    "spot_at_entry": st.session_state.spot_price,
+                    "legs": [leg.copy() for leg in st.session_state.legs]
+                })
+                st.session_state.trigger_ls_save = True 
+                st.success(f"Saved! Switch to the Portfolio Tracker tab to view it.")
 
-            # --- URL STATE SYNC ENGINE ---
-            payload = {
-                "t": st.session_state.ticker,
-                "p": st.session_state.spot_price,
-                "m": st.session_state.manual_spot,
-                "l": st.session_state.legs
-            }
-            try:
-                encoded_state = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
-                st.query_params["s"] = encoded_state
-            except: pass
+        # --- URL STATE SYNC ENGINE ---
+        payload = {
+            "t": st.session_state.ticker,
+            "p": st.session_state.spot_price,
+            "m": st.session_state.manual_spot,
+            "l": st.session_state.legs
+        }
+        try:
+            encoded_state = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+            st.query_params["s"] = encoded_state
+        except: pass
 
-            # --- MATRIX ---
-            st.markdown("---")
-            st.subheader("Payoff Matrix")
+        # --- MATRIX ---
+        st.markdown("---")
+        st.subheader("Payoff Matrix")
+        
+        m1, m2 = st.columns([1, 1.2], gap="large")
+        
+        with m1:
+            time_step = st.slider("Step (Days)", 1, 30, 1)
+            st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
             
-            m1, m2 = st.columns([1, 1.2], gap="large")
+            vol_opts = ["IV -10%", "IV Flat", "IV +10%"]
+            current_vol_idx = 1
+            if st.session_state.matrix_vol_mod == -10.0: current_vol_idx = 0
+            elif st.session_state.matrix_vol_mod == 10.0: current_vol_idx = 2
             
-            with m1:
-                time_step = st.slider("Step (Days)", 1, 30, 1)
-                st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-                
-                vol_opts = ["IV -10%", "IV Flat", "IV +10%"]
-                current_vol_idx = 1
-                if st.session_state.matrix_vol_mod == -10.0: current_vol_idx = 0
-                elif st.session_state.matrix_vol_mod == 10.0: current_vol_idx = 2
-                
-                vol_shift_sel = st.radio("Simulate Volatility Shift", vol_opts, index=current_vol_idx, horizontal=True)
-                if vol_shift_sel == "IV -10%": st.session_state.matrix_vol_mod = -10.0
-                elif vol_shift_sel == "IV +10%": st.session_state.matrix_vol_mod = 10.0
-                else: st.session_state.matrix_vol_mod = 0.0
+            vol_shift_sel = st.radio("Simulate Volatility Shift", vol_opts, index=current_vol_idx, horizontal=True)
+            if vol_shift_sel == "IV -10%": st.session_state.matrix_vol_mod = -10.0
+            elif vol_shift_sel == "IV +10%": st.session_state.matrix_vol_mod = 10.0
+            else: st.session_state.matrix_vol_mod = 0.0
 
-            with m2:
-                slider_placeholder = st.empty()
-                
-                st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-                step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True)
-                
-                if step_type == "Percentage (%)":
-                    range_opts = [x / 200.0 for x in range(1, 11)]
-                    step_val = slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
-                else:
-                    if st.session_state.spot_price > 1000:
-                        pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]
-                        default_pt = 50.0
-                    elif st.session_state.spot_price > 100:
-                        pts_opts = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0]
-                        default_pt = 5.0
-                    else:
-                        pts_opts = [0.10, 0.25, 0.50, 1.00, 2.00, 5.00]
-                        default_pt = 1.00
-                        
-                    if default_pt not in pts_opts: default_pt = pts_opts[0]
-                    step_val = slider_placeholder.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}")
-
-            spot = st.session_state.spot_price
+        with m2:
+            slider_placeholder = st.empty()
+            
+            st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+            step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True)
             
             if step_type == "Percentage (%)":
-                prices = [spot * (1 + step_val * i) for i in range(6, -7, -1)]
-                chart_spread = step_val * 8
-                chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 200)
+                range_opts = [x / 200.0 for x in range(1, 11)]
+                step_val = slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%")
             else:
-                prices = [spot + (step_val * i) for i in range(6, -7, -1)]
-                chart_spread = step_val * 8
-                chart_prices = np.linspace(spot - chart_spread, spot + chart_spread, 200)
-                
-            dates = [d * time_step for d in range(7)]
-            
-            matrix_data = []
-            for p in prices:
-                is_spot = math.isclose(p, spot, rel_tol=1e-5)
-                row_label = f"» ${p:.2f} (SPOT) «" if is_spot else f"${p:.2f}"
-                
-                row = {"Price": row_label}
-                for d in dates:
-                    pnl = 0
-                    for leg in st.session_state.legs:
-                        sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
-                        exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
-                        
-                        locked_now = st.session_state.get('fetch_time', get_sydney_time())
-                        target_eval_dt = locked_now + timedelta(days=d)
-                        
-                        rem_sec = (exp_dt - target_eval_dt).total_seconds()
-                        rem_days = max(0.0001, rem_sec / 86400.0)
-                        
-                        exit_px, _ = calculate_price_and_delta(
-                            st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], 
-                            rem_days, sim_vol, leg['ExpDateStr']
-                        )
-                        pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
+                if st.session_state.spot_price > 1000:
+                    pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]
+                    default_pt = 50.0
+                elif st.session_state.spot_price > 100:
+                    pts_opts = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0]
+                    default_pt = 5.0
+                else:
+                    pts_opts = [0.10, 0.25, 0.50, 1.00, 2.00, 5.00]
+                    default_pt = 1.00
                     
-                    col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
-                    if d == 0: col_name = f"Today ({col_name})"
-                    row[col_name] = pnl
-                matrix_data.append(row)
-                
-            df_mx = pd.DataFrame(matrix_data).set_index("Price")
-            
-            capital_at_risk = total_margin if total_premium >= 0 else abs(total_premium)
-            
-            def format_pnl(val):
-                if capital_at_risk <= 0.001:
-                    return f"${val:,.0f} (0.0%)"
-                pct = (val / capital_at_risk) * 100
-                sign = "+" if val > 0 else ""
-                return f"${val:,.0f} ({sign}{pct:.1f}%)"
+                if default_pt not in pts_opts: default_pt = pts_opts[0]
+                step_val = slider_placeholder.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}")
 
-            def make_heatmap(df):
-                max_val = df.max().max()
-                min_val = df.min().min()
-                abs_max = max(abs(max_val), abs(min_val), 1)
-                
-                styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
-                for idx in df.index:
-                    is_spot = "SPOT" in str(idx)
-                    for col in df.columns:
-                        val = df.loc[idx, col]
-                        s = ""
-                        if val > 0:
-                            intensity = min(val / abs_max, 1.0)
-                            alpha = 0.05 + 0.35 * intensity
-                            s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
-                        elif val < 0:
-                            intensity = min(abs(val) / abs_max, 1.0)
-                            alpha = 0.05 + 0.35 * intensity
-                            s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
-                        
-                        if is_spot:
-                            s += "font-weight: bold; "
-                            
-                        styles_df.loc[idx, col] = s
-                return styles_df
-
-            st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
-
-            # --- ADVANCED CHARTING ENGINE ---
-            st.markdown("### Payoff Chart")
+        spot = st.session_state.spot_price
+        
+        if step_type == "Percentage (%)":
+            prices = [spot * (1 + step_val * i) for i in range(6, -7, -1)]
+            chart_spread = step_val * 8
+            chart_prices = np.linspace(spot * (1 - chart_spread), spot * (1 + chart_spread), 200)
+        else:
+            prices = [spot + (step_val * i) for i in range(6, -7, -1)]
+            chart_spread = step_val * 8
+            chart_prices = np.linspace(spot - chart_spread, spot + chart_spread, 200)
             
-            pnl_today = []
-            pnl_expiry = []
-            for p in chart_prices:
-                val_t0 = 0
-                val_tF = 0
+        dates = [d * time_step for d in range(7)]
+        
+        matrix_data = []
+        for p in prices:
+            is_spot = math.isclose(p, spot, rel_tol=1e-5)
+            row_label = f"» ${p:.2f} (SPOT) «" if is_spot else f"${p:.2f}"
+            
+            row = {"Price": row_label}
+            for d in dates:
+                pnl = 0
                 for leg in st.session_state.legs:
+                    sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                     exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
-                    locked_now = st.session_state.get('fetch_time', get_sydney_time())
-                    precise_days_diff = max(0.0001, (exp_dt - locked_now).total_seconds() / 86400.0)
                     
-                    price_t0, _ = calculate_price_and_delta(
+                    locked_now = st.session_state.get('fetch_time', get_sydney_time())
+                    target_eval_dt = locked_now + timedelta(days=d)
+                    
+                    rem_sec = (exp_dt - target_eval_dt).total_seconds()
+                    rem_days = max(0.0001, rem_sec / 86400.0)
+                    
+                    exit_px, _ = calculate_price_and_delta(
                         st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], 
-                        precise_days_diff, leg['Vol'], leg['ExpDateStr']
+                        rem_days, sim_vol, leg['ExpDateStr']
                     )
-                    val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
-                    price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
-                    val_tF += (price_tf - leg['Entry']) * leg['Qty'] * contract_multiplier
-                pnl_today.append(val_t0)
-                pnl_expiry.append(val_tF)
+                    pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                 
-            breakevens = []
-            for i in range(len(chart_prices)-1):
-                if pnl_expiry[i] * pnl_expiry[i+1] < 0:
-                    x1, x2 = chart_prices[i], chart_prices[i+1]
-                    y1, y2 = pnl_expiry[i], pnl_expiry[i+1]
-                    x_zero = x1 - y1 * (x2 - x1) / (y2 - y1) 
-                    breakevens.append(x_zero)
+                col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
+                if d == 0: col_name = f"Today ({col_name})"
+                row[col_name] = pnl
+            matrix_data.append(row)
+            
+        df_mx = pd.DataFrame(matrix_data).set_index("Price")
+        
+        capital_at_risk = total_margin if total_premium >= 0 else abs(total_premium)
+        
+        def format_pnl(val):
+            if capital_at_risk <= 0.001:
+                return f"${val:,.0f} (0.0%)"
+            pct = (val / capital_at_risk) * 100
+            sign = "+" if val > 0 else ""
+            return f"${val:,.0f} ({sign}{pct:.1f}%)"
+
+        def make_heatmap(df):
+            max_val = df.max().max()
+            min_val = df.min().min()
+            abs_max = max(abs(max_val), abs(min_val), 1)
+            
+            styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+            for idx in df.index:
+                is_spot = "SPOT" in str(idx)
+                for col in df.columns:
+                    val = df.loc[idx, col]
+                    s = ""
+                    if val > 0:
+                        intensity = min(val / abs_max, 1.0)
+                        alpha = 0.05 + 0.35 * intensity
+                        s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
+                    elif val < 0:
+                        intensity = min(abs(val) / abs_max, 1.0)
+                        alpha = 0.05 + 0.35 * intensity
+                        s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
+                    
+                    if is_spot:
+                        s += "font-weight: bold; "
+                        
+                    styles_df.loc[idx, col] = s
+            return styles_df
+
+        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
+
+        # --- ADVANCED CHARTING ENGINE ---
+        st.markdown("### Payoff Chart")
+        
+        pnl_today = []
+        pnl_expiry = []
+        for p in chart_prices:
+            val_t0 = 0
+            val_tF = 0
+            for leg in st.session_state.legs:
+                exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+                locked_now = st.session_state.get('fetch_time', get_sydney_time())
+                precise_days_diff = max(0.0001, (exp_dt - locked_now).total_seconds() / 86400.0)
                 
-            fig = go.Figure()
-            
-            fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(74, 222, 128, 0.08)", layer="below", line_width=0)
-            fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
-            
-            for be in breakevens:
-                fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
-                fig.add_annotation(
-                    x=be, y=0, text=f"BE: ${be:.2f}",
-                    showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor="#10b981",
-                    ax=0, ay=-40, bgcolor="#0f172a", bordercolor="#10b981", font=dict(color="#10b981", size=11)
+                price_t0, _ = calculate_price_and_delta(
+                    st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], 
+                    precise_days_diff, leg['Vol'], leg['ExpDateStr']
                 )
+                val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
+                price_tf = max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)
+                val_tF += (price_tf - leg['Entry']) * leg['Qty'] * contract_multiplier
+            pnl_today.append(val_t0)
+            pnl_expiry.append(val_tF)
             
-            fig.add_trace(go.Scatter(
-                x=chart_prices, y=pnl_today, name="Today", 
-                line=dict(color='#0050FF', width=3),
-                hovertemplate="Price: $%{x:.2f}<br>P&L: $%{y:.2f}"
-            ))
+        breakevens = []
+        for i in range(len(chart_prices)-1):
+            if pnl_expiry[i] * pnl_expiry[i+1] < 0:
+                x1, x2 = chart_prices[i], chart_prices[i+1]
+                y1, y2 = pnl_expiry[i], pnl_expiry[i+1]
+                x_zero = x1 - y1 * (x2 - x1) / (y2 - y1) 
+                breakevens.append(x_zero)
             
-            fig.add_trace(go.Scatter(
-                x=chart_prices, y=pnl_expiry, name="Expiry", 
-                line=dict(color='#1DBFD2', dash='dash', width=3),
-                hovertemplate="Price: $%{x:.2f}<br>P&L: $%{y:.2f}"
-            ))
-            
-            fig.add_vline(x=spot, line_dash="dot", line_color="grey")
-            
-            max_pnl = max(max(pnl_expiry), max(pnl_today))
-            min_pnl = min(min(pnl_expiry), min(pnl_today))
-            padding = max(abs(max_pnl), abs(min_pnl)) * 0.1
-            
-            fig.update_layout(
-                height=450, 
-                template="plotly_white", 
-                margin=dict(t=30, b=30),
-                xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"),
-                yaxis=dict(
-                    title="Profit / Loss ($)", tickprefix="$", 
-                    zeroline=True, zerolinewidth=2, zerolinecolor='black',
-                    range=[min_pnl - padding, max_pnl + padding]
-                )
+        fig = go.Figure()
+        
+        fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(74, 222, 128, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
+        
+        for be in breakevens:
+            fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
+            fig.add_annotation(
+                x=be, y=0, text=f"BE: ${be:.2f}",
+                showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor="#10b981",
+                ax=0, ay=-40, bgcolor="#0f172a", bordercolor="#10b981", font=dict(color="#10b981", size=11)
             )
-            st.plotly_chart(fig, use_container_width=True)
+        
+        fig.add_trace(go.Scatter(
+            x=chart_prices, y=pnl_today, name="Today", 
+            line=dict(color='#0050FF', width=3),
+            hovertemplate="Price: $%{x:.2f}<br>P&L: $%{y:.2f}"
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=chart_prices, y=pnl_expiry, name="Expiry", 
+            line=dict(color='#1DBFD2', dash='dash', width=3),
+            hovertemplate="Price: $%{x:.2f}<br>P&L: $%{y:.2f}"
+        ))
+        
+        fig.add_vline(x=spot, line_dash="dot", line_color="grey")
+        
+        max_pnl = max(max(pnl_expiry), max(pnl_today))
+        min_pnl = min(min(pnl_expiry), min(pnl_today))
+        padding = max(abs(max_pnl), abs(min_pnl)) * 0.1
+        
+        fig.update_layout(
+            height=450, 
+            template="plotly_white", 
+            margin=dict(t=30, b=30),
+            xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"),
+            yaxis=dict(
+                title="Profit / Loss ($)", tickprefix="$", 
+                zeroline=True, zerolinewidth=2, zerolinecolor='black',
+                range=[min_pnl - padding, max_pnl + padding]
+            )
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1558,12 +1574,10 @@ elif current_view == "💼 Portfolio Tracker":
             else:
                 st.dataframe(df_display, hide_index=True, use_container_width=True)
             
-            a_c1, a_c2 = st.columns([1, 5])
-            with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
-                    st.session_state.portfolio.pop(i)
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
+            if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
+                st.session_state.portfolio.pop(i)
+                st.session_state.trigger_ls_save = True
+                st.rerun()
 
             # --- PORTFOLIO THEO MATRIX ---
             show_matrix = st.checkbox("📈 Show Theoretical Price Matrix", key=f"show_mx_{strat['id']}")
