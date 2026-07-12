@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.45 (Split Checkbox Multi-Select)
+# VERSION: 1.3.46 (Descending Strike Sort)
 # ==========================================
 
 import streamlit as st
@@ -527,7 +527,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.45</div>
+            <div class="header-sub">Option Strategy Builder v1.3.46</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -907,8 +907,8 @@ if current_view == "🧮 Strategy Builder":
                                 "MarginUnit": float(margin)
                             })
                             
-                        # Apply the sorting rule (Low to High Strike)
-                        st.session_state.legs = sorted(st.session_state.legs, key=lambda x: float(x['Strike']))
+                        # Apply the sorting rule (High to Low Strike)
+                        st.session_state.legs = sorted(st.session_state.legs, key=lambda x: float(x['Strike']), reverse=True)
                         
                         st.session_state.editor_reset += 1 
                         st.session_state.preselect_code = None 
@@ -918,7 +918,7 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.editor_reset += 1
                         st.rerun()
 
-    # --- 10. STRATEGY ---
+    # --- 10. STRATE ---
     if st.session_state.legs:
         st.markdown("---")
         st.subheader("Strategy")
