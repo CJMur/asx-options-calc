@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.43 (Pristine Radio Router & XJO Fix)
+# VERSION: 1.3.44 (Multi-Leg Chain & Auto-Sort)
 # ==========================================
 
 import streamlit as st
@@ -527,7 +527,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.43</div>
+            <div class="header-sub">Option Strategy Builder v1.3.44</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -748,7 +748,7 @@ if current_view == "🧮 Strategy Builder":
                     all_strikes = sorted(list(set(calls.index) | set(puts.index)))
                     df_view = pd.DataFrame({'STRIKE': all_strikes})
                     
-                    df_view.insert(0, 'C_Sel', False)
+                    df_view.insert(0, 'C_Action', "-")
                     
                     df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
                     df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
@@ -764,7 +764,7 @@ if current_view == "🧮 Strategy Builder":
                     df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
                     df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
                     
-                    df_view['P_Sel'] = False
+                    df_view['P_Action'] = "-"
 
         if st.session_state.ticker and st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
             if subset.empty:
@@ -785,7 +785,7 @@ if current_view == "🧮 Strategy Builder":
             
             st.markdown(f"**Chain: {current_exp}**")
             
-            disp = df_view[['C_Sel', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Sel']].copy()
+            disp = df_view[['C_Action', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Action']].copy()
             
             def highlight_itm(row):
                 spot = st.session_state.spot_price
@@ -795,9 +795,9 @@ if current_view == "🧮 Strategy Builder":
                 styles = []
                 for col in row.index:
                     s = ""
-                    if col in ['C_Sel', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
+                    if col in ['C_Action', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
                         s += "background-color: rgba(74, 222, 128, 0.10); "
-                    elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Sel'] and strike > spot:
+                    elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Action'] and strike > spot:
                         s += "background-color: rgba(74, 222, 128, 0.10); "
                     
                     if col == 'STRIKE':
@@ -819,7 +819,7 @@ if current_view == "🧮 Strategy Builder":
             edited_df = st.data_editor(
                 styled_disp,
                 column_config={
-                    "C_Sel": st.column_config.CheckboxColumn("☑ Call", default=False),
+                    "C_Action": st.column_config.SelectboxColumn("Call", options=["-", "Buy", "Sell"], default="-"),
                     "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
                     "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
                     "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
@@ -829,84 +829,85 @@ if current_view == "🧮 Strategy Builder":
                     "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
                     "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help=TOOLTIPS["Delta"]),
                     "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
-                    "P_Sel": st.column_config.CheckboxColumn("☑ Put", default=False),
+                    "P_Action": st.column_config.SelectboxColumn("Put", options=["-", "Buy", "Sell"], default="-"),
                 },
                 hide_index=True, use_container_width=True, key=editor_key,
                 disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
             )
             
-            selected_row_idx = None
-            selected_type = None
-
+            selected_legs = []
             for idx in range(len(edited_df)):
-                if edited_df['C_Sel'].iloc[idx]:
-                    selected_row_idx = idx
-                    selected_type = 'Call'
-                    break
-                elif edited_df['P_Sel'].iloc[idx]:
-                    selected_row_idx = idx
-                    selected_type = 'Put'
-                    break
-                    
-            if selected_row_idx is not None:
-                row = df_view.iloc[selected_row_idx]
+                row = df_view.iloc[idx]
+                edited_row = edited_df.iloc[idx]
                 
-                st.write("")
-                q_c, b1_c, b2_c, _ = st.columns([1.5, 1.5, 1.5, 5], gap="small")
-
-                with q_c:
-                    trade_qty = st.number_input("Trade Quantity", min_value=1, value=1, step=1)
+                c_action = edited_row.get('C_Action', '-')
+                p_action = edited_row.get('P_Action', '-')
                 
-                def add(side, kind, px, code_hint, delta_val, qty_val, style_full):
-                    st.session_state.legs.append({
-                        "id": str(uuid.uuid4()),
-                        "Qty": qty_val if side == "Buy" else -qty_val, 
-                        "Type": kind, 
-                        "Style": str(style_full),
-                        "Strike": float(row['STRIKE']), 
-                        "ExpDateStr": current_exp, 
-                        "Vol": float(row['C_Vol'] if kind == 'Call' else row['P_Vol']), 
-                        "Entry": float(px), 
-                        "Code": str(code_hint), 
-                        "Delta": float(delta_val), 
-                        "MarginUnit": float(row['C_Margin'] if kind == 'Call' else row['P_Margin'])
+                if c_action in ['Buy', 'Sell']:
+                    selected_legs.append({
+                        "side": c_action,
+                        "kind": "Call",
+                        "px": row['C_Price'],
+                        "code_hint": str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A",
+                        "delta_val": row['C_Delta'],
+                        "style_full": str(row['C_Style_Full']),
+                        "strike": float(row['STRIKE']),
+                        "vol": float(row['C_Vol']),
+                        "margin": float(row['C_Margin'])
                     })
-                    st.session_state.editor_reset += 1 
-                    st.session_state.preselect_code = None 
-                    st.rerun()
-                    
-                c_c = str(row['C_Code']) if pd.notna(row['C_Code']) else "N/A"
-                p_c = str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A"
-                c_s = str(row['C_Style_Full'])
-                p_s = str(row['P_Style_Full'])
                 
-                btn_spacer = "<div style='height: 28px;'></div>"
-                
-                if selected_type == 'Call':
-                    with b1_c:
-                         st.markdown(btn_spacer, unsafe_allow_html=True)
-                         if st.button("Buy Call", use_container_width=True): 
-                             add("Buy", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
-                    with b2_c:
-                         st.markdown(btn_spacer, unsafe_allow_html=True)
-                         if st.button("Sell Call", use_container_width=True): 
-                             add("Sell", "Call", row['C_Price'], c_c, row['C_Delta'], trade_qty, c_s)
-                elif selected_type == 'Put':
-                    with b1_c:
-                         st.markdown(btn_spacer, unsafe_allow_html=True)
-                         if st.button("Buy Put", use_container_width=True): 
-                             add("Buy", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
-                    with b2_c:
-                         st.markdown(btn_spacer, unsafe_allow_html=True)
-                         if st.button("Sell Put", use_container_width=True): 
-                             add("Sell", "Put", row['P_Price'], p_c, row['P_Delta'], trade_qty, p_s)
+                if p_action in ['Buy', 'Sell']:
+                    selected_legs.append({
+                        "side": p_action,
+                        "kind": "Put",
+                        "px": row['P_Price'],
+                        "code_hint": str(row['P_Code']) if pd.notna(row['P_Code']) else "N/A",
+                        "delta_val": row['P_Delta'],
+                        "style_full": str(row['P_Style_Full']),
+                        "strike": float(row['STRIKE']),
+                        "vol": float(row['P_Vol']),
+                        "margin": float(row['P_Margin'])
+                    })
+
+            if len(selected_legs) > 4:
+                st.warning("⚠️ Please select a maximum of 4 legs at once.")
+            elif len(selected_legs) > 0:
+                st.write("")
+                b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
+                with b_c1:
+                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                        for leg in selected_legs:
+                            st.session_state.legs.append({
+                                "id": str(uuid.uuid4()),
+                                "Qty": 1 if leg['side'] == "Buy" else -1, 
+                                "Type": leg['kind'], 
+                                "Style": leg['style_full'],
+                                "Strike": leg['strike'], 
+                                "ExpDateStr": current_exp, 
+                                "Vol": leg['vol'], 
+                                "Entry": float(leg['px']), 
+                                "Code": leg['code_hint'], 
+                                "Delta": float(leg['delta_val']), 
+                                "MarginUnit": float(leg['margin'])
+                            })
+                        
+                        # Apply the sorting rule (Low to High Strike)
+                        st.session_state.legs = sorted(st.session_state.legs, key=lambda x: float(x['Strike']))
+                        
+                        st.session_state.editor_reset += 1 
+                        st.session_state.preselect_code = None 
+                        st.rerun()
+                with b_c2:
+                    if st.button("Clear Selection", use_container_width=True):
+                        st.session_state.editor_reset += 1
+                        st.rerun()
 
         # --- 10. STRATEGY ---
         if st.session_state.legs:
             st.markdown("---")
             st.subheader("Strategy")
             
-            contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
+            contract_multiplier = 100
             
             h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.3, 1.2, 1.1, 1.0, 1.0, 1.3, 1.4, 0.4]
             cols_header = st.columns(h_col_spec)
@@ -1557,10 +1558,12 @@ elif current_view == "💼 Portfolio Tracker":
             else:
                 st.dataframe(df_display, hide_index=True, use_container_width=True)
             
-            if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
-                st.session_state.portfolio.pop(i)
-                st.session_state.trigger_ls_save = True
-                st.rerun()
+            a_c1, a_c2 = st.columns([1, 5])
+            with a_c1:
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
+                    st.session_state.portfolio.pop(i)
+                    st.session_state.trigger_ls_save = True
+                    st.rerun()
 
             # --- PORTFOLIO THEO MATRIX ---
             show_matrix = st.checkbox("📈 Show Theoretical Price Matrix", key=f"show_mx_{strat['id']}")
