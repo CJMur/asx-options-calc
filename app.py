@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.48 (Memory Leak Fix)
+# VERSION: 1.3.49 (Sanitized Stable Build)
 # ==========================================
 
 import streamlit as st
@@ -246,8 +246,8 @@ def fetch_rba_cash_rate():
 
 global_rba_rate = fetch_rba_cash_rate()
 
+# NOTE: Removed @st.cache_data here to prevent OOM memory leak crashes on Railway
 def load_databases(opts_url, fwd_url, cb="default"):
-    # REMOVED: @st.cache_data decorator to prevent memory leak
     try:
         live_fwd_url = f"{fwd_url}?cb={cb}"
         live_opts_url = f"{opts_url}?cb={cb}"
@@ -527,7 +527,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.48</div>
+            <div class="header-sub">Option Strategy Builder v1.3.49</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -956,12 +956,12 @@ if current_view == "🧮 Strategy Builder":
                 else:
                     ticker_mask = st.session_state.ref_data['Ticker'] == tkr
 
-                    match = st.session_state.ref_data[
-                        ticker_mask & 
-                        (st.session_state.ref_data['Type'] == leg['Type']) & 
-                        (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
-                        (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-                    ]
+                match = st.session_state.ref_data[
+                    ticker_mask & 
+                    (st.session_state.ref_data['Type'] == leg['Type']) & 
+                    (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
+                    (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+                ]
             
             if not match.empty and scen_cols:
                 risk_array = match.iloc[0][scen_cols].values.astype(float)
@@ -1573,52 +1573,9 @@ elif current_view == "💼 Portfolio Tracker":
             else:
                 st.dataframe(df_display, hide_index=True, use_container_width=True)
             
-            a_c1, a_c2, a_c3 = st.columns([1, 1, 2])
+            a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
-                if st.button("📤 Load into Builder", key=f"load_{strat['id']}", use_container_width=True):
-                    with st.spinner("Loading Strategy and Refreshing Prices..."):
-                        # Nuke memory but preserve portfolio
-                        saved_port = st.session_state.get('portfolio', [])
-                        saved_refresh = st.session_state.get('portfolio_last_refresh', None)
-                        saved_hash = st.session_state.get('last_upload_hash', None)
-                        
-                        st.session_state.clear()
-                        st.query_params.clear()
-                        
-                        # Restore
-                        st.session_state.portfolio = saved_port
-                        st.session_state.portfolio_last_refresh = saved_refresh
-                        st.session_state.last_upload_hash = saved_hash
-                        st.session_state.ls_loaded = True
-                        
-                        # Inject strat
-                        st.session_state.ticker = ticker_display
-                        st.session_state.legs = [leg.copy() for leg in strat['legs']]
-                        st.session_state.options_loaded = True
-                        st.session_state.editor_reset = 1
-                        
-                        # Fetch fresh data
-                        source, px, div_data = fetch_data(ticker_display)
-                        if px > 0:
-                            st.session_state.spot_price = px
-                            st.session_state.manual_spot = False
-                        else:
-                            st.session_state.spot_price = strat['spot_at_entry']
-                            st.session_state.manual_spot = True
-                            
-                        st.session_state.div_info = div_data
-                        st.session_state.fetch_time = get_sydney_time()
-                        
-                        data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
-                        st.session_state.ref_data = data
-                        st.session_state.sheet_msg = msg
-                        st.session_state.fwd_spreads = ext_spreads
-                        st.session_state.data_date = d_date
-                        
-                    st.rerun()
-                    
-            with a_c2:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
