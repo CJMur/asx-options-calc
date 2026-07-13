@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.50 (Clear Attribute Fix & Legacy Safety)
+# VERSION: 1.3.51 (Deprecation Fix & Stable Override)
 # ==========================================
 
 import streamlit as st
@@ -526,7 +526,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.50</div>
+            <div class="header-sub">Option Strategy Builder v1.3.51</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -589,7 +589,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", use_container_width=True):
+            if st.button("🔄 RESTART", width='stretch'):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -611,7 +611,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width='stretch')
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -871,7 +871,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", width='stretch'):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -912,7 +912,7 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.preselect_code = None 
                         st.rerun()
                 with b_c2:
-                    if st.button("Clear Selection", use_container_width=True):
+                    if st.button("Clear Selection", width='stretch'):
                         st.session_state.editor_reset += 1
                         st.rerun()
 
@@ -1120,7 +1120,7 @@ if current_view == "🧮 Strategy Builder":
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width='stretch'):
                     st.session_state.legs.pop(i)
                     st.rerun()
                     
@@ -1143,7 +1143,7 @@ if current_view == "🧮 Strategy Builder":
         with s_c1:
             strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
         with s_c2:
-            if st.button("Save Strategy", type="primary", use_container_width=True):
+            if st.button("Save Strategy", type="primary", width='stretch'):
                 st.session_state.portfolio.append({
                     "id": str(uuid.uuid4()),
                     "name": strat_name,
@@ -1373,7 +1373,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
+            if st.button("🔄 Refresh Live Prices", type="primary", width='stretch'):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1393,39 +1393,23 @@ elif current_view == "💼 Portfolio Tracker":
                         _, spot, _ = fetch_data(ticker)
                         strat['current_spot'] = spot if spot > 0 else strat.get('spot_at_entry', 0.0)
                         
-                        contract_multiplier = 10 if ticker == 'XJO' else 100
-                        strat_pnl = 0.0
+                        # Wipe any local override memory for this strategy so it perfectly snaps to the new spot
+                        ovr_key = f"ovr_spot_{strat['id']}"
+                        if ovr_key in st.session_state:
+                            del st.session_state[ovr_key]
                         
+                        # Update dynamic IV
                         for leg in strat['legs']:
-                            exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
-                            time_diff_sec = (exp_dt - refresh_time).total_seconds()
-                            precise_days_diff = max(0.0001, time_diff_sec / 86400.0)
-                            
-                            # --- DYNAMIC IV UPDATE ---
-                            current_vol = leg['Vol'] # Default to entry IV
                             if not data.empty:
                                 match = data[data['Code'] == leg['Code']]
                                 if not match.empty:
-                                    current_vol = float(match.iloc[0]['Vol'])
+                                    leg['Current_Vol'] = float(match.iloc[0]['Vol'])
                             
-                            cur_theo, _ = calculate_price_and_delta(
-                                ticker, leg['Style'], leg['Type'], strat['current_spot'], leg['Strike'], 
-                                precise_days_diff, current_vol, leg['ExpDateStr']
-                            )
-                            leg['Current_Theo'] = cur_theo
-                            leg['Current_Vol'] = current_vol 
-                            
-                            leg_pnl = (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
-                            leg['Live_PnL'] = leg_pnl
-                            strat_pnl += leg_pnl
-                            
-                        strat['Live_PnL'] = strat_pnl
-                        
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_ls_save = True
                     st.rerun()
         else:
-            st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
+            st.button("🔄 Refresh Live Prices", type="primary", width='stretch', disabled=True)
             
     with ctrl_c2:
         if st.session_state.portfolio:
@@ -1449,9 +1433,9 @@ elif current_view == "💼 Portfolio Tracker":
                     })
             df_port = pd.DataFrame(flat_port)
             csv_port = df_port.to_csv(index=False)
-            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", use_container_width=True)
+            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", width='stretch')
         else:
-            st.button("💾 Download Backup (CSV)", disabled=True, use_container_width=True)
+            st.button("💾 Download Backup (CSV)", disabled=True, width='stretch')
             
     with ctrl_c3:
         uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
@@ -1507,58 +1491,71 @@ elif current_view == "💼 Portfolio Tracker":
     # Portfolio Display Engine
     for i, strat in enumerate(st.session_state.portfolio):
         ticker_display = strat.get('ticker', 'Unknown')
+        ovr_key = f"ovr_spot_{strat['id']}"
         
-        pnl_str = ""
-        if 'Live_PnL' in strat:
-            val = strat['Live_PnL']
-            emoji = "🟢" if val >= 0 else "🔴"
-            sign = "+" if val >= 0 else ""
-            pnl_str = f" | {emoji} Open P&L: {sign}${val:,.2f}"
+        # 1. ESTABLISH CURRENT SPOT FOR MATH
+        current_spot_val = st.session_state.get(ovr_key, strat.get('current_spot', strat.get('spot_at_entry', 0.0)))
+        
+        # 2. RUN DYNAMIC MATH FOR THIS STRATEGY
+        max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
+        raw_entry_sum = sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])
+        net_entry_theo = raw_entry_sum / max_qty if max_qty != 0 else 0.0
+        
+        contract_multiplier = 10 if ticker_display == 'XJO' else 100
+        strat_pnl = 0.0
+        ref_time = st.session_state.get('portfolio_last_refresh') or get_sydney_time()
+        
+        display_legs = []
+        net_live_theo_sum = 0.0
+        
+        for leg in strat['legs']:
+            exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+            precise_days_diff = max(0.0001, (exp_dt - ref_time).total_seconds() / 86400.0)
+            
+            cur_vol = leg.get('Current_Vol', leg['Vol'])
+            cur_theo, _ = calculate_price_and_delta(
+                ticker_display, leg['Style'], leg['Type'], current_spot_val, leg['Strike'], 
+                precise_days_diff, cur_vol, leg['ExpDateStr']
+            )
+            
+            leg_pnl = (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
+            strat_pnl += leg_pnl
+            net_live_theo_sum += cur_theo * leg['Qty']
+            
+            row = {
+                "Code": leg['Code'],
+                "Action": "Buy" if leg['Qty'] > 0 else "Sell",
+                "Qty": abs(leg['Qty']),
+                "Type": leg['Type'],
+                "Strike": f"${leg['Strike']:.2f}",
+                "Expiry": leg['ExpDateStr'],
+                "Entry Theo": f"{leg['Entry']:.3f}",
+                "Live Theo": f"{cur_theo:.3f}"
+            }
+            sign = "+" if leg_pnl >= 0 else ""
+            row["Open P&L"] = f"{sign}${leg_pnl:,.2f}"
+            display_legs.append(row)
+            
+        net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
+        
+        # 3. RENDER THE EXPANDER HEADER WITH CALCULATED VALUES
+        emoji = "🟢" if strat_pnl >= 0 else "🔴"
+        sign = "+" if strat_pnl >= 0 else ""
+        pnl_str = f" | {emoji} Open P&L: {sign}${strat_pnl:,.2f}"
             
         with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
+            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1.5, 1])
             
-            max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
-            raw_entry_sum = sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])
-            net_entry_theo = raw_entry_sum / max_qty if max_qty != 0 else 0.0
-            
-            has_live = any('Current_Theo' in leg for leg in strat['legs'])
-            if has_live:
-                raw_live_sum = sum([leg['Qty'] * leg.get('Current_Theo', leg['Entry']) for leg in strat['legs']])
-                net_live_theo = raw_live_sum / max_qty if max_qty != 0 else 0.0
-            
-            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1])
             with c_head1:
-                st.markdown(f"**Spot at Entry:** ${strat.get('spot_at_entry', 0.0):.2f}")
+                st.markdown(f"**Spot at Entry:**<br>${strat.get('spot_at_entry', 0.0):.2f}", unsafe_allow_html=True)
             with c_head2:
-                st.markdown(f"**Net Entry Theo:** {net_entry_theo:.3f}")
+                st.markdown(f"**Net Entry Theo:**<br>{net_entry_theo:.3f}", unsafe_allow_html=True)
             with c_head3:
-                if 'current_spot' in strat:
-                    st.markdown(f"**Current Spot:** ${strat['current_spot']:.2f}")
+                st.number_input("**Override Spot:**", value=float(strat.get('current_spot', strat.get('spot_at_entry', 0.0))), step=0.10, format="%.2f", key=ovr_key)
             with c_head4:
-                if has_live:
-                    st.markdown(f"**Net Live Theo:** {net_live_theo:.3f}")
+                st.markdown(f"**Net Live Theo:**<br>{net_live_theo:.3f}", unsafe_allow_html=True)
             
-            leg_data = []
-            for leg in strat['legs']:
-                row = {
-                    "Code": leg['Code'],
-                    "Action": "Buy" if leg['Qty'] > 0 else "Sell",
-                    "Qty": abs(leg['Qty']),
-                    "Type": leg['Type'],
-                    "Strike": f"${leg['Strike']:.2f}",
-                    "Expiry": leg['ExpDateStr'],
-                    "Entry Theo": f"{leg['Entry']:.3f}"
-                }
-                
-                if 'Current_Theo' in leg:
-                    row["Live Theo"] = f"{leg['Current_Theo']:.3f}"
-                    val = leg['Live_PnL']
-                    sign = "+" if val >= 0 else ""
-                    row["Open P&L"] = f"{sign}${val:,.2f}"
-                    
-                leg_data.append(row)
-                
-            df_display = pd.DataFrame(leg_data)
+            df_display = pd.DataFrame(display_legs)
             
             def color_pnl(val):
                 if isinstance(val, str) and "$" in val:
@@ -1573,7 +1570,7 @@ elif current_view == "💼 Portfolio Tracker":
             
             a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=False):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
@@ -1601,7 +1598,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
                     mx_step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True, key=f"mx_st_{strat['id']}")
                     
-                    spot = strat.get('current_spot', strat.get('spot_at_entry', 0.0))
+                    spot = float(current_spot_val)
                     if mx_step_type == "Percentage (%)":
                         range_opts = [x / 200.0 for x in range(1, 11)]
                         mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%", key=f"mx_sv_{strat['id']}")
