@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.49 (Sanitized Stable Build)
+# VERSION: 1.3.50 (Clear Attribute Fix & Legacy Safety)
 # ==========================================
 
 import streamlit as st
@@ -246,7 +246,6 @@ def fetch_rba_cash_rate():
 
 global_rba_rate = fetch_rba_cash_rate()
 
-# NOTE: Removed @st.cache_data here to prevent OOM memory leak crashes on Railway
 def load_databases(opts_url, fwd_url, cb="default"):
     try:
         live_fwd_url = f"{fwd_url}?cb={cb}"
@@ -527,7 +526,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.49</div>
+            <div class="header-sub">Option Strategy Builder v1.3.50</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1383,7 +1382,6 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.portfolio_last_refresh = refresh_time
                     
                     # --- FETCH FRESH PARQUET DATA ONCE FOR ALL TRADES ---
-                    load_databases.clear() 
                     data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
                     st.session_state.ref_data = data
                     st.session_state.sheet_msg = msg
@@ -1393,7 +1391,7 @@ elif current_view == "💼 Portfolio Tracker":
                     for strat in st.session_state.portfolio:
                         ticker = strat.get('ticker', 'XJO')
                         _, spot, _ = fetch_data(ticker)
-                        strat['current_spot'] = spot if spot > 0 else strat['spot_at_entry']
+                        strat['current_spot'] = spot if spot > 0 else strat.get('spot_at_entry', 0.0)
                         
                         contract_multiplier = 10 if ticker == 'XJO' else 100
                         strat_pnl = 0.0
@@ -1438,7 +1436,7 @@ elif current_view == "💼 Portfolio Tracker":
                         "StrategyID": strat['id'],
                         "StrategyName": strat['name'],
                         "Ticker": strat.get('ticker', 'Unknown'),
-                        "EntrySpot": strat['spot_at_entry'],
+                        "EntrySpot": strat.get('spot_at_entry', 0.0),
                         "LegID": leg['id'],
                         "Qty": leg['Qty'],
                         "Type": leg['Type'],
@@ -1530,7 +1528,7 @@ elif current_view == "💼 Portfolio Tracker":
             
             c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1])
             with c_head1:
-                st.markdown(f"**Spot at Entry:** ${strat['spot_at_entry']:.2f}")
+                st.markdown(f"**Spot at Entry:** ${strat.get('spot_at_entry', 0.0):.2f}")
             with c_head2:
                 st.markdown(f"**Net Entry Theo:** {net_entry_theo:.3f}")
             with c_head3:
@@ -1603,7 +1601,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
                     mx_step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True, key=f"mx_st_{strat['id']}")
                     
-                    spot = strat.get('current_spot', strat['spot_at_entry'])
+                    spot = strat.get('current_spot', strat.get('spot_at_entry', 0.0))
                     if mx_step_type == "Percentage (%)":
                         range_opts = [x / 200.0 for x in range(1, 11)]
                         mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%", key=f"mx_sv_{strat['id']}")
