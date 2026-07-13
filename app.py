@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.46 (Descending Strike Sort)
+# VERSION: 1.3.47 (Spot Price Override)
 # ==========================================
 
 import streamlit as st
@@ -527,7 +527,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.46</div>
+            <div class="header-sub">Option Strategy Builder v1.3.47</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -918,7 +918,7 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.editor_reset += 1
                         st.rerun()
 
-    # --- 10. STRATE ---
+    # --- 10. STRATEGY ---
     if st.session_state.legs:
         st.markdown("---")
         st.subheader("Strategy")
@@ -1520,6 +1520,41 @@ elif current_view == "💼 Portfolio Tracker":
             
         with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
             
+            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1.2, 1])
+            with c_head1:
+                st.markdown(f"**Spot at Entry:**<br>${strat['spot_at_entry']:.2f}", unsafe_allow_html=True)
+            
+            with c_head3:
+                st.markdown("**Live / Override Spot:**")
+                current_s = strat.get('current_spot', strat['spot_at_entry'])
+                new_spot = st.number_input("Override Spot", value=float(current_s), step=0.01, format="%.2f", key=f"spot_{strat['id']}", label_visibility="collapsed")
+                
+                if new_spot != current_s:
+                    strat['current_spot'] = new_spot
+                    contract_multiplier = 10 if ticker_display == 'XJO' else 100
+                    strat_pnl = 0.0
+                    ref_time = st.session_state.get('portfolio_last_refresh') or get_sydney_time()
+                    
+                    for leg in strat['legs']:
+                        exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+                        precise_days_diff = max(0.0001, (exp_dt - ref_time).total_seconds() / 86400.0)
+                        
+                        cur_vol = leg.get('Current_Vol', leg['Vol'])
+                        
+                        cur_theo, _ = calculate_price_and_delta(
+                            ticker_display, leg['Style'], leg['Type'], new_spot, leg['Strike'], 
+                            precise_days_diff, cur_vol, leg['ExpDateStr']
+                        )
+                        leg['Current_Theo'] = cur_theo
+                        
+                        leg_pnl = (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
+                        leg['Live_PnL'] = leg_pnl
+                        strat_pnl += leg_pnl
+                        
+                    strat['Live_PnL'] = strat_pnl
+                    st.session_state.trigger_ls_save = True
+                    st.rerun()
+
             max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
             raw_entry_sum = sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])
             net_entry_theo = raw_entry_sum / max_qty if max_qty != 0 else 0.0
@@ -1528,18 +1563,12 @@ elif current_view == "💼 Portfolio Tracker":
             if has_live:
                 raw_live_sum = sum([leg['Qty'] * leg.get('Current_Theo', leg['Entry']) for leg in strat['legs']])
                 net_live_theo = raw_live_sum / max_qty if max_qty != 0 else 0.0
-            
-            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1])
-            with c_head1:
-                st.markdown(f"**Spot at Entry:** ${strat['spot_at_entry']:.2f}")
+                
             with c_head2:
-                st.markdown(f"**Net Entry Theo:** {net_entry_theo:.3f}")
-            with c_head3:
-                if 'current_spot' in strat:
-                    st.markdown(f"**Current Spot:** ${strat['current_spot']:.2f}")
+                st.markdown(f"**Net Entry Theo:**<br>{net_entry_theo:.3f}", unsafe_allow_html=True)
             with c_head4:
                 if has_live:
-                    st.markdown(f"**Net Live Theo:** {net_live_theo:.3f}")
+                    st.markdown(f"**Net Live Theo:**<br>{net_live_theo:.3f}", unsafe_allow_html=True)
             
             leg_data = []
             for leg in strat['legs']:
