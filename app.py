@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.54 (Silent Logs & Empty Override)
+# VERSION: 1.3.55 (Layout Polish & Color Formatting)
 # ==========================================
 
 import streamlit as st
@@ -526,7 +526,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.54</div>
+            <div class="header-sub">Option Strategy Builder v1.3.55</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1547,13 +1547,13 @@ elif current_view == "💼 Portfolio Tracker":
         # 3. RENDER THE EXPANDER HEADER WITH CALCULATED VALUES
         emoji = "🟢" if strat_pnl >= 0 else "🔴"
         sign = "+" if strat_pnl >= 0 else ""
+        pnl_color = "green" if strat_pnl >= 0 else "red"
         
-        # Elegantly displaying the spot next to PNL
-        pnl_str = f" | Spot: ${current_spot_val:.2f} | {emoji} Open P&L: {sign}${strat_pnl:,.2f}"
+        pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {emoji} Open P&L: :{pnl_color}[{sign}${strat_pnl:,.2f}]"
             
         with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
             
-            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1.2, 1])
+            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1.2])
             with c_head1:
                 st.markdown(f"**Spot at Entry:**")
                 st.markdown(f"${strat.get('spot_at_entry', 0.0):.2f}")
@@ -1561,16 +1561,15 @@ elif current_view == "💼 Portfolio Tracker":
                 st.markdown(f"**Net Entry Theo:**")
                 st.markdown(f"{net_entry_theo:.3f}")
             with c_head3:
-                st.markdown(f"**Override Spot:**")
-                # Defaults to empty unless the user enters a number.
-                new_spot = st.number_input("Override", value=override_val, step=0.10, key=f"ui_{ovr_key}", label_visibility="collapsed", placeholder="Empty = Live")
+                st.markdown(f"**Net Live Theo:**")
+                st.markdown(f"{net_live_theo:.3f}")
+            with c_head4:
+                st.markdown(f"**Spot Price Override:**")
+                new_spot = st.number_input("Override", value=override_val, step=0.10, key=f"ui_{ovr_key}", label_visibility="collapsed", placeholder="Enter price here")
                 
                 if new_spot != override_val:
                     st.session_state[ovr_key] = new_spot
                     st.rerun()
-            with c_head4:
-                st.markdown(f"**Net Live Theo:**")
-                st.markdown(f"{net_live_theo:.3f}")
             
             st.markdown("<br>", unsafe_allow_html=True)
             
