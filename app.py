@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.51 (Deprecation Fix & Stable Override)
+# VERSION: 1.3.55 (Layout Polish & Color Formatting)
 # ==========================================
 
 import streamlit as st
@@ -526,7 +526,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.51</div>
+            <div class="header-sub">Option Strategy Builder v1.3.55</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -833,7 +833,7 @@ if current_view == "🧮 Strategy Builder":
                     "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
                     "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
                 },
-                hide_index=True, use_container_width=True, key=editor_key,
+                hide_index=True, width=3000, key=editor_key,
                 disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
             )
             
@@ -1288,7 +1288,7 @@ if current_view == "🧮 Strategy Builder":
                     styles_df.loc[idx, col] = s
             return styles_df
 
-        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
+        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), width=3000, height=500)
 
         # --- ADVANCED CHARTING ENGINE ---
         st.markdown("### Payoff Chart")
@@ -1363,7 +1363,7 @@ if current_view == "🧮 Strategy Builder":
                 range=[min_pnl - padding, max_pnl + padding]
             )
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width=3000)
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1397,6 +1397,8 @@ elif current_view == "💼 Portfolio Tracker":
                         ovr_key = f"ovr_spot_{strat['id']}"
                         if ovr_key in st.session_state:
                             del st.session_state[ovr_key]
+                        if f"ui_{ovr_key}" in st.session_state:
+                            del st.session_state[f"ui_{ovr_key}"]
                         
                         # Update dynamic IV
                         for leg in strat['legs']:
@@ -1448,7 +1450,7 @@ elif current_view == "💼 Portfolio Tracker":
                     for strat_id, group in df_up.groupby('StrategyID'):
                         strat_name = group['StrategyName'].iloc[0]
                         ticker = group['Ticker'].iloc[0] if 'Ticker' in group.columns else 'Unknown'
-                        entry_spot = group['EntrySpot'].iloc[0]
+                        entry_spot = group['EntrySpot'].iloc[0] if 'EntrySpot' in group.columns else 0.0
                         legs = []
                         for _, row in group.iterrows():
                             legs.append({
@@ -1494,7 +1496,11 @@ elif current_view == "💼 Portfolio Tracker":
         ovr_key = f"ovr_spot_{strat['id']}"
         
         # 1. ESTABLISH CURRENT SPOT FOR MATH
-        current_spot_val = st.session_state.get(ovr_key, strat.get('current_spot', strat.get('spot_at_entry', 0.0)))
+        override_val = st.session_state.get(ovr_key, None)
+        if override_val is not None:
+            current_spot_val = float(override_val)
+        else:
+            current_spot_val = float(strat.get('current_spot', strat.get('spot_at_entry', 0.0)))
         
         # 2. RUN DYNAMIC MATH FOR THIS STRATEGY
         max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
@@ -1541,19 +1547,31 @@ elif current_view == "💼 Portfolio Tracker":
         # 3. RENDER THE EXPANDER HEADER WITH CALCULATED VALUES
         emoji = "🟢" if strat_pnl >= 0 else "🔴"
         sign = "+" if strat_pnl >= 0 else ""
-        pnl_str = f" | {emoji} Open P&L: {sign}${strat_pnl:,.2f}"
+        pnl_color = "green" if strat_pnl >= 0 else "red"
+        
+        pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {emoji} Open P&L: :{pnl_color}[{sign}${strat_pnl:,.2f}]"
             
         with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
-            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1.5, 1])
             
+            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1.2])
             with c_head1:
-                st.markdown(f"**Spot at Entry:**<br>${strat.get('spot_at_entry', 0.0):.2f}", unsafe_allow_html=True)
+                st.markdown(f"**Spot at Entry:**")
+                st.markdown(f"${strat.get('spot_at_entry', 0.0):.2f}")
             with c_head2:
-                st.markdown(f"**Net Entry Theo:**<br>{net_entry_theo:.3f}", unsafe_allow_html=True)
+                st.markdown(f"**Net Entry Theo:**")
+                st.markdown(f"{net_entry_theo:.3f}")
             with c_head3:
-                st.number_input("**Override Spot:**", value=float(strat.get('current_spot', strat.get('spot_at_entry', 0.0))), step=0.10, format="%.2f", key=ovr_key)
+                st.markdown(f"**Net Live Theo:**")
+                st.markdown(f"{net_live_theo:.3f}")
             with c_head4:
-                st.markdown(f"**Net Live Theo:**<br>{net_live_theo:.3f}", unsafe_allow_html=True)
+                st.markdown(f"**Spot Price Override:**")
+                new_spot = st.number_input("Override", value=override_val, step=0.10, key=f"ui_{ovr_key}", label_visibility="collapsed", placeholder="Enter price here")
+                
+                if new_spot != override_val:
+                    st.session_state[ovr_key] = new_spot
+                    st.rerun()
+            
+            st.markdown("<br>", unsafe_allow_html=True)
             
             df_display = pd.DataFrame(display_legs)
             
@@ -1564,9 +1582,9 @@ elif current_view == "💼 Portfolio Tracker":
                 return ''
                 
             if "Open P&L" in df_display.columns:
-                st.dataframe(df_display.style.map(color_pnl, subset=['Open P&L']), hide_index=True, use_container_width=True)
+                st.dataframe(df_display.style.map(color_pnl, subset=['Open P&L']), hide_index=True, width=3000)
             else:
-                st.dataframe(df_display, hide_index=True, use_container_width=True)
+                st.dataframe(df_display, hide_index=True, width=3000)
             
             a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
@@ -1647,7 +1665,7 @@ elif current_view == "💼 Portfolio Tracker":
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), width=3000)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
