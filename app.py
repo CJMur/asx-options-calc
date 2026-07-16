@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.55 (Layout Polish & Color Formatting)
+# VERSION: 1.3.56 (Seamless Load into Builder)
 # ==========================================
 
 import streamlit as st
@@ -168,6 +168,10 @@ if 'portfolio_last_refresh' not in st.session_state: st.session_state.portfolio_
 if 'last_upload_hash' not in st.session_state: st.session_state.last_upload_hash = None
 if 'ls_loaded' not in st.session_state: st.session_state.ls_loaded = False
 if 'trigger_ls_save' not in st.session_state: st.session_state.trigger_ls_save = False
+
+# Navigation binding
+if 'nav_view' not in st.session_state:
+    st.session_state.nav_view = "🧮 Strategy Builder"
 
 # Read Portfolio from Browser Cache on Boot
 if HAS_JS and not st.session_state.ls_loaded:
@@ -526,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.55</div>
+            <div class="header-sub">Option Strategy Builder v1.3.56</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -550,7 +554,8 @@ current_view = st.radio(
     "Navigation", 
     ["🧮 Strategy Builder", "💼 Portfolio Tracker"], 
     horizontal=True, 
-    label_visibility="collapsed"
+    label_visibility="collapsed",
+    key="nav_view"
 )
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
@@ -1586,8 +1591,43 @@ elif current_view == "💼 Portfolio Tracker":
             else:
                 st.dataframe(df_display, hide_index=True, width=3000)
             
-            a_c1, a_c2 = st.columns([1, 5])
+            a_c1, a_c2, a_c3 = st.columns([1.2, 1.2, 5])
             with a_c1:
+                if st.button("📤 Load into Builder", key=f"load_{strat['id']}", width='content'):
+                    with st.spinner("Loading Strategy into Builder..."):
+                        # Surgical State Update
+                        st.session_state.ticker = ticker_display
+                        st.session_state.legs = [leg.copy() for leg in strat['legs']]
+                        st.session_state.options_loaded = True
+                        st.session_state.editor_reset += 1
+                        st.session_state.preselect_code = None
+                        st.session_state.preselect_expiry = None
+                        st.session_state.preselect_strike = None
+                        st.session_state.matrix_vol_mod = 0.0
+                        
+                        source, px, div_data = fetch_data(ticker_display)
+                        if px > 0:
+                            st.session_state.spot_price = px
+                            st.session_state.manual_spot = False
+                        else:
+                            st.session_state.spot_price = strat.get('spot_at_entry', 0.0)
+                            st.session_state.manual_spot = True
+                            
+                        st.session_state.div_info = div_data
+                        st.session_state.fetch_time = get_sydney_time()
+                        
+                        # Background data prep
+                        data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
+                        st.session_state.ref_data = data
+                        st.session_state.sheet_msg = msg
+                        st.session_state.fwd_spreads = ext_spreads
+                        st.session_state.data_date = d_date
+                        
+                        # Programmatically switch tabs via the bound radio key
+                        st.session_state.nav_view = "🧮 Strategy Builder"
+                    st.rerun()
+
+            with a_c2:
                 if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
