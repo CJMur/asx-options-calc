@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.0 (Reverse Toggle Integration)
+# VERSION: 1.4.1 (Toggle Alignment & Widget State Fix)
 # ==========================================
 
 import streamlit as st
@@ -530,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.0</div>
+            <div class="header-sub">Option Strategy Builder v1.4.1</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -928,7 +928,6 @@ if current_view == "🧮 Strategy Builder":
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
         
-        # Widened the Expiry and Strike columns, plus added a Reverse Toggle column
         h_col_spec = [0.7, 0.35, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
         
@@ -1045,9 +1044,10 @@ if current_view == "🧮 Strategy Builder":
                     st.rerun()
                     
             with c[1]:
-                st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("⇌", key=f"rev_{leg['id']}", type="tertiary", use_container_width=True, help="Reverse Buy/Sell"):
                     st.session_state.legs[i]['Qty'] = -st.session_state.legs[i]['Qty']
+                    if f"qty_{leg['id']}" in st.session_state:
+                        st.session_state[f"qty_{leg['id']}"] = -st.session_state[f"qty_{leg['id']}"]
                     st.rerun()
                     
             with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
@@ -1173,7 +1173,6 @@ if current_view == "🧮 Strategy Builder":
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
             with c[11]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[12]:
-                st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                     st.session_state.legs.pop(i)
                     st.rerun()
@@ -1649,9 +1648,10 @@ elif current_view == "💼 Portfolio Tracker":
                     
                 # REVERSE TOGGLE
                 with c[1]:
-                    st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                     if st.button("⇌", key=f"p_rev_{strat['id']}_{j}", type="tertiary", use_container_width=True, help="Reverse Buy/Sell"):
                         strat['legs'][j]['Qty'] = -strat['legs'][j]['Qty']
+                        if f"p_qty_{strat['id']}_{j}" in st.session_state:
+                            st.session_state[f"p_qty_{strat['id']}_{j}"] = -st.session_state[f"p_qty_{strat['id']}_{j}"]
                         st.session_state.trigger_ls_save = True
                         st.rerun()
                     
@@ -1738,7 +1738,6 @@ elif current_view == "💼 Portfolio Tracker":
                 
                 # DELETE LEG
                 with c[10]:
-                    st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                     if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
