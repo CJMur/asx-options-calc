@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.3 (Theme Contrast Polish & Icon Fix)
+# VERSION: 1.4.3 (Typography Color Fix & Softer Matrix Red)
 # ==========================================
 
 import streamlit as st
@@ -596,7 +596,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", use_container_width=True):
+            if st.button("🔄 RESTART", width=3000):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -618,7 +618,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -806,15 +806,15 @@ if current_view == "🧮 Strategy Builder":
                 for col in row.index:
                     s = ""
                     if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
-                        s += "background-color: rgba(16, 185, 129, 0.15); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot:
-                        s += "background-color: rgba(16, 185, 129, 0.15); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.15); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
-                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.2); "
+                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.3); "
                         
                     styles.append(s)
                 return styles
@@ -1034,10 +1034,10 @@ if current_view == "🧮 Strategy Builder":
             total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
-            p_color = '#10b981' if premium >= 0 else '#ef4444'
-            m_color = '#10b981' if row_margin >= 0 else '#ef4444'
+            p_color = '#10b981' if premium >= 0 else '#f87171'
+            m_color = '#10b981' if row_margin >= 0 else '#f87171'
             
-            row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
+            row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.15)"
             
             c = st.columns(h_col_spec)
             
@@ -1057,8 +1057,6 @@ if current_view == "🧮 Strategy Builder":
                 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                     ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
                     temp_sub = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
-                    
-                    # FILTER FOR FUTURE DATES ONLY
                     today_dt = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
                     subset_st = temp_sub[temp_sub['Expiry'] >= today_dt]
                     
@@ -1196,8 +1194,8 @@ if current_view == "🧮 Strategy Builder":
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#10b981' if total_premium >= 0 else '#ef4444'} !important; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#10b981' if total_margin >= 0 else '#ef4444'} !important; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#10b981' if total_premium >= 0 else '#f87171'} !important; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#10b981' if total_margin >= 0 else '#f87171'} !important; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1338,15 +1336,17 @@ if current_view == "🧮 Strategy Builder":
                     s = ""
                     if val > 0:
                         intensity = min(val / abs_max, 1.0)
-                        alpha = 0.05 + 0.35 * intensity
-                        s = f"background-color: rgba(16, 185, 129, {alpha:.2f}); "
+                        alpha = 0.05 + 0.25 * intensity
+                        s = f"background-color: rgba(16, 185, 129, {alpha:.2f}); color: var(--text-color) !important; "
                     elif val < 0:
                         intensity = min(abs(val) / abs_max, 1.0)
-                        alpha = 0.05 + 0.35 * intensity
-                        s = f"background-color: rgba(239, 68, 68, {alpha:.2f}); "
+                        alpha = 0.05 + 0.25 * intensity
+                        s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); color: var(--text-color) !important; "
                     
-                    if is_spot:
+                    if is_spot and val == 0:
                         s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
+                    elif is_spot:
+                        s += "font-weight: bold; border-top: 1px solid rgba(128,128,128,0.3); border-bottom: 1px solid rgba(128,128,128,0.3);"
                         
                     styles_df.loc[idx, col] = s
             return styles_df
@@ -1387,7 +1387,7 @@ if current_view == "🧮 Strategy Builder":
         fig = go.Figure()
         
         fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(16, 185, 129, 0.08)", layer="below", line_width=0)
-        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(239, 68, 68, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
         
         for be in breakevens:
             fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
@@ -1648,7 +1648,7 @@ elif current_view == "💼 Portfolio Tracker":
                 disp_data = display_legs[j]
                 c = st.columns(p_h_col_spec)
                 
-                row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
+                row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.15)"
                 
                 # QTY
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
@@ -1842,8 +1842,25 @@ elif current_view == "💼 Portfolio Tracker":
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
-                        if "SPOT" in str(idx):
-                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(128,128,128,0.15);"
+                        is_spot = "SPOT" in str(idx)
+                        for col in df.columns:
+                            val = df.loc[idx, col]
+                            s = ""
+                            if val > 0:
+                                intensity = min(val / abs_max, 1.0)
+                                alpha = 0.05 + 0.25 * intensity
+                                s = f"background-color: rgba(16, 185, 129, {alpha:.2f}); color: var(--text-color) !important; "
+                            elif val < 0:
+                                intensity = min(abs(val) / abs_max, 1.0)
+                                alpha = 0.05 + 0.25 * intensity
+                                s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); color: var(--text-color) !important; "
+                            
+                            if is_spot and val == 0:
+                                s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
+                            elif is_spot:
+                                s += "font-weight: bold; border-top: 1px solid rgba(128,128,128,0.3); border-bottom: 1px solid rgba(128,128,128,0.3);"
+                                
+                            styles_df.loc[idx, col] = s
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
