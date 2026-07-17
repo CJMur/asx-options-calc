@@ -66,8 +66,6 @@ ASX_NAMES = {
 
 # --- CSS STYLING ---
 st.markdown("""
-# --- CSS STYLING ---
-st.markdown("""
 <style>
     footer {visibility: hidden;}
     div[class^="viewerBadge_container"] {display: none !important;}
