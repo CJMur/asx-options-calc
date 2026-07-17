@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.61 (Restored Inline Portfolio Sandbox)
+# VERSION: 1.3.62 (Margin Fix & Ghost Strike Removal)
 # ==========================================
 
 import streamlit as st
@@ -530,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.61</div>
+            <div class="header-sub">Option Strategy Builder v1.3.62</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -594,7 +594,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", use_container_width=True):
+            if st.button("🔄 RESTART", width=3000):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -616,7 +616,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -659,6 +659,9 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.preselect_strike = None
                         st.session_state.preselect_code = None
 
+            if st.session_state.ticker != ticker_to_fetch:
+                st.session_state.legs = []
+                st.session_state.editor_reset += 1
             st.session_state.ticker = ticker_to_fetch
 
             with st.spinner("Fetching Fresh Market Data..."):
@@ -838,7 +841,7 @@ if current_view == "🧮 Strategy Builder":
                     "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
                     "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
                 },
-                hide_index=True, use_container_width=True, key=editor_key,
+                hide_index=True, width=3000, key=editor_key,
                 disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
             )
             
@@ -876,7 +879,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", width=3000):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -917,7 +920,7 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.preselect_code = None 
                         st.rerun()
                 with b_c2:
-                    if st.button("Clear Selection", use_container_width=True):
+                    if st.button("Clear Selection", width=3000):
                         st.session_state.editor_reset += 1
                         st.rerun()
 
@@ -997,7 +1000,7 @@ if current_view == "🧮 Strategy Builder":
                 total_margin = 0.0
             else:
                 worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-                total_margin = min(0.0, worst_portfolio_loss)
+                total_margin = min(0.0, worst_portfolio_loss) * contract_multiplier
 
         total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -1024,7 +1027,7 @@ if current_view == "🧮 Strategy Builder":
                 row_margin = 0.0
             else:
                 row_risk = leg_risk_arrays[i] * leg['Qty']
-                row_margin = min(0.0, np.min(row_risk)) if len(row_risk) > 0 else 0.0
+                row_margin = min(0.0, np.min(row_risk)) * contract_multiplier if len(row_risk) > 0 else 0.0
             
             total_delta += net_delta
             total_premium += premium
@@ -1107,16 +1110,14 @@ if current_view == "🧮 Strategy Builder":
                 current_strike = float(leg['Strike'])
                 
                 if available_strikes:
-                    closest_strike = min(available_strikes, key=lambda x: abs(x - current_strike))
-                    if abs(closest_strike - current_strike) < 0.01:
-                        current_strike = closest_strike
-                    elif current_strike not in available_strikes:
-                        available_strikes.append(current_strike)
-                        available_strikes = sorted(available_strikes)
+                    if current_strike in available_strikes:
+                        current_idx = available_strikes.index(current_strike)
+                    else:
+                        closest_strike = min(available_strikes, key=lambda x: abs(x - current_strike))
+                        current_idx = available_strikes.index(closest_strike)
                 else:
                     available_strikes = [current_strike]
-                    
-                current_idx = available_strikes.index(current_strike)
+                    current_idx = 0
                 
                 new_strike = st.selectbox(
                     "Strike", 
@@ -1167,7 +1168,7 @@ if current_view == "🧮 Strategy Builder":
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width=3000):
                     st.session_state.legs.pop(i)
                     st.rerun()
                     
@@ -1190,7 +1191,7 @@ if current_view == "🧮 Strategy Builder":
         with s_c1:
             strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
         with s_c2:
-            if st.button("Save Strategy", type="primary", use_container_width=True):
+            if st.button("Save Strategy", type="primary", width=3000):
                 st.session_state.portfolio.append({
                     "id": str(uuid.uuid4()),
                     "name": strat_name,
@@ -1335,7 +1336,7 @@ if current_view == "🧮 Strategy Builder":
                     styles_df.loc[idx, col] = s
             return styles_df
 
-        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
+        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), width=3000, height=500)
 
         # --- ADVANCED CHARTING ENGINE ---
         st.markdown("### Payoff Chart")
@@ -1410,7 +1411,7 @@ if current_view == "🧮 Strategy Builder":
                 range=[min_pnl - padding, max_pnl + padding]
             )
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width=3000)
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1420,7 +1421,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
+            if st.button("🔄 Refresh Live Prices", type="primary", width=3000):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1458,7 +1459,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.trigger_ls_save = True
                     st.rerun()
         else:
-            st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
+            st.button("🔄 Refresh Live Prices", type="primary", width=3000, disabled=True)
             
     with ctrl_c2:
         if st.session_state.portfolio:
@@ -1482,9 +1483,9 @@ elif current_view == "💼 Portfolio Tracker":
                     })
             df_port = pd.DataFrame(flat_port)
             csv_port = df_port.to_csv(index=False)
-            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", use_container_width=True)
+            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", width=3000)
         else:
-            st.button("💾 Download Backup (CSV)", disabled=True, use_container_width=True)
+            st.button("💾 Download Backup (CSV)", disabled=True, width=3000)
             
     with ctrl_c3:
         uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
@@ -1576,9 +1577,17 @@ elif current_view == "💼 Portfolio Tracker":
             net_live_theo_sum += cur_theo * leg['Qty']
             
             row = {
-                "Live Theo": f"{cur_theo:.3f}",
-                "Open P&L": leg_pnl
+                "Code": leg['Code'],
+                "Action": "Buy" if leg['Qty'] > 0 else "Sell",
+                "Qty": abs(leg['Qty']),
+                "Type": leg['Type'],
+                "Strike": f"${leg['Strike']:.2f}",
+                "Expiry": leg['ExpDateStr'],
+                "Entry Theo": f"{leg['Entry']:.3f}",
+                "Live Theo": f"{cur_theo:.3f}"
             }
+            sign = "+" if leg_pnl >= 0 else ""
+            row["Open P&L"] = f"{sign}${leg_pnl:,.2f}"
             display_legs.append(row)
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
@@ -1674,10 +1683,16 @@ elif current_view == "💼 Portfolio Tracker":
                 subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr']] if not subset_st.empty else pd.DataFrame()
                 avail_stk = sorted(subset_exp['Strike'].unique().tolist()) if not subset_exp.empty else []
                 cur_stk = float(leg['Strike'])
-                if cur_stk not in avail_stk:
-                    avail_stk.append(cur_stk)
-                    avail_stk.sort()
-                stk_idx = avail_stk.index(cur_stk)
+                
+                if avail_stk:
+                    if cur_stk in avail_stk:
+                        stk_idx = avail_stk.index(cur_stk)
+                    else:
+                        closest = min(avail_stk, key=lambda x: abs(x - cur_stk))
+                        stk_idx = avail_stk.index(closest)
+                else:
+                    avail_stk = [cur_stk]
+                    stk_idx = 0
                 
                 new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}")
                 
@@ -1710,14 +1725,13 @@ elif current_view == "💼 Portfolio Tracker":
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_color = '#4ade80' if pnl_val >= 0 else '#f87171'
-                sign_str = "+" if pnl_val >= 0 else ""
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_color}; font-weight:600;'>{sign_str}${pnl_val:,.2f}</div>", unsafe_allow_html=True)
+                pnl_color = '#4ade80' if "+" in pnl_val else '#f87171'
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width=3000):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
@@ -1726,7 +1740,7 @@ elif current_view == "💼 Portfolio Tracker":
             
             a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
@@ -1803,7 +1817,7 @@ elif current_view == "💼 Portfolio Tracker":
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), width=3000)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
