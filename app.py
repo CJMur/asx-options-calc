@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.2 (Native Theme Support & Stable Core)
+# VERSION: 1.4.3 (Theme Contrast Polish & Icon Fix)
 # ==========================================
 
 import streamlit as st
@@ -109,8 +109,8 @@ st.markdown("""
     }
     div[data-testid="stButton"] button[kind="tertiary"]:hover {
         opacity: 1;
-        color: #f87171 !important;
-        background-color: rgba(248, 113, 113, 0.1) !important;
+        color: #ef4444 !important;
+        background-color: rgba(239, 68, 68, 0.1) !important;
         border-color: transparent !important;
     }
     
@@ -532,10 +532,10 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.2</div>
+            <div class="header-sub">Option Strategy Builder v1.4.3</div>
         </div>
         <div style="text-align: right;">
-            <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
+            <div class="header-title" style="color: #10b981;">${st.session_state.spot_price:.2f}</div>
             <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
             <span class="status-tag">{mkt_status} | {div_display_txt}</span>
         </div>
@@ -806,15 +806,15 @@ if current_view == "🧮 Strategy Builder":
                 for col in row.index:
                     s = ""
                     if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
-                        s += "background-color: rgba(128,128,128,0.15); "
+                        s += "background-color: rgba(16, 185, 129, 0.15); "
                     elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot:
-                        s += "background-color: rgba(128,128,128,0.15); "
+                        s += "background-color: rgba(16, 185, 129, 0.15); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(128,128,128,0.15); "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
-                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.3); "
+                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.2); "
                         
                     styles.append(s)
                 return styles
@@ -881,7 +881,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -1034,10 +1034,10 @@ if current_view == "🧮 Strategy Builder":
             total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
-            p_color = '#4ade80' if premium >= 0 else '#f87171'
-            m_color = '#4ade80' if row_margin >= 0 else '#f87171'
+            p_color = '#10b981' if premium >= 0 else '#ef4444'
+            m_color = '#10b981' if row_margin >= 0 else '#ef4444'
             
-            row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+            row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
             
             c = st.columns(h_col_spec)
             
@@ -1179,8 +1179,8 @@ if current_view == "🧮 Strategy Builder":
                     
             with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
             with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
-            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
-            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
+            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color} !important; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
+            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color} !important; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
@@ -1196,8 +1196,8 @@ if current_view == "🧮 Strategy Builder":
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#10b981' if total_premium >= 0 else '#ef4444'} !important; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#10b981' if total_margin >= 0 else '#ef4444'} !important; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1339,11 +1339,11 @@ if current_view == "🧮 Strategy Builder":
                     if val > 0:
                         intensity = min(val / abs_max, 1.0)
                         alpha = 0.05 + 0.35 * intensity
-                        s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
+                        s = f"background-color: rgba(16, 185, 129, {alpha:.2f}); "
                     elif val < 0:
                         intensity = min(abs(val) / abs_max, 1.0)
                         alpha = 0.05 + 0.35 * intensity
-                        s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
+                        s = f"background-color: rgba(239, 68, 68, {alpha:.2f}); "
                     
                     if is_spot:
                         s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
@@ -1386,8 +1386,8 @@ if current_view == "🧮 Strategy Builder":
             
         fig = go.Figure()
         
-        fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(74, 222, 128, 0.08)", layer="below", line_width=0)
-        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(16, 185, 129, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(239, 68, 68, 0.08)", layer="below", line_width=0)
         
         for be in breakevens:
             fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
@@ -1648,7 +1648,7 @@ elif current_view == "💼 Portfolio Tracker":
                 disp_data = display_legs[j]
                 c = st.columns(p_h_col_spec)
                 
-                row_bg = "rgba(74, 222, 128, 0.15)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.15)"
+                row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
                 
                 # QTY
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
@@ -1755,8 +1755,8 @@ elif current_view == "💼 Portfolio Tracker":
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_bg_color = '#4ade80' if "+" in pnl_val else '#f87171'
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
+                pnl_bg_color = '#10b981' if "+" in pnl_val else '#ef4444'
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color} !important; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
                 with c[9]:
