@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.62 (Margin Fix & Ghost Strike Removal)
+# VERSION: 1.3.63 (Margin Fix & Clean Expiry/Strike Drops)
 # ==========================================
 
 import streamlit as st
@@ -530,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.62</div>
+            <div class="header-sub">Option Strategy Builder v1.3.63</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1059,11 +1059,21 @@ if current_view == "🧮 Strategy Builder":
                     
                 valid_exps = sorted(subset_st['Expiry'].dropna().unique()) if not subset_st.empty else []
                 exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps]
-                if leg['ExpDateStr'] not in exp_strs:
-                    exp_strs.append(leg['ExpDateStr'])
-                    exp_strs.sort()
+                
+                if exp_strs:
+                    if leg['ExpDateStr'] in exp_strs:
+                        exp_idx = exp_strs.index(leg['ExpDateStr'])
+                    else:
+                        try:
+                            leg_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d")
+                            closest_dt = min(valid_exps, key=lambda x: abs(x - leg_dt))
+                            exp_idx = exp_strs.index(closest_dt.strftime("%Y-%m-%d"))
+                        except:
+                            exp_idx = 0
+                else:
+                    exp_strs = [leg['ExpDateStr']]
+                    exp_idx = 0
                     
-                exp_idx = exp_strs.index(leg['ExpDateStr'])
                 new_exp = st.selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"sb_exp_{leg['id']}", label_visibility="collapsed")
                 
                 if new_exp != leg['ExpDateStr']:
@@ -1168,7 +1178,7 @@ if current_view == "🧮 Strategy Builder":
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width=3000):
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                     st.session_state.legs.pop(i)
                     st.rerun()
                     
@@ -1191,7 +1201,7 @@ if current_view == "🧮 Strategy Builder":
         with s_c1:
             strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
         with s_c2:
-            if st.button("Save Strategy", type="primary", width=3000):
+            if st.button("Save Strategy", type="primary", use_container_width=True):
                 st.session_state.portfolio.append({
                     "id": str(uuid.uuid4()),
                     "name": strat_name,
@@ -1336,7 +1346,7 @@ if current_view == "🧮 Strategy Builder":
                     styles_df.loc[idx, col] = s
             return styles_df
 
-        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), width=3000, height=500)
+        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
 
         # --- ADVANCED CHARTING ENGINE ---
         st.markdown("### Payoff Chart")
@@ -1411,7 +1421,7 @@ if current_view == "🧮 Strategy Builder":
                 range=[min_pnl - padding, max_pnl + padding]
             )
         )
-        st.plotly_chart(fig, width=3000)
+        st.plotly_chart(fig, use_container_width=True)
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1421,7 +1431,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh Live Prices", type="primary", width=3000):
+            if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1459,7 +1469,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.trigger_ls_save = True
                     st.rerun()
         else:
-            st.button("🔄 Refresh Live Prices", type="primary", width=3000, disabled=True)
+            st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
             
     with ctrl_c2:
         if st.session_state.portfolio:
@@ -1483,9 +1493,9 @@ elif current_view == "💼 Portfolio Tracker":
                     })
             df_port = pd.DataFrame(flat_port)
             csv_port = df_port.to_csv(index=False)
-            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", width=3000)
+            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", use_container_width=True)
         else:
-            st.button("💾 Download Backup (CSV)", disabled=True, width=3000)
+            st.button("💾 Download Backup (CSV)", disabled=True, use_container_width=True)
             
     with ctrl_c3:
         uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
@@ -1656,11 +1666,21 @@ elif current_view == "💼 Portfolio Tracker":
                     
                 valid_exps = sorted(subset_st['Expiry'].dropna().unique()) if not subset_st.empty else []
                 exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps]
-                if leg['ExpDateStr'] not in exp_strs:
-                    exp_strs.append(leg['ExpDateStr'])
-                    exp_strs.sort()
+                
+                if exp_strs:
+                    if leg['ExpDateStr'] in exp_strs:
+                        exp_idx = exp_strs.index(leg['ExpDateStr'])
+                    else:
+                        try:
+                            leg_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d")
+                            closest_dt = min(valid_exps, key=lambda x: abs(x - leg_dt))
+                            exp_idx = exp_strs.index(closest_dt.strftime("%Y-%m-%d"))
+                        except:
+                            exp_idx = 0
+                else:
+                    exp_strs = [leg['ExpDateStr']]
+                    exp_idx = 0
                     
-                exp_idx = exp_strs.index(leg['ExpDateStr'])
                 new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed")
                 
                 if new_exp != leg['ExpDateStr']:
@@ -1725,8 +1745,8 @@ elif current_view == "💼 Portfolio Tracker":
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_color = '#4ade80' if "+" in pnl_val else '#f87171'
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
+                pnl_bg_color = '#4ade80' if "+" in pnl_val else '#f87171'
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
                 with c[9]:
