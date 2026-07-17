@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.63 (Margin Fix & Clean Expiry/Strike Drops)
+# VERSION: 1.3.64 (Expiry Filter Fix & Margin Multiplier)
 # ==========================================
 
 import streamlit as st
@@ -530,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.63</div>
+            <div class="header-sub">Option Strategy Builder v1.3.64</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1055,7 +1055,11 @@ if current_view == "🧮 Strategy Builder":
                 subset_st = pd.DataFrame()
                 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                     ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
-                    subset_st = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
+                    temp_sub = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
+                    
+                    # FILTER FOR FUTURE DATES ONLY
+                    today_dt = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
+                    subset_st = temp_sub[temp_sub['Expiry'] >= today_dt]
                     
                 valid_exps = sorted(subset_st['Expiry'].dropna().unique()) if not subset_st.empty else []
                 exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps]
@@ -1178,7 +1182,7 @@ if current_view == "🧮 Strategy Builder":
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width=3000):
                     st.session_state.legs.pop(i)
                     st.rerun()
                     
@@ -1632,7 +1636,7 @@ elif current_view == "💼 Portfolio Tracker":
             st.markdown("<br>", unsafe_allow_html=True)
             
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
-            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
+            p_h_col_spec = [0.8, 1.2, 0.8, 1.5, 1.4, 0.9, 1.1, 1.0, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
             headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
             for col, h in zip(h_cols, headers):
@@ -1662,7 +1666,11 @@ elif current_view == "💼 Portfolio Tracker":
                 subset_st = pd.DataFrame()
                 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                     ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
-                    subset_st = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
+                    temp_sub = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
+                    
+                    # FILTER FOR FUTURE DATES ONLY
+                    today_dt = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
+                    subset_st = temp_sub[temp_sub['Expiry'] >= today_dt]
                     
                 valid_exps = sorted(subset_st['Expiry'].dropna().unique()) if not subset_st.empty else []
                 exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps]
@@ -1751,7 +1759,7 @@ elif current_view == "💼 Portfolio Tracker":
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width=3000):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
@@ -1837,7 +1845,7 @@ elif current_view == "💼 Portfolio Tracker":
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), width=3000)
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
