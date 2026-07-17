@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.59 (Unified Dropdown Engines)
+# VERSION: 1.3.61 (Restored Inline Portfolio Sandbox)
 # ==========================================
 
 import streamlit as st
@@ -168,6 +168,10 @@ if 'portfolio_last_refresh' not in st.session_state: st.session_state.portfolio_
 if 'last_upload_hash' not in st.session_state: st.session_state.last_upload_hash = None
 if 'ls_loaded' not in st.session_state: st.session_state.ls_loaded = False
 if 'trigger_ls_save' not in st.session_state: st.session_state.trigger_ls_save = False
+
+# Navigation binding
+if 'nav_view' not in st.session_state:
+    st.session_state.nav_view = "🧮 Strategy Builder"
 
 # Read Portfolio from Browser Cache on Boot
 if HAS_JS and not st.session_state.ls_loaded:
@@ -526,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.59</div>
+            <div class="header-sub">Option Strategy Builder v1.3.61</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -550,7 +554,8 @@ current_view = st.radio(
     "Navigation", 
     ["🧮 Strategy Builder", "💼 Portfolio Tracker"], 
     horizontal=True, 
-    label_visibility="collapsed"
+    label_visibility="collapsed",
+    key="nav_view"
 )
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
@@ -589,7 +594,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", width=3000):
+            if st.button("🔄 RESTART", use_container_width=True):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -611,7 +616,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -833,7 +838,7 @@ if current_view == "🧮 Strategy Builder":
                     "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
                     "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
                 },
-                hide_index=True, width=3000, key=editor_key,
+                hide_index=True, use_container_width=True, key=editor_key,
                 disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
             )
             
@@ -871,7 +876,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", width=3000):
+                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -912,7 +917,7 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.preselect_code = None 
                         st.rerun()
                 with b_c2:
-                    if st.button("Clear Selection", width=3000):
+                    if st.button("Clear Selection", use_container_width=True):
                         st.session_state.editor_reset += 1
                         st.rerun()
 
@@ -1162,7 +1167,7 @@ if current_view == "🧮 Strategy Builder":
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width=3000):
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                     st.session_state.legs.pop(i)
                     st.rerun()
                     
@@ -1185,7 +1190,7 @@ if current_view == "🧮 Strategy Builder":
         with s_c1:
             strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
         with s_c2:
-            if st.button("Save Strategy", type="primary", width=3000):
+            if st.button("Save Strategy", type="primary", use_container_width=True):
                 st.session_state.portfolio.append({
                     "id": str(uuid.uuid4()),
                     "name": strat_name,
@@ -1330,7 +1335,7 @@ if current_view == "🧮 Strategy Builder":
                     styles_df.loc[idx, col] = s
             return styles_df
 
-        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), width=3000, height=500)
+        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
 
         # --- ADVANCED CHARTING ENGINE ---
         st.markdown("### Payoff Chart")
@@ -1405,7 +1410,7 @@ if current_view == "🧮 Strategy Builder":
                 range=[min_pnl - padding, max_pnl + padding]
             )
         )
-        st.plotly_chart(fig, width=3000)
+        st.plotly_chart(fig, use_container_width=True)
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1415,7 +1420,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh Live Prices", type="primary", width=3000):
+            if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1453,7 +1458,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.trigger_ls_save = True
                     st.rerun()
         else:
-            st.button("🔄 Refresh Live Prices", type="primary", width=3000, disabled=True)
+            st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
             
     with ctrl_c2:
         if st.session_state.portfolio:
@@ -1477,9 +1482,9 @@ elif current_view == "💼 Portfolio Tracker":
                     })
             df_port = pd.DataFrame(flat_port)
             csv_port = df_port.to_csv(index=False)
-            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", width=3000)
+            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", use_container_width=True)
         else:
-            st.button("💾 Download Backup (CSV)", disabled=True, width=3000)
+            st.button("💾 Download Backup (CSV)", disabled=True, use_container_width=True)
             
     with ctrl_c3:
         uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
@@ -1571,17 +1576,9 @@ elif current_view == "💼 Portfolio Tracker":
             net_live_theo_sum += cur_theo * leg['Qty']
             
             row = {
-                "Code": leg['Code'],
-                "Action": "Buy" if leg['Qty'] > 0 else "Sell",
-                "Qty": abs(leg['Qty']),
-                "Type": leg['Type'],
-                "Strike": f"${leg['Strike']:.2f}",
-                "Expiry": leg['ExpDateStr'],
-                "Entry Theo": f"{leg['Entry']:.3f}",
-                "Live Theo": f"{cur_theo:.3f}"
+                "Live Theo": f"{cur_theo:.3f}",
+                "Open P&L": leg_pnl
             }
-            sign = "+" if leg_pnl >= 0 else ""
-            row["Open P&L"] = f"{sign}${leg_pnl:,.2f}"
             display_legs.append(row)
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
@@ -1615,22 +1612,121 @@ elif current_view == "💼 Portfolio Tracker":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            df_display = pd.DataFrame(display_legs)
-            
-            def color_pnl(val):
-                if isinstance(val, str) and "$" in val:
-                    if "+" in val: return 'color: #4ade80; font-weight:bold;'
-                    elif "-" in val: return 'color: #f87171; font-weight:bold;'
-                return ''
+            # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
+            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
+            h_cols = st.columns(p_h_col_spec)
+            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
+            for col, h in zip(h_cols, headers):
+                col.markdown(f'<div class="trade-header">{h}</div>', unsafe_allow_html=True)
+
+            for j, leg in enumerate(strat['legs']):
+                disp_data = display_legs[j]
+                c = st.columns(p_h_col_spec)
                 
-            if "Open P&L" in df_display.columns:
-                st.dataframe(df_display.style.map(color_pnl, subset=['Open P&L']), hide_index=True, width=3000)
-            else:
-                st.dataframe(df_display, hide_index=True, width=3000)
+                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+                
+                # QTY
+                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
+                if new_qty != leg['Qty']:
+                    strat['legs'][j]['Qty'] = new_qty
+                    st.session_state.trigger_ls_save = True
+                    st.rerun()
+                    
+                # CODE
+                c[1].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
+                
+                # TYPE
+                c[2].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
+                
+                # EXPIRY
+                tkr = ticker_display.replace(".AX", "")
+                subset_st = pd.DataFrame()
+                if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
+                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
+                    subset_st = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
+                    
+                valid_exps = sorted(subset_st['Expiry'].dropna().unique()) if not subset_st.empty else []
+                exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps]
+                if leg['ExpDateStr'] not in exp_strs:
+                    exp_strs.append(leg['ExpDateStr'])
+                    exp_strs.sort()
+                    
+                exp_idx = exp_strs.index(leg['ExpDateStr'])
+                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed")
+                
+                if new_exp != leg['ExpDateStr']:
+                    strat['legs'][j]['ExpDateStr'] = new_exp
+                    subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == new_exp]
+                    if not subset_exp.empty:
+                        avail_stk = sorted(subset_exp['Strike'].unique().tolist())
+                        closest = min(avail_stk, key=lambda x: abs(x - float(leg['Strike']))) if avail_stk else float(leg['Strike'])
+                        strat['legs'][j]['Strike'] = float(closest)
+                        
+                        match = subset_exp[subset_exp['Strike'] == closest].sort_values('Code', ascending=False)
+                        if not match.empty:
+                            strat['legs'][j]['Code'] = str(match.iloc[0]['Code'])
+                            strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
+                            strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
+                    st.session_state.trigger_ls_save = True
+                    st.rerun()
+
+                # STRIKE
+                subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr']] if not subset_st.empty else pd.DataFrame()
+                avail_stk = sorted(subset_exp['Strike'].unique().tolist()) if not subset_exp.empty else []
+                cur_stk = float(leg['Strike'])
+                if cur_stk not in avail_stk:
+                    avail_stk.append(cur_stk)
+                    avail_stk.sort()
+                stk_idx = avail_stk.index(cur_stk)
+                
+                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}")
+                
+                if new_stk != cur_stk:
+                    strat['legs'][j]['Strike'] = new_stk
+                    if not subset_exp.empty:
+                        match = subset_exp[subset_exp['Strike'] == new_stk].sort_values('Code', ascending=False)
+                        if not match.empty:
+                            strat['legs'][j]['Code'] = str(match.iloc[0]['Code'])
+                            strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
+                            strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
+                    st.session_state.trigger_ls_save = True
+                    st.rerun()
+
+                # VOL
+                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed")
+                if new_vol != leg['Vol']:
+                    strat['legs'][j]['Vol'] = new_vol
+                    st.session_state.trigger_ls_save = True
+                    st.rerun()
+                    
+                # ENTRY THEO
+                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed")
+                if new_entry != leg['Entry']:
+                    strat['legs'][j]['Entry'] = new_entry
+                    st.session_state.trigger_ls_save = True
+                    st.rerun()
+
+                # LIVE THEO & P&L
+                c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
+                
+                pnl_val = disp_data['Open P&L']
+                pnl_color = '#4ade80' if pnl_val >= 0 else '#f87171'
+                sign_str = "+" if pnl_val >= 0 else ""
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_color}; font-weight:600;'>{sign_str}${pnl_val:,.2f}</div>", unsafe_allow_html=True)
+                
+                # DELETE LEG
+                with c[9]:
+                    st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
+                        strat['legs'].pop(j)
+                        st.session_state.trigger_ls_save = True
+                        st.rerun()
+            
+            st.markdown("<br>", unsafe_allow_html=True)
             
             a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
@@ -1707,7 +1803,7 @@ elif current_view == "💼 Portfolio Tracker":
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), width=3000)
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
