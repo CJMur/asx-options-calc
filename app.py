@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.1 (Stable Core & Native Theme Unlocked)
+# VERSION: 1.4.2 (Native Theme Support & Stable Core)
 # ==========================================
 
 import streamlit as st
@@ -67,7 +67,7 @@ ASX_NAMES = {
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    /* Native Header is left visible so users can access Settings -> Theme */
+    /* Leave header visible for the Settings Menu */
     footer {visibility: hidden;}
     div[class^="viewerBadge_container"] {display: none !important;}
     [data-testid="stDecoration"] {display: none !important;}
@@ -75,14 +75,14 @@ st.markdown("""
     .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
     
     .header-box {
-        padding: 1.5rem; background-color: #0e1b32; border-radius: 10px; color: white;
+        padding: 1.5rem; background-color: var(--secondary-background-color); border-radius: 10px; color: var(--text-color);
         margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         border-bottom: 4px solid #1DBFD2;
     }
     .header-title { font-size: 24px; font-weight: 700; margin: 0; }
     .header-sub { font-size: 14px; opacity: 0.8; margin: 0; }
     .status-tag {
-        background-color: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 4px;
+        background-color: rgba(128,128,128,0.15); padding: 4px 10px; border-radius: 4px;
         font-size: 12px; font-family: monospace;
     }
     
@@ -93,7 +93,7 @@ st.markdown("""
         background-color: #16aebf !important;
     }
     div[data-testid="stButton"] button[kind="secondary"] {
-        border: 1px solid #cbd5e1; font-weight: bold;
+        border: 1px solid rgba(128,128,128,0.3); font-weight: bold;
     }
     
     div[data-testid="stButton"] button[kind="tertiary"] {
@@ -104,8 +104,11 @@ st.markdown("""
         display: flex;
         align-items: center;
         justify-content: center;
+        color: var(--text-color) !important;
+        opacity: 0.6;
     }
     div[data-testid="stButton"] button[kind="tertiary"]:hover {
+        opacity: 1;
         color: #f87171 !important;
         background-color: rgba(248, 113, 113, 0.1) !important;
         border-color: transparent !important;
@@ -114,16 +117,18 @@ st.markdown("""
     div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
     div[role="slider"] { background-color: #0050FF !important; border: none !important; box-shadow: none !important; }
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
+    div[data-testid="stSlider"] p { color: var(--text-color) !important; }
     input[type=range] { accent-color: #0050FF !important; }
     
     [data-testid="stDataFrame"] [aria-selected="true"] > div {
-        background-color: rgba(29, 191, 210, 0.4) !important;
+        background-color: rgba(29, 191, 210, 0.3) !important;
+        color: var(--text-color) !important;
     }
     
     .stDataFrame { border: none !important; }
     .trade-header {
-        font-weight: 700; font-size: 12px; text-transform: uppercase;
-        margin-bottom: 5px; cursor: help; user-select: none; opacity: 0.7;
+        font-weight: 700; color: var(--text-color); opacity: 0.6; font-size: 12px; text-transform: uppercase;
+        margin-bottom: 5px; cursor: help; user-select: none;
     }
     
     .strategy-text { 
@@ -147,7 +152,9 @@ st.markdown("""
         background-color: transparent !important;
     }
     div[data-baseweb="input"] {
+        border: 1px solid rgba(128,128,128,0.3) !important;
         border-radius: 6px !important;
+        background-color: transparent !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -525,7 +532,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.0</div>
+            <div class="header-sub">Option Strategy Builder v1.4.2</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -589,7 +596,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", width=3000):
+            if st.button("🔄 RESTART", use_container_width=True):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -611,7 +618,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -807,7 +814,7 @@ if current_view == "🧮 Strategy Builder":
                         s += "font-weight: bold; background-color: rgba(128,128,128,0.15); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
-                        s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
+                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.3); "
                         
                     styles.append(s)
                 return styles
@@ -1030,7 +1037,7 @@ if current_view == "🧮 Strategy Builder":
             p_color = '#4ade80' if premium >= 0 else '#f87171'
             m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
-            row_bg = "rgba(74, 222, 128, 0.15)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.15)"
+            row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
             c = st.columns(h_col_spec)
             
@@ -1749,12 +1756,12 @@ elif current_view == "💼 Portfolio Tracker":
                 
                 pnl_val = disp_data['Open P&L']
                 pnl_bg_color = '#4ade80' if "+" in pnl_val else '#f87171'
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color} !important; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width=3000):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
