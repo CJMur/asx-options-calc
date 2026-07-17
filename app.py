@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.0 (Adaptive Light/Dark Theme Integration)
+# VERSION: 1.5.0 (Custom Light Mode Engine)
 # ==========================================
 
 import streamlit as st
@@ -76,23 +76,15 @@ st.markdown("""
     .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
     
     .header-box {
-        padding: 1.5rem; 
-        background-color: var(--secondary-background-color); 
-        border-radius: 10px; 
-        color: var(--text-color);
-        margin-bottom: 20px; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        padding: 1.5rem; background-color: #0e1b32; border-radius: 10px; color: white;
+        margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         border-bottom: 4px solid #1DBFD2;
-        border: 1px solid rgba(128,128,128,0.2);
     }
     .header-title { font-size: 24px; font-weight: 700; margin: 0; }
     .header-sub { font-size: 14px; opacity: 0.8; margin: 0; }
     .status-tag {
-        background-color: rgba(128,128,128,0.15); 
-        padding: 4px 10px; 
-        border-radius: 4px;
-        font-size: 12px; 
-        font-family: monospace;
+        background-color: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 4px;
+        font-size: 12px; font-family: monospace;
     }
     
     div[data-testid="stButton"] button[kind="primary"] {
@@ -102,10 +94,7 @@ st.markdown("""
         background-color: #16aebf !important;
     }
     div[data-testid="stButton"] button[kind="secondary"] {
-        background-color: var(--background-color) !important; 
-        color: var(--text-color) !important; 
-        border: 1px solid rgba(128,128,128,0.4); 
-        font-weight: bold;
+        background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1; font-weight: bold;
     }
     
     div[data-testid="stButton"] button[kind="tertiary"] {
@@ -116,11 +105,9 @@ st.markdown("""
         display: flex;
         align-items: center;
         justify-content: center;
-        color: var(--text-color) !important;
-        opacity: 0.6;
+        color: #94a3b8 !important;
     }
     div[data-testid="stButton"] button[kind="tertiary"]:hover {
-        opacity: 1;
         color: #f87171 !important;
         background-color: rgba(248, 113, 113, 0.1) !important;
         border-color: transparent !important;
@@ -129,17 +116,17 @@ st.markdown("""
     div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
     div[role="slider"] { background-color: #0050FF !important; border: none !important; box-shadow: none !important; }
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
-    div[data-testid="stSlider"] p { color: var(--text-color) !important; }
+    div[data-testid="stSlider"] p { color: white !important; }
     input[type=range] { accent-color: #0050FF !important; }
     
     [data-testid="stDataFrame"] [aria-selected="true"] > div {
         background-color: rgba(29, 191, 210, 0.4) !important;
-        color: var(--text-color) !important;
+        color: white !important;
     }
     
     .stDataFrame { border: none !important; }
     .trade-header {
-        font-weight: 700; color: var(--text-color); opacity: 0.6; font-size: 12px; text-transform: uppercase;
+        font-weight: 700; color: #94a3b8; font-size: 12px; text-transform: uppercase;
         margin-bottom: 5px; cursor: help; user-select: none;
     }
     
@@ -164,12 +151,67 @@ st.markdown("""
         background-color: transparent !important;
     }
     div[data-baseweb="input"] {
-        border: 1px solid rgba(128,128,128,0.3) !important;
+        border: 1px solid #334155 !important;
         border-radius: 6px !important;
-        background-color: transparent !important;
     }
 </style>
 """, unsafe_allow_html=True)
+
+# --- LIGHT MODE INJECTION ---
+if st.session_state.get('light_mode', False):
+    st.markdown("""
+    <style>
+        .stApp {
+            background-color: #f8fafc !important;
+        }
+        .stApp, .stApp p, .stApp h1, .stApp h2, .stApp h3, .stApp label, .stMarkdown {
+            color: #0f172a !important;
+        }
+        .header-box {
+            background-color: #ffffff !important;
+            border: 1px solid #cbd5e1 !important;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05) !important;
+        }
+        .status-tag {
+            background-color: #e2e8f0 !important;
+        }
+        .trade-header {
+            color: #64748b !important;
+        }
+        div[data-baseweb="input"] > div, div[data-baseweb="select"] > div {
+            background-color: #ffffff !important;
+            border: 1px solid #cbd5e1 !important;
+        }
+        div[data-baseweb="input"] input, div[data-baseweb="select"] div {
+            color: #0f172a !important;
+        }
+        div[data-testid="stButton"] button[kind="secondary"] {
+            background-color: #ffffff !important;
+            border: 1px solid #cbd5e1 !important;
+            color: #0f172a !important;
+        }
+        [data-testid="stDataFrame"] > div {
+            background-color: #ffffff !important;
+        }
+        [data-testid="stDataFrame"] th {
+            background-color: #f1f5f9 !important;
+            color: #0f172a !important;
+        }
+        [data-testid="stDataFrame"] td {
+            color: #0f172a !important;
+        }
+        [data-testid="stExpander"] {
+            background-color: #ffffff !important;
+            border: 1px solid #cbd5e1 !important;
+        }
+        [data-testid="stExpander"] summary p {
+            color: #0f172a !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    plotly_theme = "plotly_white"
+else:
+    plotly_theme = "plotly_dark"
 
 # --- TIMEZONE UTILITY ---
 def get_sydney_time():
@@ -544,10 +586,10 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.0</div>
+            <div class="header-sub">Option Strategy Builder v1.5.0</div>
         </div>
         <div style="text-align: right;">
-            <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
+            <div class="header-title" style="color: #4ade80 !important;">${st.session_state.spot_price:.2f}</div>
             <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
             <span class="status-tag">{mkt_status} | {div_display_txt}</span>
         </div>
@@ -564,13 +606,19 @@ if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.st
 # 🗂️ PYTHON NAVIGATION ROUTER
 # ==========================================
 
-current_view = st.radio(
-    "Navigation", 
-    ["🧮 Strategy Builder", "💼 Portfolio Tracker"], 
-    horizontal=True, 
-    label_visibility="collapsed",
-    key="nav_view"
-)
+nav_col1, nav_col2 = st.columns([8, 2])
+with nav_col1:
+    current_view = st.radio(
+        "Navigation", 
+        ["🧮 Strategy Builder", "💼 Portfolio Tracker"], 
+        horizontal=True, 
+        label_visibility="collapsed",
+        key="nav_view"
+    )
+with nav_col2:
+    st.write("<div style='height: 5px;'></div>", unsafe_allow_html=True)
+    st.session_state.light_mode = st.toggle("☀️ Light Mode", value=st.session_state.get('light_mode', False))
+
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
 if current_view == "🧮 Strategy Builder":
@@ -1049,7 +1097,7 @@ if current_view == "🧮 Strategy Builder":
             p_color = '#4ade80' if premium >= 0 else '#f87171'
             m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
-            row_bg = "rgba(74, 222, 128, 0.15)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.15)"
+            row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
             c = st.columns(h_col_spec)
             
@@ -1069,8 +1117,6 @@ if current_view == "🧮 Strategy Builder":
                 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                     ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
                     temp_sub = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
-                    
-                    # FILTER FOR FUTURE DATES ONLY
                     today_dt = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
                     subset_st = temp_sub[temp_sub['Expiry'] >= today_dt]
                     
@@ -1191,8 +1237,8 @@ if current_view == "🧮 Strategy Builder":
                     
             with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
             with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
-            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
-            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
+            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color} !important; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
+            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color} !important; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width=3000):
@@ -1208,8 +1254,8 @@ if current_view == "🧮 Strategy Builder":
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'} !important; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'} !important; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1218,7 +1264,7 @@ if current_view == "🧮 Strategy Builder":
         with s_c1:
             strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
         with s_c2:
-            if st.button("Save Strategy", type="primary", use_container_width=True):
+            if st.button("Save Strategy", type="primary", width=3000):
                 st.session_state.portfolio.append({
                     "id": str(uuid.uuid4()),
                     "name": strat_name,
@@ -1358,7 +1404,7 @@ if current_view == "🧮 Strategy Builder":
                         s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
                     
                     if is_spot:
-                        s += "font-weight: bold; "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
                         
                     styles_df.loc[idx, col] = s
             return styles_df
@@ -1429,6 +1475,7 @@ if current_view == "🧮 Strategy Builder":
         
         fig.update_layout(
             height=450, 
+            template=plotly_theme, 
             margin=dict(t=30, b=30),
             xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"),
             yaxis=dict(
@@ -1439,7 +1486,7 @@ if current_view == "🧮 Strategy Builder":
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)'
         )
-        st.plotly_chart(fig, use_container_width=True, theme="streamlit")
+        st.plotly_chart(fig, use_container_width=True)
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1681,8 +1728,6 @@ elif current_view == "💼 Portfolio Tracker":
                 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                     ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
                     temp_sub = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
-                    
-                    # FILTER FOR FUTURE DATES ONLY
                     today_dt = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
                     subset_st = temp_sub[temp_sub['Expiry'] >= today_dt]
                     
@@ -1768,12 +1813,12 @@ elif current_view == "💼 Portfolio Tracker":
                 
                 pnl_val = disp_data['Open P&L']
                 pnl_bg_color = '#4ade80' if "+" in pnl_val else '#f87171'
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color} !important; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width=3000):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
