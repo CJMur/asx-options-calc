@@ -66,9 +66,9 @@ ASX_NAMES = {
 
 # --- CSS STYLING ---
 st.markdown("""
+# --- CSS STYLING ---
+st.markdown("""
 <style>
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
     footer {visibility: hidden;}
     div[class^="viewerBadge_container"] {display: none !important;}
     [data-testid="stDecoration"] {display: none !important;}
