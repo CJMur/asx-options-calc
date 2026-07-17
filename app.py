@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.58 (Dynamic Editable Portfolio)
+# VERSION: 1.3.59 (Unified Dropdown Engines)
 # ==========================================
 
 import streamlit as st
@@ -526,7 +526,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.58</div>
+            <div class="header-sub">Option Strategy Builder v1.3.59</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -923,15 +923,15 @@ if current_view == "🧮 Strategy Builder":
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
         
-        # Widened column specs to match your preferred layout
-        h_col_spec = [0.9, 1.3, 0.6, 0.8, 1.3, 1.7, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
+        # Widened the Expiry and Strike columns so they match visually and prevent cutoffs
+        h_col_spec = [0.9, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
         
         with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
         with cols_header[1]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
         with cols_header[2]: st.markdown('<div class="trade-header" title="American or European">Style</div>', unsafe_allow_html=True)
         with cols_header[3]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
-        with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry">Expiry</div>', unsafe_allow_html=True)
+        with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry (Editable)">Expiry</div>', unsafe_allow_html=True)
         with cols_header[5]: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
         with cols_header[6]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
         with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
@@ -1041,7 +1041,48 @@ if current_view == "🧮 Strategy Builder":
             with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
             with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
             with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
-            with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['ExpDateStr']}</div>", unsafe_allow_html=True)
+            
+            with c[4]: 
+                tkr = st.session_state.ticker.replace(".AX", "")
+                subset_st = pd.DataFrame()
+                if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
+                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
+                    subset_st = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
+                    
+                valid_exps = sorted(subset_st['Expiry'].dropna().unique()) if not subset_st.empty else []
+                exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps]
+                if leg['ExpDateStr'] not in exp_strs:
+                    exp_strs.append(leg['ExpDateStr'])
+                    exp_strs.sort()
+                    
+                exp_idx = exp_strs.index(leg['ExpDateStr'])
+                new_exp = st.selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"sb_exp_{leg['id']}", label_visibility="collapsed")
+                
+                if new_exp != leg['ExpDateStr']:
+                    st.session_state.legs[i]['ExpDateStr'] = new_exp
+                    subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == new_exp]
+                    if not subset_exp.empty:
+                        avail_stk = sorted(subset_exp['Strike'].unique().tolist())
+                        closest = min(avail_stk, key=lambda x: abs(x - float(leg['Strike']))) if avail_stk else float(leg['Strike'])
+                        st.session_state.legs[i]['Strike'] = float(closest)
+                        
+                        match = subset_exp[subset_exp['Strike'] == closest].sort_values('Code', ascending=False)
+                        if not match.empty:
+                            st.session_state.legs[i]['Code'] = str(match.iloc[0]['Code'])
+                            st.session_state.legs[i]['Vol'] = float(match.iloc[0]['Vol'])
+                            st.session_state.legs[i]['Style'] = match.iloc[0].get('Style', 'American')
+                            st.session_state.legs[i]['MarginUnit'] = float(match.iloc[0]['UnitMargin'])
+                            
+                            new_exp_dt = datetime.strptime(new_exp, "%Y-%m-%d").replace(hour=16, minute=0)
+                            rem_days = max(0.0001, (new_exp_dt - st.session_state.get('fetch_time', get_sydney_time())).total_seconds() / 86400.0)
+                            new_entry, _ = calculate_price_and_delta(
+                                st.session_state.ticker, st.session_state.legs[i]['Style'], leg['Type'], 
+                                st.session_state.spot_price, closest, rem_days, st.session_state.legs[i]['Vol'], new_exp
+                            )
+                            st.session_state.legs[i]['Entry'] = new_entry
+                        else:
+                            st.session_state.legs[i]['Code'] = "N/A"
+                    st.rerun()
             
             with c[5]: 
                 subset_st = pd.DataFrame()
@@ -1574,116 +1615,18 @@ elif current_view == "💼 Portfolio Tracker":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
-            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
-            h_cols = st.columns(p_h_col_spec)
-            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
-            for col, h in zip(h_cols, headers):
-                col.markdown(f'<div class="trade-header">{h}</div>', unsafe_allow_html=True)
-
-            for j, leg in enumerate(strat['legs']):
-                disp_data = display_legs[j]
-                c = st.columns(p_h_col_spec)
-                
-                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
-                
-                # QTY
-                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
-                if new_qty != leg['Qty']:
-                    strat['legs'][j]['Qty'] = new_qty
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
-                    
-                # CODE
-                c[1].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
-                
-                # TYPE
-                c[2].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
-                
-                # EXPIRY
-                tkr = ticker_display.replace(".AX", "")
-                subset_st = pd.DataFrame()
-                if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
-                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
-                    subset_st = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type'])]
-                    
-                valid_exps = sorted(subset_st['Expiry'].dropna().unique()) if not subset_st.empty else []
-                exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps]
-                if leg['ExpDateStr'] not in exp_strs:
-                    exp_strs.append(leg['ExpDateStr'])
-                    exp_strs.sort()
-                    
-                exp_idx = exp_strs.index(leg['ExpDateStr'])
-                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed")
-                
-                if new_exp != leg['ExpDateStr']:
-                    strat['legs'][j]['ExpDateStr'] = new_exp
-                    subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == new_exp]
-                    if not subset_exp.empty:
-                        avail_stk = sorted(subset_exp['Strike'].unique().tolist())
-                        closest = min(avail_stk, key=lambda x: abs(x - float(leg['Strike']))) if avail_stk else float(leg['Strike'])
-                        strat['legs'][j]['Strike'] = float(closest)
-                        
-                        match = subset_exp[subset_exp['Strike'] == closest].sort_values('Code', ascending=False)
-                        if not match.empty:
-                            strat['legs'][j]['Code'] = str(match.iloc[0]['Code'])
-                            strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
-                            strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
-
-                # STRIKE
-                subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr']] if not subset_st.empty else pd.DataFrame()
-                avail_stk = sorted(subset_exp['Strike'].unique().tolist()) if not subset_exp.empty else []
-                cur_stk = float(leg['Strike'])
-                if cur_stk not in avail_stk:
-                    avail_stk.append(cur_stk)
-                    avail_stk.sort()
-                stk_idx = avail_stk.index(cur_stk)
-                
-                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}")
-                
-                if new_stk != cur_stk:
-                    strat['legs'][j]['Strike'] = new_stk
-                    if not subset_exp.empty:
-                        match = subset_exp[subset_exp['Strike'] == new_stk].sort_values('Code', ascending=False)
-                        if not match.empty:
-                            strat['legs'][j]['Code'] = str(match.iloc[0]['Code'])
-                            strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
-                            strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
-
-                # VOL
-                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed")
-                if new_vol != leg['Vol']:
-                    strat['legs'][j]['Vol'] = new_vol
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
-                    
-                # ENTRY THEO
-                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed")
-                if new_entry != leg['Entry']:
-                    strat['legs'][j]['Entry'] = new_entry
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
-
-                # LIVE THEO & P&L
-                c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
-                
-                pnl_val = disp_data['Open P&L']
-                pnl_color = '#4ade80' if "+" in pnl_val else '#f87171'
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
-                
-                # DELETE LEG
-                with c[9]:
-                    st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width=3000):
-                        strat['legs'].pop(j)
-                        st.session_state.trigger_ls_save = True
-                        st.rerun()
+            df_display = pd.DataFrame(display_legs)
             
-            st.markdown("<br>", unsafe_allow_html=True)
+            def color_pnl(val):
+                if isinstance(val, str) and "$" in val:
+                    if "+" in val: return 'color: #4ade80; font-weight:bold;'
+                    elif "-" in val: return 'color: #f87171; font-weight:bold;'
+                return ''
+                
+            if "Open P&L" in df_display.columns:
+                st.dataframe(df_display.style.map(color_pnl, subset=['Open P&L']), hide_index=True, width=3000)
+            else:
+                st.dataframe(df_display, hide_index=True, width=3000)
             
             a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
