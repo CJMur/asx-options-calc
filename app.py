@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.61 (Restored Inline Portfolio Sandbox)
+# VERSION: 1.4.0 (Reverse Toggle Integration)
 # ==========================================
 
 import streamlit as st
@@ -530,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.61</div>
+            <div class="header-sub">Option Strategy Builder v1.4.0</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -928,21 +928,22 @@ if current_view == "🧮 Strategy Builder":
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
         
-        # Widened the Expiry and Strike columns so they match visually and prevent cutoffs
-        h_col_spec = [0.9, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
+        # Widened the Expiry and Strike columns, plus added a Reverse Toggle column
+        h_col_spec = [0.7, 0.35, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
         
         with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
-        with cols_header[1]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
-        with cols_header[2]: st.markdown('<div class="trade-header" title="American or European">Style</div>', unsafe_allow_html=True)
-        with cols_header[3]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
-        with cols_header[4]: st.markdown('<div class="trade-header" title="Date of Expiry (Editable)">Expiry</div>', unsafe_allow_html=True)
-        with cols_header[5]: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
-        with cols_header[6]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
-        with cols_header[7]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
-        with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">POS Delta</div>', unsafe_allow_html=True)
-        with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
-        with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
+        with cols_header[1]: st.markdown('<div class="trade-header" title="Reverse Side">+/-</div>', unsafe_allow_html=True)
+        with cols_header[2]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Code"]}">Code</div>', unsafe_allow_html=True)
+        with cols_header[3]: st.markdown('<div class="trade-header" title="American or European">Style</div>', unsafe_allow_html=True)
+        with cols_header[4]: st.markdown('<div class="trade-header" title="Call or Put">Type</div>', unsafe_allow_html=True)
+        with cols_header[5]: st.markdown('<div class="trade-header" title="Date of Expiry (Editable)">Expiry</div>', unsafe_allow_html=True)
+        with cols_header[6]: st.markdown(f'<div class="trade-header" title="Strike Price (Editable)">Strike</div>', unsafe_allow_html=True)
+        with cols_header[7]: st.markdown(f'<div class="trade-header" title="Implied Volatility (Editable)">Vol</div>', unsafe_allow_html=True)
+        with cols_header[8]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Theo"]}">Theo</div>', unsafe_allow_html=True)
+        with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Delta"]}">POS Delta</div>', unsafe_allow_html=True)
+        with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
+        with cols_header[11]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
         
         st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
@@ -1043,11 +1044,17 @@ if current_view == "🧮 Strategy Builder":
                     st.session_state.legs[i]['Qty'] = new_qty
                     st.rerun()
                     
-            with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
-            with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
-            with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
+            with c[1]:
+                st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
+                if st.button("⇌", key=f"rev_{leg['id']}", type="tertiary", use_container_width=True, help="Reverse Buy/Sell"):
+                    st.session_state.legs[i]['Qty'] = -st.session_state.legs[i]['Qty']
+                    st.rerun()
+                    
+            with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
+            with c[3]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
+            with c[4]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
             
-            with c[4]: 
+            with c[5]: 
                 tkr = st.session_state.ticker.replace(".AX", "")
                 subset_st = pd.DataFrame()
                 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
@@ -1089,7 +1096,7 @@ if current_view == "🧮 Strategy Builder":
                             st.session_state.legs[i]['Code'] = "N/A"
                     st.rerun()
             
-            with c[5]: 
+            with c[6]: 
                 subset_st = pd.DataFrame()
                 if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
                     if tkr == 'XJO':
@@ -1150,7 +1157,7 @@ if current_view == "🧮 Strategy Builder":
                             st.session_state.legs[i]['Code'] = "N/A"
                     st.rerun()
                     
-            with c[6]: 
+            with c[7]: 
                 new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"vol_{leg['id']}", label_visibility="collapsed")
                 if new_vol_input != leg['Vol']:
                     st.session_state.legs[i]['Vol'] = new_vol_input
@@ -1161,11 +1168,11 @@ if current_view == "🧮 Strategy Builder":
                     st.session_state.legs[i]['Entry'] = calibrated_theo
                     st.rerun()
                     
-            with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
-            with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
-            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
-            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
-            with c[11]:
+            with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
+            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
+            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
+            with c[11]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
+            with c[12]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                     st.session_state.legs.pop(i)
@@ -1177,11 +1184,11 @@ if current_view == "🧮 Strategy Builder":
 
         with st.container():
             f = st.columns(h_col_spec)
-            with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
-            with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
-            with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+            with f[2]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
+            with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+            with f[11]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1576,9 +1583,17 @@ elif current_view == "💼 Portfolio Tracker":
             net_live_theo_sum += cur_theo * leg['Qty']
             
             row = {
-                "Live Theo": f"{cur_theo:.3f}",
-                "Open P&L": leg_pnl
+                "Code": leg['Code'],
+                "Action": "Buy" if leg['Qty'] > 0 else "Sell",
+                "Qty": abs(leg['Qty']),
+                "Type": leg['Type'],
+                "Strike": f"${leg['Strike']:.2f}",
+                "Expiry": leg['ExpDateStr'],
+                "Entry Theo": f"{leg['Entry']:.3f}",
+                "Live Theo": f"{cur_theo:.3f}"
             }
+            sign = "+" if leg_pnl >= 0 else ""
+            row["Open P&L"] = f"{sign}${leg_pnl:,.2f}"
             display_legs.append(row)
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
@@ -1613,9 +1628,9 @@ elif current_view == "💼 Portfolio Tracker":
             st.markdown("<br>", unsafe_allow_html=True)
             
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
-            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
+            p_h_col_spec = [0.6, 0.3, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
-            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
+            headers = ["Qty", "+/-", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
             for col, h in zip(h_cols, headers):
                 col.markdown(f'<div class="trade-header">{h}</div>', unsafe_allow_html=True)
 
@@ -1632,11 +1647,19 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.trigger_ls_save = True
                     st.rerun()
                     
+                # REVERSE TOGGLE
+                with c[1]:
+                    st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
+                    if st.button("⇌", key=f"p_rev_{strat['id']}_{j}", type="tertiary", use_container_width=True, help="Reverse Buy/Sell"):
+                        strat['legs'][j]['Qty'] = -strat['legs'][j]['Qty']
+                        st.session_state.trigger_ls_save = True
+                        st.rerun()
+                    
                 # CODE
-                c[1].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
+                c[2].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
                 
                 # TYPE
-                c[2].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
+                c[3].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
                 
                 # EXPIRY
                 tkr = ticker_display.replace(".AX", "")
@@ -1652,7 +1675,7 @@ elif current_view == "💼 Portfolio Tracker":
                     exp_strs.sort()
                     
                 exp_idx = exp_strs.index(leg['ExpDateStr'])
-                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed")
+                new_exp = c[4].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed")
                 
                 if new_exp != leg['ExpDateStr']:
                     strat['legs'][j]['ExpDateStr'] = new_exp
@@ -1679,7 +1702,7 @@ elif current_view == "💼 Portfolio Tracker":
                     avail_stk.sort()
                 stk_idx = avail_stk.index(cur_stk)
                 
-                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}")
+                new_stk = c[5].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}")
                 
                 if new_stk != cur_stk:
                     strat['legs'][j]['Strike'] = new_stk
@@ -1693,29 +1716,28 @@ elif current_view == "💼 Portfolio Tracker":
                     st.rerun()
 
                 # VOL
-                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed")
+                new_vol = c[6].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed")
                 if new_vol != leg['Vol']:
                     strat['legs'][j]['Vol'] = new_vol
                     st.session_state.trigger_ls_save = True
                     st.rerun()
                     
                 # ENTRY THEO
-                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed")
+                new_entry = c[7].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed")
                 if new_entry != leg['Entry']:
                     strat['legs'][j]['Entry'] = new_entry
                     st.session_state.trigger_ls_save = True
                     st.rerun()
 
                 # LIVE THEO & P&L
-                c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_color = '#4ade80' if pnl_val >= 0 else '#f87171'
-                sign_str = "+" if pnl_val >= 0 else ""
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_color}; font-weight:600;'>{sign_str}${pnl_val:,.2f}</div>", unsafe_allow_html=True)
+                pnl_bg_color = '#4ade80' if "+" in pnl_val else '#f87171'
+                c[9].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
-                with c[9]:
+                with c[10]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                     if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
                         strat['legs'].pop(j)
