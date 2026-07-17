@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.64 (Expiry Filter Fix & Margin Multiplier)
+# VERSION: 1.4.0 (Adaptive Light/Dark Theme Integration)
 # ==========================================
 
 import streamlit as st
@@ -76,15 +76,23 @@ st.markdown("""
     .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
     
     .header-box {
-        padding: 1.5rem; background-color: #0e1b32; border-radius: 10px; color: white;
-        margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        padding: 1.5rem; 
+        background-color: var(--secondary-background-color); 
+        border-radius: 10px; 
+        color: var(--text-color);
+        margin-bottom: 20px; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         border-bottom: 4px solid #1DBFD2;
+        border: 1px solid rgba(128,128,128,0.2);
     }
     .header-title { font-size: 24px; font-weight: 700; margin: 0; }
     .header-sub { font-size: 14px; opacity: 0.8; margin: 0; }
     .status-tag {
-        background-color: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 4px;
-        font-size: 12px; font-family: monospace;
+        background-color: rgba(128,128,128,0.15); 
+        padding: 4px 10px; 
+        border-radius: 4px;
+        font-size: 12px; 
+        font-family: monospace;
     }
     
     div[data-testid="stButton"] button[kind="primary"] {
@@ -94,7 +102,10 @@ st.markdown("""
         background-color: #16aebf !important;
     }
     div[data-testid="stButton"] button[kind="secondary"] {
-        background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1; font-weight: bold;
+        background-color: var(--background-color) !important; 
+        color: var(--text-color) !important; 
+        border: 1px solid rgba(128,128,128,0.4); 
+        font-weight: bold;
     }
     
     div[data-testid="stButton"] button[kind="tertiary"] {
@@ -105,9 +116,11 @@ st.markdown("""
         display: flex;
         align-items: center;
         justify-content: center;
-        color: #94a3b8 !important;
+        color: var(--text-color) !important;
+        opacity: 0.6;
     }
     div[data-testid="stButton"] button[kind="tertiary"]:hover {
+        opacity: 1;
         color: #f87171 !important;
         background-color: rgba(248, 113, 113, 0.1) !important;
         border-color: transparent !important;
@@ -116,17 +129,17 @@ st.markdown("""
     div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
     div[role="slider"] { background-color: #0050FF !important; border: none !important; box-shadow: none !important; }
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
-    div[data-testid="stSlider"] p { color: white !important; }
+    div[data-testid="stSlider"] p { color: var(--text-color) !important; }
     input[type=range] { accent-color: #0050FF !important; }
     
     [data-testid="stDataFrame"] [aria-selected="true"] > div {
         background-color: rgba(29, 191, 210, 0.4) !important;
-        color: white !important;
+        color: var(--text-color) !important;
     }
     
     .stDataFrame { border: none !important; }
     .trade-header {
-        font-weight: 700; color: #94a3b8; font-size: 12px; text-transform: uppercase;
+        font-weight: 700; color: var(--text-color); opacity: 0.6; font-size: 12px; text-transform: uppercase;
         margin-bottom: 5px; cursor: help; user-select: none;
     }
     
@@ -151,8 +164,9 @@ st.markdown("""
         background-color: transparent !important;
     }
     div[data-baseweb="input"] {
-        border: 1px solid #334155 !important;
+        border: 1px solid rgba(128,128,128,0.3) !important;
         border-radius: 6px !important;
+        background-color: transparent !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -530,7 +544,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.64</div>
+            <div class="header-sub">Option Strategy Builder v1.4.0</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -804,15 +818,15 @@ if current_view == "🧮 Strategy Builder":
                 for col in row.index:
                     s = ""
                     if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
-                        s += "background-color: rgba(74, 222, 128, 0.10); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot:
-                        s += "background-color: rgba(74, 222, 128, 0.10); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(255,255,255,0.05); "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
-                        s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
+                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.2); "
                         
                     styles.append(s)
                 return styles
@@ -931,7 +945,6 @@ if current_view == "🧮 Strategy Builder":
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
         
-        # Widened the Expiry and Strike columns so they match visually and prevent cutoffs
         h_col_spec = [0.9, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
         
@@ -947,7 +960,7 @@ if current_view == "🧮 Strategy Builder":
         with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
         with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
         
-        st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid rgba(128,128,128,0.3);'>", unsafe_allow_html=True)
 
         # TRUE PORTFOLIO MARGIN CALCULATION
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
@@ -1036,7 +1049,7 @@ if current_view == "🧮 Strategy Builder":
             p_color = '#4ade80' if premium >= 0 else '#f87171'
             m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
-            row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+            row_bg = "rgba(74, 222, 128, 0.15)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.15)"
             
             c = st.columns(h_col_spec)
             
@@ -1186,7 +1199,7 @@ if current_view == "🧮 Strategy Builder":
                     st.session_state.legs.pop(i)
                     st.rerun()
                     
-        st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid rgba(128,128,128,0.3);'>", unsafe_allow_html=True)
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
 
@@ -1393,7 +1406,7 @@ if current_view == "🧮 Strategy Builder":
             fig.add_annotation(
                 x=be, y=0, text=f"BE: ${be:.2f}",
                 showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor="#10b981",
-                ax=0, ay=-40, bgcolor="#0f172a", bordercolor="#10b981", font=dict(color="#10b981", size=11)
+                ax=0, ay=-40, bgcolor="rgba(16, 185, 129, 0.1)", bordercolor="#10b981", font=dict(color="#10b981", size=11)
             )
         
         fig.add_trace(go.Scatter(
@@ -1416,16 +1429,17 @@ if current_view == "🧮 Strategy Builder":
         
         fig.update_layout(
             height=450, 
-            template="plotly_white", 
             margin=dict(t=30, b=30),
             xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"),
             yaxis=dict(
                 title="Profit / Loss ($)", tickprefix="$", 
-                zeroline=True, zerolinewidth=2, zerolinecolor='black',
+                zeroline=True, zerolinewidth=2, zerolinecolor='rgba(128,128,128,0.5)',
                 range=[min_pnl - padding, max_pnl + padding]
-            )
+            ),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, theme="streamlit")
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1636,7 +1650,7 @@ elif current_view == "💼 Portfolio Tracker":
             st.markdown("<br>", unsafe_allow_html=True)
             
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
-            p_h_col_spec = [0.8, 1.2, 0.8, 1.5, 1.4, 0.9, 1.1, 1.0, 1.2, 0.4]
+            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
             headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
             for col, h in zip(h_cols, headers):
@@ -1646,7 +1660,7 @@ elif current_view == "💼 Portfolio Tracker":
                 disp_data = display_legs[j]
                 c = st.columns(p_h_col_spec)
                 
-                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+                row_bg = "rgba(74, 222, 128, 0.15)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.15)"
                 
                 # QTY
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
@@ -1841,7 +1855,7 @@ elif current_view == "💼 Portfolio Tracker":
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
                         if "SPOT" in str(idx):
-                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(128,128,128,0.15);"
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
