@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.66 (1.3.64 Baseline + Portfolio Features + Span Color Fix)
+# VERSION: 1.3.67 (Restored Header Menu + Margin Multipliers Verified)
 # ==========================================
 
 import streamlit as st
@@ -68,8 +68,6 @@ ASX_NAMES = {
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
     footer {visibility: hidden;}
     div[class^="viewerBadge_container"] {display: none !important;}
     [data-testid="stDecoration"] {display: none !important;}
@@ -531,7 +529,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.66</div>
+            <div class="header-sub">Option Strategy Builder v1.3.67</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
