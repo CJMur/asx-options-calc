@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.67 (Restored Header Menu + Margin Multipliers Verified)
+# VERSION: 1.3.68 (Binomial American Pricer & Generalized Margin)
 # ==========================================
 
 import streamlit as st
@@ -372,7 +372,7 @@ if st.session_state.ref_data is None:
     st.session_state.fwd_spreads = extracted_spreads
     st.session_state.data_date = d_date
 
-# --- 4. MATH ENGINE (Black '76 & BS) ---
+# --- 4. MATH ENGINE (Black '76, BS, & Binomial Tree) ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
@@ -405,10 +405,42 @@ def black_scholes_european(S, K, T, r, sigma, option_type, q=0.0):
     else:
         return K * math.exp(-r * T) * norm_cdf(-d2) - S * math.exp(-q * T) * norm_cdf(-d1)
 
-def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
-    bs_price = black_scholes_european(S, K, T, r, sigma, option_type, q=0.0)
-    if option_type == 'Call': return bs_price 
-    else: return max(bs_price, max(0, K - S))
+def american_binomial_pricer(S, K, T, r, sigma, option_type, q=0.0, steps=100):
+    if T <= 0:
+        px = max(0, S - K) if option_type == 'Call' else max(0, K - S)
+        delta = 1.0 if (option_type == 'Call' and S > K) else (-1.0 if (option_type == 'Put' and S < K) else 0.0)
+        return px, delta
+    
+    dt = T / steps
+    u = math.exp(sigma * math.sqrt(dt))
+    d = 1.0 / u
+    p = (math.exp((r - q) * dt) - d) / (u - d)
+    
+    asset_prices = S * (u ** np.arange(steps, -1, -1)) * (d ** np.arange(0, steps + 1))
+    
+    if option_type == 'Call':
+        values = np.maximum(0, asset_prices - K)
+    else:
+        values = np.maximum(0, K - asset_prices)
+    
+    discount = math.exp(-r * dt)
+    v_u, v_d = 0.0, 0.0
+    
+    for j in range(steps - 1, -1, -1):
+        asset_prices = S * (u ** np.arange(j, -1, -1)) * (d ** np.arange(0, j + 1))
+        values = discount * (p * values[:-1] + (1 - p) * values[1:])
+        
+        if option_type == 'Call':
+            values = np.maximum(values, asset_prices - K)
+        else:
+            values = np.maximum(values, K - asset_prices)
+            
+        if j == 1:
+            v_u = values[0]
+            v_d = values[1]
+            
+    delta = (v_u - v_d) / (S * u - S * d)
+    return values[0], delta
 
 def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
     if simulated_spot <= 0 or strike <= 0 or time_days < 0:
@@ -421,7 +453,7 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
     try:
         S = float(simulated_spot)
         K = float(strike)
-        v = vol_pct / 100.0
+        v = max(0.0001, vol_pct / 100.0)
         T = time_days / 365.0
         
         if T <= 0.0:
@@ -452,14 +484,13 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
         
         if style.upper() == 'EUROPEAN':
             price = black_scholes_european(S, K, T, r, v, kind, q)
+            d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
+            if kind == 'Call':
+                delta = math.exp(-q * T) * norm_cdf(d1)
+            else:
+                delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
         else:
-            price = bjerksund_stensland_american(S, K, T, r, v, kind)
-            
-        d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
-        if kind == 'Call':
-            delta = math.exp(-q * T) * norm_cdf(d1)
-        else:
-            delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
+            price, delta = american_binomial_pricer(S, K, T, r, v, kind, q, steps=100)
             
         return price, delta
     except: 
@@ -529,7 +560,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.67</div>
+            <div class="header-sub">Option Strategy Builder v1.3.68</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -977,28 +1008,41 @@ if current_view == "🧮 Strategy Builder":
             leg_risk_arrays.append(risk_array)
             portfolio_scenarios += risk_array * leg['Qty']
         
-        # NEW MARGIN LOGIC: Detect covered spreads and apply portfolio risk arrays
+        # NEW MARGIN LOGIC: Generalized covered debit spread detection
         total_margin = 0.0
-        has_short = any(leg['Qty'] < 0 for leg in st.session_state.legs)
+        legs_list = st.session_state.legs
+        has_short = any(leg['Qty'] < 0 for leg in legs_list)
+        is_covered_debit_spread = False
+        
         if has_short:
-            is_covered_debit_spread = False
-            if len(st.session_state.legs) == 2:
-                l1, l2 = st.session_state.legs[0], st.session_state.legs[1]
-                if l1['Type'] == l2['Type'] and l1['ExpDateStr'] == l2['ExpDateStr']:
-                    long_leg = l1 if l1['Qty'] > 0 else (l2 if l2['Qty'] > 0 else None)
-                    short_leg = l1 if l1['Qty'] < 0 else (l2 if l2['Qty'] < 0 else None)
-                    
-                    if long_leg and short_leg and abs(long_leg['Qty']) >= abs(short_leg['Qty']):
-                        if long_leg['Type'] == 'Call' and long_leg['Strike'] <= short_leg['Strike']:
-                            is_covered_debit_spread = True
-                        elif long_leg['Type'] == 'Put' and long_leg['Strike'] >= short_leg['Strike']:
-                            is_covered_debit_spread = True
-                            
-            if is_covered_debit_spread:
-                total_margin = 0.0
-            else:
-                worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-                total_margin = min(0.0, worst_portfolio_loss) * contract_multiplier
+            uncovered_shorts = False
+            available_longs = [{'leg': l, 'rem_qty': l['Qty']} for l in legs_list if l['Qty'] > 0]
+            
+            for s_leg in [l for l in legs_list if l['Qty'] < 0]:
+                short_qty_needed = abs(s_leg['Qty'])
+                for al in available_longs:
+                    l_leg = al['leg']
+                    if al['rem_qty'] > 0 and l_leg['Type'] == s_leg['Type'] and l_leg['ExpDateStr'] == s_leg['ExpDateStr']:
+                        if (s_leg['Type'] == 'Call' and l_leg['Strike'] <= s_leg['Strike']) or \
+                           (s_leg['Type'] == 'Put' and l_leg['Strike'] >= s_leg['Strike']):
+                            cover_amount = min(short_qty_needed, al['rem_qty'])
+                            al['rem_qty'] -= cover_amount
+                            short_qty_needed -= cover_amount
+                            if short_qty_needed == 0:
+                                break
+                if short_qty_needed > 0:
+                    uncovered_shorts = True
+                    break
+            
+            net_premium = sum(-(l['Qty'] * l['Entry']) for l in legs_list)
+            if not uncovered_shorts and net_premium <= 0:
+                is_covered_debit_spread = True
+
+        if is_covered_debit_spread:
+            total_margin = 0.0
+        else:
+            worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
+            total_margin = min(0.0, worst_portfolio_loss) * contract_multiplier
 
         total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -1035,9 +1079,6 @@ if current_view == "🧮 Strategy Builder":
             m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
-            
-            premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
-            margin_str = f"${row_margin:,.2f}" if row_margin >= 0 else f"-${abs(row_margin):,.2f}"
             
             c = st.columns(h_col_spec)
             
@@ -1179,8 +1220,8 @@ if current_view == "🧮 Strategy Builder":
                     
             with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
             with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
-            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{p_color}; font-weight:600;'>{premium_str}</span></div>", unsafe_allow_html=True)
-            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{m_color}; font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
+            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{p_color}; font-weight:600;'>${premium:.2f}</span></div>", unsafe_allow_html=True)
+            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{m_color}; font-weight:600;'>${row_margin:.2f}</span></div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
@@ -1190,8 +1231,6 @@ if current_view == "🧮 Strategy Builder":
         st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
-        tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
-        tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
         
         tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
         tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
@@ -1201,8 +1240,8 @@ if current_view == "🧮 Strategy Builder":
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold'>${total_premium:,.2f}</span></div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold'>${total_margin:,.2f}</span></div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
