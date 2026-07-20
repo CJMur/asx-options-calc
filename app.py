@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.68 (Formatting Restored + Portfolio Features + SPAN Math)
+# VERSION: 1.3.71 (SPAN Multiplier Fix + Zero Decimal Margins + Strike Width)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.68</div>
+            <div class="header-sub">Option Strategy Builder v1.3.71</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -833,12 +833,12 @@ if current_view == "🧮 Strategy Builder":
                 for col in row.index:
                     s = ""
                     if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
-                        s += "background-color: rgba(74, 222, 128, 0.10); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot:
-                        s += "background-color: rgba(74, 222, 128, 0.10); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(255,255,255,0.05); "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
                         s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
@@ -908,7 +908,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -959,9 +959,8 @@ if current_view == "🧮 Strategy Builder":
         st.subheader("Strategy")
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
-        margin_multiplier = 10 if st.session_state.ticker == 'XJO' else 1
         
-        h_col_spec = [0.9, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
+        h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.5, 1.8, 1.0, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
         
         with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
@@ -1007,9 +1006,9 @@ if current_view == "🧮 Strategy Builder":
                 
             leg_risk_arrays.append(risk_array)
             portfolio_scenarios += risk_array * leg['Qty']
-            
+        
         worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-        base_portfolio_risk = abs(min(0.0, worst_portfolio_loss) * margin_multiplier)
+        base_portfolio_risk = abs(min(0.0, worst_portfolio_loss))
         
         total_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in st.session_state.legs)
         total_margin = base_portfolio_risk + (total_premium if total_premium > 0 else 0.0)
@@ -1037,7 +1036,7 @@ if current_view == "🧮 Strategy Builder":
             # Marginal Impact Calculation (Matches Tradefloor rows)
             portfolio_without_leg = portfolio_scenarios - (leg_risk_arrays[i] * leg['Qty'])
             worst_without_leg = np.min(portfolio_without_leg) if len(portfolio_without_leg) > 0 else 0.0
-            base_risk_without = abs(min(0.0, worst_without_leg) * margin_multiplier)
+            base_risk_without = abs(min(0.0, worst_without_leg))
             
             prem_without_leg = total_premium - premium
             margin_without_leg = base_risk_without + (prem_without_leg if prem_without_leg > 0 else 0.0)
@@ -1048,12 +1047,12 @@ if current_view == "🧮 Strategy Builder":
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#4ade80' if premium >= 0 else '#f87171'
-            m_color = '#4ade80' if row_margin >= 0 else '#f87171'
+            m_color = '#4ade80' if row_margin <= 0 else '#f87171'
             
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
             premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
-            margin_str = f"${row_margin:,.2f}" if row_margin >= 0 else f"-${abs(row_margin):,.2f}"
+            margin_str = f"${row_margin:,.0f}" if row_margin >= 0 else f"-${abs(row_margin):,.0f}"
             
             c = st.columns(h_col_spec)
             
@@ -1207,10 +1206,10 @@ if current_view == "🧮 Strategy Builder":
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
         tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
-        tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
+        tot_mar_str = f"${total_margin:,.0f}" if total_margin >= 0 else f"-${abs(total_margin):,.0f}"
         
         tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
-        tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
+        tot_m_color = '#f87171' if total_margin > 0 else '#4ade80'
 
         with st.container():
             f = st.columns(h_col_spec)
@@ -1692,7 +1691,7 @@ elif current_view == "💼 Portfolio Tracker":
                 disp_data = display_legs[j]
                 c = st.columns(p_h_col_spec)
                 
-                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+                row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
                 
                 # QTY
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
