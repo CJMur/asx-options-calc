@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.64 (Expiry Filter Fix & Margin Multiplier)
+# VERSION: 1.4.8 (Stable 1.3.64 Baseline + Portfolio Features + Menu Restored)
 # ==========================================
 
 import streamlit as st
@@ -530,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.64</div>
+            <div class="header-sub">Option Strategy Builder v1.4.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1613,7 +1613,7 @@ elif current_view == "💼 Portfolio Tracker":
         
         pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {emoji} Open P&L: :{pnl_color}[{sign}${strat_pnl:,.2f}]"
             
-        with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
+        with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=True):
             
             c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1.2])
             with c_head1:
