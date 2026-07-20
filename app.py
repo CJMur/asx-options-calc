@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.8 (Expiry-Specific Parity Yield & Raw Margin)
+# VERSION: 1.4.9 (Black-76 Implied Forwards & Absolute Margin)
 # ==========================================
 
 import streamlit as st
@@ -375,8 +375,8 @@ if st.session_state.ref_data is None:
     st.session_state.fwd_spreads = extracted_spreads
     st.session_state.data_date = d_date
 
-# --- PUT-CALL PARITY IMPLIED YIELD CALCULATION ---
-def derive_parity_yield(ticker, spot, ref_db):
+# --- PUT-CALL PARITY IMPLIED FORWARDS (BLACK-76 Engine) ---
+def derive_forward_metrics(ticker, spot, ref_db):
     if ticker == 'XJO' or spot <= 0 or ref_db is None or ref_db.empty:
         return None
     try:
@@ -387,18 +387,20 @@ def derive_parity_yield(ticker, spot, ref_db):
         if subset.empty or 'Settlement' not in subset.columns:
             return None
             
-        yields = {}
+        forwards = {}
         r = global_rba_rate / 100.0
         
         for exp in subset['Expiry'].unique():
             exp_chain = subset[subset['Expiry'] == exp].copy()
-            exp_chain['diff'] = (exp_chain['Strike'] - spot).abs()
-            if exp_chain.empty: continue
+            # Strict European filter to ensure Put-Call Parity holds true
+            eur_chain = exp_chain[exp_chain['Style'] == 'European']
+            if eur_chain.empty: continue
             
-            atm_strike = exp_chain.sort_values('diff').iloc[0]['Strike']
+            eur_chain['diff'] = (eur_chain['Strike'] - spot).abs()
+            atm_strike = eur_chain.sort_values('diff').iloc[0]['Strike']
             
-            atm_c = exp_chain[(exp_chain['Strike'] == atm_strike) & (exp_chain['Type'] == 'Call')]
-            atm_p = exp_chain[(exp_chain['Strike'] == atm_strike) & (exp_chain['Type'] == 'Put')]
+            atm_c = eur_chain[(eur_chain['Strike'] == atm_strike) & (eur_chain['Type'] == 'Call')]
+            atm_p = eur_chain[(eur_chain['Strike'] == atm_strike) & (eur_chain['Type'] == 'Put')]
             
             if not atm_c.empty and not atm_p.empty:
                 c_px = atm_c.iloc[0]['Settlement']
@@ -408,12 +410,11 @@ def derive_parity_yield(ticker, spot, ref_db):
                     T = T_days / 365.0
                     F = atm_strike + (c_px - p_px) * math.exp(r * T)
                     if F > 0:
-                        implied_q = r - (math.log(F / spot) / T)
                         exp_str = pd.to_datetime(exp).strftime("%Y-%m-%d")
-                        yields[exp_str] = max(0.0, min(implied_q, 0.20))
+                        forwards[exp_str] = F
         
-        if yields:
-            return yields
+        if forwards:
+            return forwards
     except:
         pass
     return None
@@ -477,24 +478,27 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
             elif kind == 'Put' and S < K: delta = -1.0
             return price, delta
         
+        F_implied = None
         if is_xjo:
-            style = 'EUROPEAN' 
             if expiry_str_key in st.session_state.fwd_spreads:
-                basis_offset = st.session_state.fwd_spreads[expiry_str_key]
-                simulated_fwd = S + basis_offset
-                price, delta = black_76_futures_model(S, simulated_fwd, K, T, r, v, kind)
-                return price, delta
+                F_implied = S + st.session_state.fwd_spreads[expiry_str_key]
             else:
                 q = 0.04
-        elif st.session_state.div_info:
-            if 'yields' in st.session_state.div_info and expiry_str_key in st.session_state.div_info['yields']:
-                q = st.session_state.div_info['yields'][expiry_str_key]
-            elif 'yield' in st.session_state.div_info:
-                q = st.session_state.div_info['yield']
+        elif st.session_state.div_info and 'forwards' in st.session_state.div_info:
+            if expiry_str_key in st.session_state.div_info['forwards']:
+                F_implied = st.session_state.div_info['forwards'][expiry_str_key]
+        elif st.session_state.div_info and 'yield' in st.session_state.div_info:
+            q = st.session_state.div_info['yield']
         
         if style.upper() == 'EUROPEAN':
-            price = black_scholes_european(S, K, T, r, v, kind, q)
+            if F_implied is not None:
+                price, delta = black_76_futures_model(S, F_implied, K, T, r, v, kind)
+                return price, delta
+            else:
+                price = black_scholes_european(S, K, T, r, v, kind, q)
         else:
+            if F_implied is not None:
+                q = r - (math.log(F_implied / S) / T)
             price = bjerksund_stensland_american(S, K, T, r, v, kind, q)
             
         d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
@@ -563,14 +567,22 @@ def fetch_data(t):
     except: 
         return "ERROR", 0.0, None
 
+# Run Implied Forward Override
+if st.session_state.ref_data is not None and st.session_state.ticker != 'XJO' and st.session_state.spot_price > 0:
+    impl_fwd = derive_forward_metrics(st.session_state.ticker, st.session_state.spot_price, st.session_state.ref_data)
+    if impl_fwd is not None:
+        if st.session_state.div_info is None: st.session_state.div_info = {}
+        st.session_state.div_info['forwards'] = impl_fwd
+        st.session_state.div_info['source'] = 'Market Implied (Black-76)'
+
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
 
 if st.session_state.div_info and st.session_state.ticker != 'XJO':
     source_tag = st.session_state.div_info.get('source', 'Yahoo')
-    if source_tag == 'Market Implied':
-        div_display_txt = f"💰 Yield: Market Implied | {date_status}"
+    if 'Black-76' in source_tag:
+        div_display_txt = f"📈 Model: Implied Parity Forward | {date_status}"
     else:
         div_display_txt = f"💰 {source_tag} Yield: {st.session_state.div_info.get('yield', 0.0)*100:.2f}% | {date_status}"
 else:
@@ -581,7 +593,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.8</div>
+            <div class="header-sub">Option Strategy Builder v1.4.9</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #10b981;">${st.session_state.spot_price:.2f}</div>
@@ -645,7 +657,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", use_container_width=True):
+            if st.button("🔄 RESTART", width=3000):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -667,7 +679,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -739,9 +751,11 @@ if current_view == "🧮 Strategy Builder":
                 st.session_state.data_date = d_date
                 
                 if data is not None and not data.empty and st.session_state.ticker != 'XJO' and st.session_state.spot_price > 0:
-                    impl_y = derive_parity_yield(st.session_state.ticker, st.session_state.spot_price, data)
-                    if impl_y is not None:
-                        st.session_state.div_info = {'yields': impl_y, 'source': 'Market Implied'}
+                    impl_fwd = derive_forward_metrics(st.session_state.ticker, st.session_state.spot_price, data)
+                    if impl_fwd is not None:
+                        if st.session_state.div_info is None: st.session_state.div_info = {}
+                        st.session_state.div_info['forwards'] = impl_fwd
+                        st.session_state.div_info['source'] = 'Market Implied (Black-76)'
                         
                 st.session_state.is_market_open = check_market_hours()
                 st.session_state.options_loaded = True
@@ -1036,9 +1050,8 @@ if current_view == "🧮 Strategy Builder":
             leg_risk_arrays.append(risk_array)
             portfolio_scenarios += risk_array * leg['Qty']
         
-        # NEW MARGIN LOGIC: Sum raw scenario arrays
         worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-        total_margin = min(0.0, worst_portfolio_loss) * margin_multiplier
+        total_margin = abs(min(0.0, worst_portfolio_loss) * margin_multiplier)
 
         total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -1061,20 +1074,23 @@ if current_view == "🧮 Strategy Builder":
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
             # Individual Row Margin Display
-            row_risk = leg_risk_arrays[i] * leg['Qty']
-            row_margin = min(0.0, np.min(row_risk)) * margin_multiplier if len(row_risk) > 0 else 0.0
+            if leg['Qty'] > 0:
+                row_margin = 0.0
+            else:
+                row_risk = leg_risk_arrays[i] * leg['Qty']
+                row_margin = abs(min(0.0, np.min(row_risk)) * margin_multiplier) if len(row_risk) > 0 else 0.0
             
             total_delta += net_delta
             total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#10b981' if premium >= 0 else '#ef4444'
-            m_color = '#10b981' if row_margin >= 0 else '#ef4444'
+            m_color = '#10b981' if row_margin == 0 else '#ef4444'
             
             row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
             
             premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
-            margin_str = f"${row_margin:,.2f}" if row_margin >= 0 else f"-${abs(row_margin):,.2f}"
+            margin_str = f"${row_margin:,.2f}" if row_margin == 0 else f"-${abs(row_margin):,.2f}"
             
             c = st.columns(h_col_spec)
             
@@ -1231,7 +1247,7 @@ if current_view == "🧮 Strategy Builder":
         tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
         
         tot_p_color = '#10b981' if total_premium >= 0 else '#ef4444'
-        tot_m_color = '#10b981' if total_margin >= 0 else '#ef4444'
+        tot_m_color = '#10b981' if total_margin == 0 else '#ef4444'
 
         with st.container():
             f = st.columns(h_col_spec)
