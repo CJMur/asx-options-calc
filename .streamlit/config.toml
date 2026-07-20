@@ -1,3 +1,7 @@
+[theme]
+primaryColor="#1DBFD2"
+base="dark"
+
 [server]
 enableCORS = false
 enableXsrfProtection = false

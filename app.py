@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.4 (Canvas Text Fix & Color Polish)
+# VERSION: 1.3.64 (Expiry Filter Fix & Margin Multiplier)
 # ==========================================
 
 import streamlit as st
@@ -17,7 +17,6 @@ import re
 import json
 import base64
 import io
-import copy
 
 try:
     from streamlit_javascript import st_javascript
@@ -68,7 +67,8 @@ ASX_NAMES = {
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    /* Leave header visible for the Settings Menu */
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
     footer {visibility: hidden;}
     div[class^="viewerBadge_container"] {display: none !important;}
     [data-testid="stDecoration"] {display: none !important;}
@@ -76,14 +76,14 @@ st.markdown("""
     .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
     
     .header-box {
-        padding: 1.5rem; background-color: var(--secondary-background-color); border-radius: 10px; color: var(--text-color);
+        padding: 1.5rem; background-color: #0e1b32; border-radius: 10px; color: white;
         margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         border-bottom: 4px solid #1DBFD2;
     }
     .header-title { font-size: 24px; font-weight: 700; margin: 0; }
     .header-sub { font-size: 14px; opacity: 0.8; margin: 0; }
     .status-tag {
-        background-color: rgba(128,128,128,0.15); padding: 4px 10px; border-radius: 4px;
+        background-color: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 4px;
         font-size: 12px; font-family: monospace;
     }
     
@@ -94,7 +94,7 @@ st.markdown("""
         background-color: #16aebf !important;
     }
     div[data-testid="stButton"] button[kind="secondary"] {
-        border: 1px solid rgba(128,128,128,0.3); font-weight: bold;
+        background-color: #f8fafc !important; color: #334155 !important; border: 1px solid #cbd5e1; font-weight: bold;
     }
     
     div[data-testid="stButton"] button[kind="tertiary"] {
@@ -105,30 +105,28 @@ st.markdown("""
         display: flex;
         align-items: center;
         justify-content: center;
-        color: var(--text-color) !important;
-        opacity: 0.6;
+        color: #94a3b8 !important;
     }
     div[data-testid="stButton"] button[kind="tertiary"]:hover {
-        opacity: 1;
-        color: #ef4444 !important;
-        background-color: rgba(239, 68, 68, 0.1) !important;
+        color: #f87171 !important;
+        background-color: rgba(248, 113, 113, 0.1) !important;
         border-color: transparent !important;
     }
     
     div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
     div[role="slider"] { background-color: #0050FF !important; border: none !important; box-shadow: none !important; }
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
-    div[data-testid="stSlider"] p { color: var(--text-color) !important; }
+    div[data-testid="stSlider"] p { color: white !important; }
     input[type=range] { accent-color: #0050FF !important; }
     
     [data-testid="stDataFrame"] [aria-selected="true"] > div {
-        background-color: rgba(29, 191, 210, 0.3) !important;
-        color: var(--text-color) !important;
+        background-color: rgba(29, 191, 210, 0.4) !important;
+        color: white !important;
     }
     
     .stDataFrame { border: none !important; }
     .trade-header {
-        font-weight: 700; color: var(--text-color); opacity: 0.6; font-size: 12px; text-transform: uppercase;
+        font-weight: 700; color: #94a3b8; font-size: 12px; text-transform: uppercase;
         margin-bottom: 5px; cursor: help; user-select: none;
     }
     
@@ -153,9 +151,8 @@ st.markdown("""
         background-color: transparent !important;
     }
     div[data-baseweb="input"] {
-        border: 1px solid rgba(128,128,128,0.3) !important;
+        border: 1px solid #334155 !important;
         border-radius: 6px !important;
-        background-color: transparent !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -533,7 +530,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.5</div>
+            <div class="header-sub">Option Strategy Builder v1.3.64</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -597,7 +594,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", use_container_width=True):
+            if st.button("🔄 RESTART", width=3000):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -619,7 +616,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -807,15 +804,15 @@ if current_view == "🧮 Strategy Builder":
                 for col in row.index:
                     s = ""
                     if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
-                        s += "background-color: rgba(128,128,128,0.15); "
+                        s += "background-color: rgba(74, 222, 128, 0.10); "
                     elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot:
-                        s += "background-color: rgba(128,128,128,0.15); "
+                        s += "background-color: rgba(74, 222, 128, 0.10); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(128,128,128,0.15); "
+                        s += "font-weight: bold; background-color: rgba(255,255,255,0.05); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
-                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.3); "
+                        s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
                         
                     styles.append(s)
                 return styles
@@ -844,7 +841,7 @@ if current_view == "🧮 Strategy Builder":
                     "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
                     "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
                 },
-                hide_index=True, use_container_width=True, key=editor_key,
+                hide_index=True, width=3000, key=editor_key,
                 disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
             )
             
@@ -882,7 +879,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", width=3000):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -923,7 +920,7 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.preselect_code = None 
                         st.rerun()
                 with b_c2:
-                    if st.button("Clear Selection", use_container_width=True):
+                    if st.button("Clear Selection", width=3000):
                         st.session_state.editor_reset += 1
                         st.rerun()
 
@@ -934,6 +931,7 @@ if current_view == "🧮 Strategy Builder":
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
         
+        # Widened the Expiry and Strike columns so they match visually and prevent cutoffs
         h_col_spec = [0.9, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
         
@@ -949,7 +947,7 @@ if current_view == "🧮 Strategy Builder":
         with cols_header[9]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Premium"]}">Premium</div>', unsafe_allow_html=True)
         with cols_header[10]: st.markdown(f'<div class="trade-header" title="{TOOLTIPS["Margin"]}">Expected Margin</div>', unsafe_allow_html=True)
         
-        st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid rgba(128,128,128,0.3);'>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
         # TRUE PORTFOLIO MARGIN CALCULATION
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
@@ -1039,9 +1037,6 @@ if current_view == "🧮 Strategy Builder":
             m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
-            
-            premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
-            margin_str = f"${row_margin:,.2f}" if row_margin >= 0 else f"-${abs(row_margin):,.2f}"
             
             c = st.columns(h_col_spec)
             
@@ -1183,30 +1178,25 @@ if current_view == "🧮 Strategy Builder":
                     
             with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
             with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
-            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{p_color}; font-weight:600;'>{premium_str}</span></div>", unsafe_allow_html=True)
-            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{m_color}; font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
+            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color}; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
+            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color}; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width=3000):
                     st.session_state.legs.pop(i)
                     st.rerun()
                     
-        st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid rgba(128,128,128,0.3);'>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #1e293b;'>", unsafe_allow_html=True)
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
-        tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
-        tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
-        
-        tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
-        tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
 
         with st.container():
             f = st.columns(h_col_spec)
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_premium >= 0 else '#f87171'}; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#4ade80' if total_margin >= 0 else '#f87171'}; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1347,17 +1337,15 @@ if current_view == "🧮 Strategy Builder":
                     s = ""
                     if val > 0:
                         intensity = min(val / abs_max, 1.0)
-                        alpha = 0.05 + 0.30 * intensity
+                        alpha = 0.05 + 0.35 * intensity
                         s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
                     elif val < 0:
                         intensity = min(abs(val) / abs_max, 1.0)
-                        alpha = 0.05 + 0.30 * intensity
+                        alpha = 0.05 + 0.35 * intensity
                         s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
                     
-                    if is_spot and val == 0:
-                        s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
-                    elif is_spot:
-                        s += "font-weight: bold; border-top: 1px solid rgba(128,128,128,0.3); border-bottom: 1px solid rgba(128,128,128,0.3);"
+                    if is_spot:
+                        s += "font-weight: bold; "
                         
                     styles_df.loc[idx, col] = s
             return styles_df
@@ -1405,7 +1393,7 @@ if current_view == "🧮 Strategy Builder":
             fig.add_annotation(
                 x=be, y=0, text=f"BE: ${be:.2f}",
                 showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor="#10b981",
-                ax=0, ay=-40, bgcolor="rgba(16, 185, 129, 0.1)", bordercolor="#10b981", font=dict(color="#10b981", size=11)
+                ax=0, ay=-40, bgcolor="#0f172a", bordercolor="#10b981", font=dict(color="#10b981", size=11)
             )
         
         fig.add_trace(go.Scatter(
@@ -1428,15 +1416,14 @@ if current_view == "🧮 Strategy Builder":
         
         fig.update_layout(
             height=450, 
+            template="plotly_white", 
             margin=dict(t=30, b=30),
             xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"),
             yaxis=dict(
                 title="Profit / Loss ($)", tickprefix="$", 
-                zeroline=True, zerolinewidth=2, zerolinecolor='rgba(128,128,128,0.5)',
+                zeroline=True, zerolinewidth=2, zerolinecolor='black',
                 range=[min_pnl - padding, max_pnl + padding]
-            ),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)'
+            )
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -1611,9 +1598,10 @@ elif current_view == "💼 Portfolio Tracker":
                 "Strike": f"${leg['Strike']:.2f}",
                 "Expiry": leg['ExpDateStr'],
                 "Entry Theo": f"{leg['Entry']:.3f}",
-                "Live Theo": f"{cur_theo:.3f}",
-                "Open P&L": leg_pnl
+                "Live Theo": f"{cur_theo:.3f}"
             }
+            sign = "+" if leg_pnl >= 0 else ""
+            row["Open P&L"] = f"{sign}${leg_pnl:,.2f}"
             display_legs.append(row)
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
@@ -1627,31 +1615,13 @@ elif current_view == "💼 Portfolio Tracker":
             
         with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
             
-            c_head0, c_head1, c_head2, c_head3, c_head4 = st.columns([1.5, 1, 1, 1, 1.2])
-            with c_head0:
-                st.markdown(f"**Strategy Name:**")
-                new_name = st.text_input("Name", value=strat['name'], key=f"rename_{strat['id']}", label_visibility="collapsed")
-                if new_name != strat['name']:
-                    strat['name'] = new_name
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
+            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1.2])
             with c_head1:
                 st.markdown(f"**Spot at Entry:**")
                 st.markdown(f"${strat.get('spot_at_entry', 0.0):.2f}")
             with c_head2:
                 st.markdown(f"**Net Entry Theo:**")
-                new_net_entry = st.number_input("Net Entry", value=float(net_entry_theo), step=0.01, format="%.3f", key=f"net_entry_{strat['id']}", label_visibility="collapsed")
-                if not math.isclose(new_net_entry, net_entry_theo, abs_tol=1e-5) and max_qty != 0:
-                    diff = new_net_entry - net_entry_theo
-                    total_change = diff * max_qty
-                    num_legs = len(strat['legs'])
-                    if num_legs > 0:
-                        change_per_leg = total_change / num_legs
-                        for l in strat['legs']:
-                            if l['Qty'] != 0:
-                                l['Entry'] += change_per_leg / l['Qty']
-                        st.session_state.trigger_ls_save = True
-                        st.rerun()
+                st.markdown(f"{net_entry_theo:.3f}")
             with c_head3:
                 st.markdown(f"**Net Live Theo:**")
                 st.markdown(f"{net_live_theo:.3f}")
@@ -1666,7 +1636,7 @@ elif current_view == "💼 Portfolio Tracker":
             st.markdown("<br>", unsafe_allow_html=True)
             
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
-            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
+            p_h_col_spec = [0.8, 1.2, 0.8, 1.5, 1.4, 0.9, 1.1, 1.0, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
             headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
             for col, h in zip(h_cols, headers):
@@ -1783,11 +1753,8 @@ elif current_view == "💼 Portfolio Tracker":
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_bg_color = '#4ade80' if pnl_val >= 0 else '#f87171'
-                sign_str = "+" if pnl_val >= 0 else ""
-                
-                pnl_disp = f"${pnl_val:,.2f}" if pnl_val >= 0 else f"-${abs(pnl_val):,.2f}"
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{pnl_bg_color}; font-weight:600;'>{sign_str}{pnl_disp}</span></div>", unsafe_allow_html=True)
+                pnl_bg_color = '#4ade80' if "+" in pnl_val else '#f87171'
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color}; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
                 with c[9]:
@@ -1799,20 +1766,10 @@ elif current_view == "💼 Portfolio Tracker":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
+            a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
                     st.session_state.portfolio.pop(i)
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
-            with a_c2:
-                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
-                    new_strat = copy.deepcopy(strat)
-                    new_strat['id'] = str(uuid.uuid4())
-                    new_strat['name'] = new_strat['name'] + " (Copy)"
-                    for l in new_strat['legs']:
-                        l['id'] = str(uuid.uuid4())
-                    st.session_state.portfolio.insert(i + 1, new_strat)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
 
@@ -1884,7 +1841,7 @@ elif current_view == "💼 Portfolio Tracker":
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
                         if "SPOT" in str(idx):
-                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(128,128,128,0.15);"
+                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
