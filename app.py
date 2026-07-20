@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.9 (Black-76 Implied Forwards & Absolute Margin)
+# VERSION: 1.4.10 (Marginal Impact & Forward Calibration)
 # ==========================================
 
 import streamlit as st
@@ -392,26 +392,34 @@ def derive_forward_metrics(ticker, spot, ref_db):
         
         for exp in subset['Expiry'].unique():
             exp_chain = subset[subset['Expiry'] == exp].copy()
-            # Strict European filter to ensure Put-Call Parity holds true
             eur_chain = exp_chain[exp_chain['Style'] == 'European']
             if eur_chain.empty: continue
             
-            eur_chain['diff'] = (eur_chain['Strike'] - spot).abs()
-            atm_strike = eur_chain.sort_values('diff').iloc[0]['Strike']
+            # Filter out $0.00 settlements to avoid broken math
+            eur_chain = eur_chain[eur_chain['Settlement'] > 0]
+            if eur_chain.empty: continue
             
-            atm_c = eur_chain[(eur_chain['Strike'] == atm_strike) & (eur_chain['Type'] == 'Call')]
-            atm_p = eur_chain[(eur_chain['Strike'] == atm_strike) & (eur_chain['Type'] == 'Put')]
+            calls = eur_chain[eur_chain['Type'] == 'Call']
+            puts = eur_chain[eur_chain['Type'] == 'Put']
             
-            if not atm_c.empty and not atm_p.empty:
-                c_px = atm_c.iloc[0]['Settlement']
-                p_px = atm_p.iloc[0]['Settlement']
-                if c_px > 0 and p_px > 0:
-                    T_days = max(0.0001, (exp - today_dt).total_seconds() / 86400.0)
-                    T = T_days / 365.0
-                    F = atm_strike + (c_px - p_px) * math.exp(r * T)
-                    if F > 0:
-                        exp_str = pd.to_datetime(exp).strftime("%Y-%m-%d")
-                        forwards[exp_str] = F
+            pairs = pd.merge(calls, puts, on='Strike', suffixes=('_C', '_P'))
+            if pairs.empty: continue
+            
+            # Find the pair closest to ATM
+            pairs['diff'] = (pairs['Strike'] - spot).abs()
+            best_pair = pairs.sort_values('diff').iloc[0]
+            
+            c_px = best_pair['Settlement_C']
+            p_px = best_pair['Settlement_P']
+            K = best_pair['Strike']
+            
+            T_days = max(0.0001, (exp - today_dt).total_seconds() / 86400.0)
+            T = T_days / 365.0
+            
+            F = K + (c_px - p_px) * math.exp(r * T)
+            if F > 0:
+                exp_str = pd.to_datetime(exp).strftime("%Y-%m-%d")
+                forwards[exp_str] = F
         
         if forwards:
             return forwards
@@ -593,7 +601,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.9</div>
+            <div class="header-sub">Option Strategy Builder v1.4.10</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #10b981;">${st.session_state.spot_price:.2f}</div>
@@ -1050,10 +1058,17 @@ if current_view == "🧮 Strategy Builder":
             leg_risk_arrays.append(risk_array)
             portfolio_scenarios += risk_array * leg['Qty']
         
+        # Calculate Base Portfolio Risk
         worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-        total_margin = abs(min(0.0, worst_portfolio_loss) * margin_multiplier)
+        base_portfolio_risk = abs(min(0.0, worst_portfolio_loss) * margin_multiplier)
+        
+        # Calculate Total Premium Collected
+        total_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in st.session_state.legs)
+        
+        # Strategy SPAN Margin = Max Loss + Premium Collected
+        total_margin = base_portfolio_risk + (total_premium if total_premium > 0 else 0.0)
 
-        total_delta, total_premium, raw_theo_sum = 0, 0, 0
+        total_delta, raw_theo_sum = 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
         
         for i, leg in enumerate(st.session_state.legs):
@@ -1073,24 +1088,26 @@ if current_view == "🧮 Strategy Builder":
             net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
-            # Individual Row Margin Display
-            if leg['Qty'] > 0:
-                row_margin = 0.0
-            else:
-                row_risk = leg_risk_arrays[i] * leg['Qty']
-                row_margin = abs(min(0.0, np.min(row_risk)) * margin_multiplier) if len(row_risk) > 0 else 0.0
+            # Marginal Impact Calculation
+            portfolio_without_leg = portfolio_scenarios - (leg_risk_arrays[i] * leg['Qty'])
+            worst_without_leg = np.min(portfolio_without_leg) if len(portfolio_without_leg) > 0 else 0.0
+            base_risk_without = abs(min(0.0, worst_without_leg) * margin_multiplier)
+            
+            prem_without_leg = total_premium - premium
+            margin_without_leg = base_risk_without + (prem_without_leg if prem_without_leg > 0 else 0.0)
+            
+            row_margin = total_margin - margin_without_leg
             
             total_delta += net_delta
-            total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#10b981' if premium >= 0 else '#ef4444'
-            m_color = '#10b981' if row_margin == 0 else '#ef4444'
+            m_color = '#10b981' if row_margin <= 0 else '#ef4444'
             
             row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
             
             premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
-            margin_str = f"${row_margin:,.2f}" if row_margin == 0 else f"-${abs(row_margin):,.2f}"
+            margin_str = f"${row_margin:,.2f}" if row_margin >= 0 else f"-${abs(row_margin):,.2f}"
             
             c = st.columns(h_col_spec)
             
@@ -1244,10 +1261,10 @@ if current_view == "🧮 Strategy Builder":
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
         tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
-        tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
+        tot_mar_str = f"${total_margin:,.2f}"
         
         tot_p_color = '#10b981' if total_premium >= 0 else '#ef4444'
-        tot_m_color = '#10b981' if total_margin == 0 else '#ef4444'
+        tot_m_color = '#ef4444' if total_margin > 0 else '#10b981'
 
         with st.container():
             f = st.columns(h_col_spec)
@@ -1817,7 +1834,7 @@ elif current_view == "💼 Portfolio Tracker":
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_bg_color = '#10b981' if "+" in pnl_val else '#ef4444'
+                pnl_bg_color = '#10b981' if pnl_val >= 0 else '#ef4444'
                 sign_str = "+" if pnl_val >= 0 else ""
                 
                 pnl_disp = f"${pnl_val:,.2f}" if pnl_val >= 0 else f"-${abs(pnl_val):,.2f}"
