@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.11 (Dynamic Parity Yields & Isolated Margins)
+# VERSION: 1.4.4 (Canvas Text Fix & Color Polish)
 # ==========================================
 
 import streamlit as st
@@ -375,61 +375,6 @@ if st.session_state.ref_data is None:
     st.session_state.fwd_spreads = extracted_spreads
     st.session_state.data_date = d_date
 
-# --- PUT-CALL PARITY IMPLIED YIELDS ---
-def derive_implied_yields(ticker, spot, ref_db):
-    if ticker == 'XJO' or spot <= 0 or ref_db is None or ref_db.empty:
-        return None
-    try:
-        tkr = ticker.replace(".AX", "")
-        subset = ref_db[ref_db['Ticker'] == tkr]
-        today_dt = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
-        subset = subset[subset['Expiry'] >= today_dt]
-        if subset.empty or 'Settlement' not in subset.columns:
-            return None
-            
-        yields = {}
-        r = global_rba_rate / 100.0
-        
-        for exp in subset['Expiry'].unique():
-            exp_chain = subset[subset['Expiry'] == exp].copy()
-            # Strict European filter to ensure Put-Call Parity holds true
-            eur_chain = exp_chain[exp_chain['Style'] == 'European']
-            if eur_chain.empty: continue
-            
-            # Filter out zero settlements (dead strikes)
-            eur_chain = eur_chain[eur_chain['Settlement'] > 0]
-            if eur_chain.empty: continue
-            
-            calls = eur_chain[eur_chain['Type'] == 'Call']
-            puts = eur_chain[eur_chain['Type'] == 'Put']
-            
-            pairs = pd.merge(calls, puts, on='Strike', suffixes=('_C', '_P'))
-            if pairs.empty: continue
-            
-            # Find pair closest to ATM to minimize skew distortion
-            pairs['diff'] = (pairs['Strike'] - spot).abs()
-            best_pair = pairs.sort_values('diff').iloc[0]
-            
-            c_px = best_pair['Settlement_C']
-            p_px = best_pair['Settlement_P']
-            K = best_pair['Strike']
-            
-            T_days = max(0.0001, (exp - today_dt).total_seconds() / 86400.0)
-            T = T_days / 365.0
-            
-            F = K + (c_px - p_px) * math.exp(r * T)
-            if F > 0:
-                implied_q = r - (math.log(F / spot) / T)
-                exp_str = pd.to_datetime(exp).strftime("%Y-%m-%d")
-                # Clamp yield to logical bounds (-20% to 20%) to protect BS equations
-                yields[exp_str] = max(-0.20, min(implied_q, 0.20))
-        
-        if yields:
-            return yields
-    except:
-        pass
-    return None
-
 # --- 4. MATH ENGINE (Black '76 & BS) ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
@@ -463,8 +408,8 @@ def black_scholes_european(S, K, T, r, sigma, option_type, q=0.0):
     else:
         return K * math.exp(-r * T) * norm_cdf(-d2) - S * math.exp(-q * T) * norm_cdf(-d1)
 
-def bjerksund_stensland_american(S, K, T, r, sigma, option_type, q=0.0):
-    bs_price = black_scholes_european(S, K, T, r, sigma, option_type, q=q)
+def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
+    bs_price = black_scholes_european(S, K, T, r, sigma, option_type, q=0.0)
     if option_type == 'Call': return bs_price 
     else: return max(bs_price, max(0, K - S))
 
@@ -498,18 +443,20 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
                 return price, delta
             else:
                 q = 0.04
-        elif st.session_state.div_info and 'yields' in st.session_state.div_info:
-            if expiry_str_key in st.session_state.div_info['yields']:
-                q = st.session_state.div_info['yields'][expiry_str_key]
-            elif 'yield' in st.session_state.div_info:
-                q = st.session_state.div_info['yield']
-        elif st.session_state.div_info and 'yield' in st.session_state.div_info:
-            q = st.session_state.div_info['yield']
+        elif st.session_state.div_info:
+            d_info = st.session_state.div_info
+            if d_info['amount'] > 0 and d_info['date']:
+                eval_time = st.session_state.get('fetch_time', get_sydney_time())
+                days_to_div = (d_info['date'] - eval_time).days
+                if 0 <= days_to_div < time_days:
+                    t_div = days_to_div / 365.0
+                    div_pv = d_info['amount'] * math.exp(-r * t_div)
+                    S = max(0.01, S - div_pv)
         
         if style.upper() == 'EUROPEAN':
             price = black_scholes_european(S, K, T, r, v, kind, q)
         else:
-            price = bjerksund_stensland_american(S, K, T, r, v, kind, q)
+            price = bjerksund_stensland_american(S, K, T, r, v, kind)
             
         d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
         if kind == 'Call':
@@ -538,18 +485,13 @@ def fetch_data(t):
         spot = st.session_state.spot_price
         try:
             info = yf.Ticker(sym).info
-            div_yield = info.get('dividendYield', 0.0)
-            if not div_yield:
-                div_rate = info.get('dividendRate', 0.0)
-                div_yield = (div_rate / spot) if spot > 0 else 0.0
-            
-            if div_yield > 1.0:
-                div_yield = div_yield / 100.0
-            div_yield = min(float(div_yield), 0.20)
-            
-            div_info = {'yield': float(div_yield)}
-        except:
-            div_info = {'yield': 0.0}
+            if 'exDividendDate' in info and info['exDividendDate']:
+                ex_ts = info['exDividendDate']
+                if isinstance(ex_ts, (int, float)):
+                    ex_date = datetime.fromtimestamp(ex_ts)
+                    amt = info.get('lastDividendValue', info.get('dividendRate', 0)/2)
+                    if ex_date > get_sydney_time(): div_info = {'amount': amt, 'date': ex_date}
+        except: pass
         return "MANUAL", spot, div_info
 
     try:
@@ -563,38 +505,25 @@ def fetch_data(t):
             if not hist.empty: 
                 spot = float(hist['Close'].iloc[-1])
             
-        div_yield = info.get('dividendYield', 0.0)
-        if not div_yield:
-            div_rate = info.get('dividendRate', 0.0)
-            div_yield = (div_rate / spot) if spot > 0 else 0.0
-            
-        if div_yield > 1.0:
-            div_yield = div_yield / 100.0
-        div_yield = min(float(div_yield), 0.20)
-            
-        div_info = {'yield': float(div_yield)}
+        if 'exDividendDate' in info and info['exDividendDate']:
+            ex_ts = info['exDividendDate']
+            if isinstance(ex_ts, (int, float)):
+                ex_date = datetime.fromtimestamp(ex_ts)
+                if ex_date > get_sydney_time():
+                    amt = info.get('lastDividendValue', 0)
+                    if amt == 0: amt = info.get('dividendRate', 0) / 2
+                    div_info = {'amount': amt, 'date': ex_date}
+                    
         return "YAHOO", spot, div_info
     except: 
         return "ERROR", 0.0, None
-
-# Run Implied Yield Override
-if st.session_state.ref_data is not None and st.session_state.ticker != 'XJO' and st.session_state.spot_price > 0:
-    impl_y = derive_implied_yields(st.session_state.ticker, st.session_state.spot_price, st.session_state.ref_data)
-    if impl_y is not None:
-        if st.session_state.div_info is None: st.session_state.div_info = {}
-        st.session_state.div_info['yields'] = impl_y
-        st.session_state.div_info['source'] = 'Market Implied'
 
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
 
 if st.session_state.div_info and st.session_state.ticker != 'XJO':
-    source_tag = st.session_state.div_info.get('source', 'Yahoo')
-    if source_tag == 'Market Implied':
-        div_display_txt = f"📈 Model: Parity-Implied Dynamic Yield | {date_status}"
-    else:
-        div_display_txt = f"💰 {source_tag} Yield: {st.session_state.div_info.get('yield', 0.0)*100:.2f}% | {date_status}"
+    div_display_txt = f"💰 Auto Div: ${st.session_state.div_info['amount']:.2f} | {date_status}"
 else:
     div_display_txt = f"{date_status}"
 
@@ -603,10 +532,10 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.11</div>
+            <div class="header-sub">Option Strategy Builder v1.4.4</div>
         </div>
         <div style="text-align: right;">
-            <div class="header-title" style="color: #10b981;">${st.session_state.spot_price:.2f}</div>
+            <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
             <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
             <span class="status-tag">{mkt_status} | {div_display_txt}</span>
         </div>
@@ -667,7 +596,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", width=3000):
+            if st.button("🔄 RESTART", use_container_width=True):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -689,7 +618,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -759,14 +688,6 @@ if current_view == "🧮 Strategy Builder":
                 st.session_state.sheet_msg = msg
                 st.session_state.fwd_spreads = ext_spreads
                 st.session_state.data_date = d_date
-                
-                if data is not None and not data.empty and st.session_state.ticker != 'XJO' and st.session_state.spot_price > 0:
-                    impl_y = derive_implied_yields(st.session_state.ticker, st.session_state.spot_price, data)
-                    if impl_y is not None:
-                        if st.session_state.div_info is None: st.session_state.div_info = {}
-                        st.session_state.div_info['yields'] = impl_y
-                        st.session_state.div_info['source'] = 'Market Implied'
-                        
                 st.session_state.is_market_open = check_market_hours()
                 st.session_state.options_loaded = True
                 st.rerun()
@@ -890,10 +811,10 @@ if current_view == "🧮 Strategy Builder":
                         s += "background-color: rgba(128,128,128,0.15); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.15); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
-                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.2); "
+                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.3); "
                         
                     styles.append(s)
                 return styles
@@ -922,7 +843,7 @@ if current_view == "🧮 Strategy Builder":
                     "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
                     "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
                 },
-                hide_index=True, width=3000, key=editor_key,
+                hide_index=True, use_container_width=True, key=editor_key,
                 disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
             )
             
@@ -960,7 +881,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", width=3000):
+                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -1001,7 +922,7 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.preselect_code = None 
                         st.rerun()
                 with b_c2:
-                    if st.button("Clear Selection", width=3000):
+                    if st.button("Clear Selection", use_container_width=True):
                         st.session_state.editor_reset += 1
                         st.rerun()
 
@@ -1011,7 +932,6 @@ if current_view == "🧮 Strategy Builder":
         st.subheader("Strategy")
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
-        margin_multiplier = 10 if st.session_state.ticker == 'XJO' else 1
         
         h_col_spec = [0.9, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
@@ -1060,9 +980,28 @@ if current_view == "🧮 Strategy Builder":
             leg_risk_arrays.append(risk_array)
             portfolio_scenarios += risk_array * leg['Qty']
         
-        # Gross Portfolio Margin Calculation
-        worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-        total_margin = abs(min(0.0, worst_portfolio_loss) * margin_multiplier)
+        # NEW MARGIN LOGIC: Detect covered spreads and apply portfolio risk arrays
+        total_margin = 0.0
+        has_short = any(leg['Qty'] < 0 for leg in st.session_state.legs)
+        if has_short:
+            is_covered_debit_spread = False
+            if len(st.session_state.legs) == 2:
+                l1, l2 = st.session_state.legs[0], st.session_state.legs[1]
+                if l1['Type'] == l2['Type'] and l1['ExpDateStr'] == l2['ExpDateStr']:
+                    long_leg = l1 if l1['Qty'] > 0 else (l2 if l2['Qty'] > 0 else None)
+                    short_leg = l1 if l1['Qty'] < 0 else (l2 if l2['Qty'] < 0 else None)
+                    
+                    if long_leg and short_leg and abs(long_leg['Qty']) >= abs(short_leg['Qty']):
+                        if long_leg['Type'] == 'Call' and long_leg['Strike'] <= short_leg['Strike']:
+                            is_covered_debit_spread = True
+                        elif long_leg['Type'] == 'Put' and long_leg['Strike'] >= short_leg['Strike']:
+                            is_covered_debit_spread = True
+                            
+            if is_covered_debit_spread:
+                total_margin = 0.0
+            else:
+                worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
+                total_margin = min(0.0, worst_portfolio_loss) * contract_multiplier
 
         total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -1084,24 +1023,24 @@ if current_view == "🧮 Strategy Builder":
             net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
-            # Isolated Row Margin Display
+            # Individual Row Margin Display
             if leg['Qty'] > 0:
                 row_margin = 0.0
             else:
                 row_risk = leg_risk_arrays[i] * leg['Qty']
-                row_margin = abs(min(0.0, np.min(row_risk)) * margin_multiplier) if len(row_risk) > 0 else 0.0
+                row_margin = min(0.0, np.min(row_risk)) * contract_multiplier if len(row_risk) > 0 else 0.0
             
             total_delta += net_delta
             total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
-            p_color = '#10b981' if premium >= 0 else '#ef4444'
-            m_color = '#10b981' if row_margin == 0 else '#ef4444'
+            p_color = '#4ade80' if premium >= 0 else '#f87171'
+            m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
-            row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
+            row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
             premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
-            margin_str = f"${row_margin:,.2f}" if row_margin == 0 else f"-${abs(row_margin):,.2f}"
+            margin_str = f"${row_margin:,.2f}" if row_margin >= 0 else f"-${abs(row_margin):,.2f}"
             
             c = st.columns(h_col_spec)
             
@@ -1247,7 +1186,7 @@ if current_view == "🧮 Strategy Builder":
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{m_color}; font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width=3000):
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                     st.session_state.legs.pop(i)
                     st.rerun()
                     
@@ -1255,10 +1194,10 @@ if current_view == "🧮 Strategy Builder":
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
         tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
-        tot_mar_str = f"${total_margin:,.2f}"
+        tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
         
-        tot_p_color = '#10b981' if total_premium >= 0 else '#ef4444'
-        tot_m_color = '#ef4444' if total_margin > 0 else '#10b981'
+        tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
+        tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
 
         with st.container():
             f = st.columns(h_col_spec)
@@ -1275,7 +1214,7 @@ if current_view == "🧮 Strategy Builder":
         with s_c1:
             strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
         with s_c2:
-            if st.button("Save Strategy", type="primary", width=3000):
+            if st.button("Save Strategy", type="primary", use_container_width=True):
                 st.session_state.portfolio.append({
                     "id": str(uuid.uuid4()),
                     "name": strat_name,
@@ -1407,12 +1346,12 @@ if current_view == "🧮 Strategy Builder":
                     s = ""
                     if val > 0:
                         intensity = min(val / abs_max, 1.0)
-                        alpha = 0.05 + 0.25 * intensity
-                        s = f"background-color: rgba(16, 185, 129, {alpha:.2f}); color: var(--text-color) !important; "
+                        alpha = 0.05 + 0.30 * intensity
+                        s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
                     elif val < 0:
                         intensity = min(abs(val) / abs_max, 1.0)
-                        alpha = 0.05 + 0.25 * intensity
-                        s = f"background-color: rgba(239, 68, 68, {alpha:.2f}); color: var(--text-color) !important; "
+                        alpha = 0.05 + 0.30 * intensity
+                        s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
                     
                     if is_spot and val == 0:
                         s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
@@ -1422,7 +1361,7 @@ if current_view == "🧮 Strategy Builder":
                     styles_df.loc[idx, col] = s
             return styles_df
 
-        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), width=3000)
+        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
 
         # --- ADVANCED CHARTING ENGINE ---
         st.markdown("### Payoff Chart")
@@ -1457,8 +1396,8 @@ if current_view == "🧮 Strategy Builder":
             
         fig = go.Figure()
         
-        fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(16, 185, 129, 0.08)", layer="below", line_width=0)
-        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(239, 68, 68, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(74, 222, 128, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
         
         for be in breakevens:
             fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
@@ -1498,7 +1437,7 @@ if current_view == "🧮 Strategy Builder":
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)'
         )
-        st.plotly_chart(fig, width=3000)
+        st.plotly_chart(fig, use_container_width=True)
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1508,7 +1447,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh Live Prices", type="primary", width=3000):
+            if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1546,7 +1485,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.trigger_ls_save = True
                     st.rerun()
         else:
-            st.button("🔄 Refresh Live Prices", type="primary", width=3000, disabled=True)
+            st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
             
     with ctrl_c2:
         if st.session_state.portfolio:
@@ -1570,9 +1509,9 @@ elif current_view == "💼 Portfolio Tracker":
                     })
             df_port = pd.DataFrame(flat_port)
             csv_port = df_port.to_csv(index=False)
-            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", width=3000)
+            st.download_button("💾 Download Backup (CSV)", data=csv_port, file_name="tc_portfolio.csv", mime="text/csv", use_container_width=True)
         else:
-            st.button("💾 Download Backup (CSV)", disabled=True, width=3000)
+            st.button("💾 Download Backup (CSV)", disabled=True, use_container_width=True)
             
     with ctrl_c3:
         uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
@@ -1643,8 +1582,6 @@ elif current_view == "💼 Portfolio Tracker":
         net_entry_theo = raw_entry_sum / max_qty if max_qty != 0 else 0.0
         
         contract_multiplier = 10 if ticker_display == 'XJO' else 100
-        margin_multiplier = 10 if ticker_display == 'XJO' else 1
-        
         strat_pnl = 0.0
         ref_time = st.session_state.get('portfolio_last_refresh') or get_sydney_time()
         
@@ -1673,10 +1610,9 @@ elif current_view == "💼 Portfolio Tracker":
                 "Strike": f"${leg['Strike']:.2f}",
                 "Expiry": leg['ExpDateStr'],
                 "Entry Theo": f"{leg['Entry']:.3f}",
-                "Live Theo": f"{cur_theo:.3f}"
+                "Live Theo": f"{cur_theo:.3f}",
+                "Open P&L": leg_pnl
             }
-            sign = "+" if leg_pnl >= 0 else ""
-            row["Open P&L"] = f"{sign}${leg_pnl:,.2f}"
             display_legs.append(row)
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
@@ -1721,7 +1657,7 @@ elif current_view == "💼 Portfolio Tracker":
                 disp_data = display_legs[j]
                 c = st.columns(p_h_col_spec)
                 
-                row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
+                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
                 
                 # QTY
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
@@ -1828,7 +1764,7 @@ elif current_view == "💼 Portfolio Tracker":
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_bg_color = '#10b981' if pnl_val >= 0 else '#ef4444'
+                pnl_bg_color = '#4ade80' if pnl_val >= 0 else '#f87171'
                 sign_str = "+" if pnl_val >= 0 else ""
                 
                 pnl_disp = f"${pnl_val:,.2f}" if pnl_val >= 0 else f"-${abs(pnl_val):,.2f}"
@@ -1837,7 +1773,7 @@ elif current_view == "💼 Portfolio Tracker":
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width=3000):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
@@ -1846,7 +1782,7 @@ elif current_view == "💼 Portfolio Tracker":
             
             a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
@@ -1918,29 +1854,12 @@ elif current_view == "💼 Portfolio Tracker":
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
-                        is_spot = "SPOT" in str(idx)
-                        for col in df.columns:
-                            val = df.loc[idx, col]
-                            s = ""
-                            if val > 0:
-                                intensity = min(val / abs_max, 1.0)
-                                alpha = 0.05 + 0.25 * intensity
-                                s = f"background-color: rgba(16, 185, 129, {alpha:.2f}); color: var(--text-color) !important; "
-                            elif val < 0:
-                                intensity = min(abs(val) / abs_max, 1.0)
-                                alpha = 0.05 + 0.25 * intensity
-                                s = f"background-color: rgba(239, 68, 68, {alpha:.2f}); color: var(--text-color) !important; "
-                            
-                            if is_spot and val == 0:
-                                s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
-                            elif is_spot:
-                                s += "font-weight: bold; border-top: 1px solid rgba(128,128,128,0.3); border-bottom: 1px solid rgba(128,128,128,0.3);"
-                                
-                            styles_df.loc[idx, col] = s
+                        if "SPOT" in str(idx):
+                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(128,128,128,0.15);"
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), width=3000)
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
