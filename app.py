@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.5 (Stable 1.4.4 Baseline + Portfolio QoL)
+# VERSION: 1.4.4 (Canvas Text Fix & Color Polish)
 # ==========================================
 
 import streamlit as st
@@ -17,7 +17,6 @@ import re
 import json
 import base64
 import io
-import copy
 
 try:
     from streamlit_javascript import st_javascript
@@ -533,7 +532,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.5</div>
+            <div class="header-sub">Option Strategy Builder v1.4.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1035,10 +1034,13 @@ if current_view == "🧮 Strategy Builder":
             total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
-            p_color = '#10b981' if premium >= 0 else '#ef4444'
-            m_color = '#10b981' if row_margin >= 0 else '#ef4444'
+            p_color = '#4ade80' if premium >= 0 else '#f87171'
+            m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
-            row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
+            row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+            
+            premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
+            margin_str = f"${row_margin:,.2f}" if row_margin >= 0 else f"-${abs(row_margin):,.2f}"
             
             c = st.columns(h_col_spec)
             
@@ -1180,8 +1182,8 @@ if current_view == "🧮 Strategy Builder":
                     
             with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
             with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
-            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{p_color} !important; font-weight:600;'>${premium:.2f}</div>", unsafe_allow_html=True)
-            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{m_color} !important; font-weight:600;'>${row_margin:.2f}</div>", unsafe_allow_html=True)
+            with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{p_color}; font-weight:600;'>{premium_str}</span></div>", unsafe_allow_html=True)
+            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{m_color}; font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
@@ -1191,14 +1193,19 @@ if current_view == "🧮 Strategy Builder":
         st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid rgba(128,128,128,0.3);'>", unsafe_allow_html=True)
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
+        tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
+        tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
+        
+        tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
+        tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
 
         with st.container():
             f = st.columns(h_col_spec)
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text' style='color:{'#10b981' if total_premium >= 0 else '#ef4444'} !important; font-weight:bold'>${total_premium:,.2f}</div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text' style='color:{'#10b981' if total_margin >= 0 else '#ef4444'} !important; font-weight:bold'>${total_margin:,.2f}</div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1339,15 +1346,17 @@ if current_view == "🧮 Strategy Builder":
                     s = ""
                     if val > 0:
                         intensity = min(val / abs_max, 1.0)
-                        alpha = 0.05 + 0.35 * intensity
-                        s = f"background-color: rgba(16, 185, 129, {alpha:.2f}); "
+                        alpha = 0.05 + 0.30 * intensity
+                        s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
                     elif val < 0:
                         intensity = min(abs(val) / abs_max, 1.0)
-                        alpha = 0.05 + 0.35 * intensity
-                        s = f"background-color: rgba(239, 68, 68, {alpha:.2f}); "
+                        alpha = 0.05 + 0.30 * intensity
+                        s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
                     
-                    if is_spot:
+                    if is_spot and val == 0:
                         s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
+                    elif is_spot:
+                        s += "font-weight: bold; border-top: 1px solid rgba(128,128,128,0.3); border-bottom: 1px solid rgba(128,128,128,0.3);"
                         
                     styles_df.loc[idx, col] = s
             return styles_df
@@ -1387,8 +1396,8 @@ if current_view == "🧮 Strategy Builder":
             
         fig = go.Figure()
         
-        fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(16, 185, 129, 0.08)", layer="below", line_width=0)
-        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(239, 68, 68, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(74, 222, 128, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
         
         for be in breakevens:
             fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
@@ -1428,7 +1437,7 @@ if current_view == "🧮 Strategy Builder":
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)'
         )
-        st.plotly_chart(fig, use_container_width=True, theme="streamlit")
+        st.plotly_chart(fig, use_container_width=True)
 
 elif current_view == "💼 Portfolio Tracker":
     st.markdown("### Saved Strategies")
@@ -1601,10 +1610,9 @@ elif current_view == "💼 Portfolio Tracker":
                 "Strike": f"${leg['Strike']:.2f}",
                 "Expiry": leg['ExpDateStr'],
                 "Entry Theo": f"{leg['Entry']:.3f}",
-                "Live Theo": f"{cur_theo:.3f}"
+                "Live Theo": f"{cur_theo:.3f}",
+                "Open P&L": leg_pnl
             }
-            sign = "+" if leg_pnl >= 0 else ""
-            row["Open P&L"] = f"{sign}${leg_pnl:,.2f}"
             display_legs.append(row)
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
@@ -1618,31 +1626,13 @@ elif current_view == "💼 Portfolio Tracker":
             
         with st.expander(f"📁 **{strat['name']}** ({ticker_display}){pnl_str}", expanded=True):
             
-            c_head0, c_head1, c_head2, c_head3, c_head4 = st.columns([1.5, 1, 1, 1, 1.2])
-            with c_head0:
-                st.markdown(f"**Strategy Name:**")
-                new_name = st.text_input("Name", value=strat['name'], key=f"rename_{strat['id']}", label_visibility="collapsed")
-                if new_name != strat['name']:
-                    strat['name'] = new_name
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
+            c_head1, c_head2, c_head3, c_head4 = st.columns([1, 1, 1, 1.2])
             with c_head1:
                 st.markdown(f"**Spot at Entry:**")
                 st.markdown(f"${strat.get('spot_at_entry', 0.0):.2f}")
             with c_head2:
                 st.markdown(f"**Net Entry Theo:**")
-                new_net_entry = st.number_input("Net Entry", value=float(net_entry_theo), step=0.01, format="%.3f", key=f"net_entry_{strat['id']}", label_visibility="collapsed")
-                if not math.isclose(new_net_entry, net_entry_theo, abs_tol=1e-5) and max_qty != 0:
-                    diff = new_net_entry - net_entry_theo
-                    total_change = diff * max_qty
-                    num_legs = len(strat['legs'])
-                    if num_legs > 0:
-                        change_per_leg = total_change / num_legs
-                        for l in strat['legs']:
-                            if l['Qty'] != 0:
-                                l['Entry'] += change_per_leg / l['Qty']
-                        st.session_state.trigger_ls_save = True
-                        st.rerun()
+                st.markdown(f"{net_entry_theo:.3f}")
             with c_head3:
                 st.markdown(f"**Net Live Theo:**")
                 st.markdown(f"{net_live_theo:.3f}")
@@ -1667,7 +1657,7 @@ elif current_view == "💼 Portfolio Tracker":
                 disp_data = display_legs[j]
                 c = st.columns(p_h_col_spec)
                 
-                row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
+                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
                 
                 # QTY
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
@@ -1774,8 +1764,11 @@ elif current_view == "💼 Portfolio Tracker":
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_bg_color = '#10b981' if "+" in pnl_val else '#ef4444'
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; color:{pnl_bg_color} !important; font-weight:600;'>{pnl_val}</div>", unsafe_allow_html=True)
+                pnl_bg_color = '#4ade80' if pnl_val >= 0 else '#f87171'
+                sign_str = "+" if pnl_val >= 0 else ""
+                
+                pnl_disp = f"${pnl_val:,.2f}" if pnl_val >= 0 else f"-${abs(pnl_val):,.2f}"
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{pnl_bg_color}; font-weight:600;'>{sign_str}{pnl_disp}</span></div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
                 with c[9]:
@@ -1787,20 +1780,10 @@ elif current_view == "💼 Portfolio Tracker":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
+            a_c1, a_c2 = st.columns([1, 5])
             with a_c1:
                 if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
-                    st.session_state.trigger_ls_save = True
-                    st.rerun()
-            with a_c2:
-                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
-                    new_strat = copy.deepcopy(strat)
-                    new_strat['id'] = str(uuid.uuid4())
-                    new_strat['name'] = new_strat['name'] + " (Copy)"
-                    for l in new_strat['legs']:
-                        l['id'] = str(uuid.uuid4())
-                    st.session_state.portfolio.insert(i + 1, new_strat)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
 
