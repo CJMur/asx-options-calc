@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.7 (Parity-Implied Yield & Margin Offsets)
+# VERSION: 1.4.8 (Expiry-Specific Parity Yield & Raw Margin)
 # ==========================================
 
 import streamlit as st
@@ -387,26 +387,33 @@ def derive_parity_yield(ticker, spot, ref_db):
         if subset.empty or 'Settlement' not in subset.columns:
             return None
             
-        front_exp = sorted(subset['Expiry'].unique())[0]
-        front_chain = subset[subset['Expiry'] == front_exp].copy()
+        yields = {}
+        r = global_rba_rate / 100.0
         
-        front_chain['diff'] = (front_chain['Strike'] - spot).abs()
-        atm_strike = front_chain.sort_values('diff').iloc[0]['Strike']
+        for exp in subset['Expiry'].unique():
+            exp_chain = subset[subset['Expiry'] == exp].copy()
+            exp_chain['diff'] = (exp_chain['Strike'] - spot).abs()
+            if exp_chain.empty: continue
+            
+            atm_strike = exp_chain.sort_values('diff').iloc[0]['Strike']
+            
+            atm_c = exp_chain[(exp_chain['Strike'] == atm_strike) & (exp_chain['Type'] == 'Call')]
+            atm_p = exp_chain[(exp_chain['Strike'] == atm_strike) & (exp_chain['Type'] == 'Put')]
+            
+            if not atm_c.empty and not atm_p.empty:
+                c_px = atm_c.iloc[0]['Settlement']
+                p_px = atm_p.iloc[0]['Settlement']
+                if c_px > 0 and p_px > 0:
+                    T_days = max(0.0001, (exp - today_dt).total_seconds() / 86400.0)
+                    T = T_days / 365.0
+                    F = atm_strike + (c_px - p_px) * math.exp(r * T)
+                    if F > 0:
+                        implied_q = r - (math.log(F / spot) / T)
+                        exp_str = pd.to_datetime(exp).strftime("%Y-%m-%d")
+                        yields[exp_str] = max(0.0, min(implied_q, 0.20))
         
-        atm_c = front_chain[(front_chain['Strike'] == atm_strike) & (front_chain['Type'] == 'Call')]
-        atm_p = front_chain[(front_chain['Strike'] == atm_strike) & (front_chain['Type'] == 'Put')]
-        
-        if not atm_c.empty and not atm_p.empty:
-            c_px = atm_c.iloc[0]['Settlement']
-            p_px = atm_p.iloc[0]['Settlement']
-            if c_px > 0 and p_px > 0:
-                T_days = max(0.0001, (front_exp - today_dt).total_seconds() / 86400.0)
-                T = T_days / 365.0
-                r = global_rba_rate / 100.0
-                F = atm_strike + (c_px - p_px) * math.exp(r * T)
-                if F > 0:
-                    implied_q = r - (math.log(F / spot) / T)
-                    return max(0.0, min(implied_q, 0.20)) 
+        if yields:
+            return yields
     except:
         pass
     return None
@@ -479,8 +486,11 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
                 return price, delta
             else:
                 q = 0.04
-        elif st.session_state.div_info and 'yield' in st.session_state.div_info:
-            q = st.session_state.div_info['yield']
+        elif st.session_state.div_info:
+            if 'yields' in st.session_state.div_info and expiry_str_key in st.session_state.div_info['yields']:
+                q = st.session_state.div_info['yields'][expiry_str_key]
+            elif 'yield' in st.session_state.div_info:
+                q = st.session_state.div_info['yield']
         
         if style.upper() == 'EUROPEAN':
             price = black_scholes_european(S, K, T, r, v, kind, q)
@@ -553,19 +563,16 @@ def fetch_data(t):
     except: 
         return "ERROR", 0.0, None
 
-# Run Implied Yield Override
-if st.session_state.ref_data is not None and st.session_state.ticker != 'XJO' and st.session_state.spot_price > 0:
-    impl_y = derive_parity_yield(st.session_state.ticker, st.session_state.spot_price, st.session_state.ref_data)
-    if impl_y is not None:
-        st.session_state.div_info = {'yield': impl_y, 'source': 'Market Implied'}
-
 # --- 6. HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
 
 if st.session_state.div_info and st.session_state.ticker != 'XJO':
     source_tag = st.session_state.div_info.get('source', 'Yahoo')
-    div_display_txt = f"💰 {source_tag} Yield: {st.session_state.div_info['yield']*100:.2f}% | {date_status}"
+    if source_tag == 'Market Implied':
+        div_display_txt = f"💰 Yield: Market Implied | {date_status}"
+    else:
+        div_display_txt = f"💰 {source_tag} Yield: {st.session_state.div_info.get('yield', 0.0)*100:.2f}% | {date_status}"
 else:
     div_display_txt = f"{date_status}"
 
@@ -574,7 +581,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.7</div>
+            <div class="header-sub">Option Strategy Builder v1.4.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #10b981;">${st.session_state.spot_price:.2f}</div>
@@ -638,7 +645,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", width=3000):
+            if st.button("🔄 RESTART", use_container_width=True):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -660,7 +667,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -734,7 +741,7 @@ if current_view == "🧮 Strategy Builder":
                 if data is not None and not data.empty and st.session_state.ticker != 'XJO' and st.session_state.spot_price > 0:
                     impl_y = derive_parity_yield(st.session_state.ticker, st.session_state.spot_price, data)
                     if impl_y is not None:
-                        st.session_state.div_info = {'yield': impl_y, 'source': 'Market Implied'}
+                        st.session_state.div_info = {'yields': impl_y, 'source': 'Market Implied'}
                         
                 st.session_state.is_market_open = check_market_hours()
                 st.session_state.options_loaded = True
@@ -1029,34 +1036,9 @@ if current_view == "🧮 Strategy Builder":
             leg_risk_arrays.append(risk_array)
             portfolio_scenarios += risk_array * leg['Qty']
         
-        # NEW MARGIN LOGIC: Detect covered spreads and apply portfolio risk arrays
-        total_margin = 0.0
-        has_short = any(leg['Qty'] < 0 for leg in st.session_state.legs)
-        if has_short:
-            is_covered_debit_spread = False
-            if len(st.session_state.legs) == 2:
-                l1, l2 = st.session_state.legs[0], st.session_state.legs[1]
-                if l1['Type'] == l2['Type'] and l1['ExpDateStr'] == l2['ExpDateStr']:
-                    long_leg = l1 if l1['Qty'] > 0 else (l2 if l2['Qty'] > 0 else None)
-                    short_leg = l1 if l1['Qty'] < 0 else (l2 if l2['Qty'] < 0 else None)
-                    
-                    if long_leg and short_leg and abs(long_leg['Qty']) >= abs(short_leg['Qty']):
-                        if long_leg['Type'] == 'Call' and long_leg['Strike'] <= short_leg['Strike']:
-                            is_covered_debit_spread = True
-                        elif long_leg['Type'] == 'Put' and long_leg['Strike'] >= short_leg['Strike']:
-                            is_covered_debit_spread = True
-                            
-            if is_covered_debit_spread:
-                total_margin = 0.0
-            else:
-                worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-                total_premium = sum( -(l['Qty'] * l['Entry'] * contract_multiplier) for l in st.session_state.legs )
-                
-                raw_collateral_needed = min(0.0, worst_portfolio_loss) * margin_multiplier
-                if total_premium > 0:
-                    total_margin = min(0.0, raw_collateral_needed + total_premium)
-                else:
-                    total_margin = raw_collateral_needed
+        # NEW MARGIN LOGIC: Sum raw scenario arrays
+        worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
+        total_margin = min(0.0, worst_portfolio_loss) * margin_multiplier
 
         total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -1079,11 +1061,8 @@ if current_view == "🧮 Strategy Builder":
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
             # Individual Row Margin Display
-            if leg['Qty'] > 0:
-                row_margin = 0.0
-            else:
-                row_risk = leg_risk_arrays[i] * leg['Qty']
-                row_margin = min(0.0, np.min(row_risk)) * margin_multiplier if len(row_risk) > 0 else 0.0
+            row_risk = leg_risk_arrays[i] * leg['Qty']
+            row_margin = min(0.0, np.min(row_risk)) * margin_multiplier if len(row_risk) > 0 else 0.0
             
             total_delta += net_delta
             total_premium += premium
@@ -1416,7 +1395,7 @@ if current_view == "🧮 Strategy Builder":
                     styles_df.loc[idx, col] = s
             return styles_df
 
-        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), width=3000, height=500)
+        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), width=3000)
 
         # --- ADVANCED CHARTING ENGINE ---
         st.markdown("### Payoff Chart")
@@ -1822,7 +1801,7 @@ elif current_view == "💼 Portfolio Tracker":
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 pnl_val = disp_data['Open P&L']
-                pnl_bg_color = '#10b981' if pnl_val >= 0 else '#ef4444'
+                pnl_bg_color = '#10b981' if "+" in pnl_val else '#ef4444'
                 sign_str = "+" if pnl_val >= 0 else ""
                 
                 pnl_disp = f"${pnl_val:,.2f}" if pnl_val >= 0 else f"-${abs(pnl_val):,.2f}"
