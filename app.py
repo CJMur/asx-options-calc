@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.4-Refined (Stable Baseline + Portfolio QoL)
+# VERSION: 1.4.5 (Stable 1.4.4 Baseline + Portfolio QoL)
 # ==========================================
 
 import streamlit as st
@@ -533,10 +533,10 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.4-Refined</div>
+            <div class="header-sub">Option Strategy Builder v1.4.5</div>
         </div>
         <div style="text-align: right;">
-            <div class="header-title" style="color: #10b981;">${st.session_state.spot_price:.2f}</div>
+            <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
             <div class="header-sub">{st.session_state.ticker if st.session_state.ticker else "---"}</div>
             <span class="status-tag">{mkt_status} | {div_display_txt}</span>
         </div>
@@ -807,15 +807,15 @@ if current_view == "🧮 Strategy Builder":
                 for col in row.index:
                     s = ""
                     if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
-                        s += "background-color: rgba(16, 185, 129, 0.15); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot:
-                        s += "background-color: rgba(16, 185, 129, 0.15); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.15); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
-                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.2); "
+                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.3); "
                         
                     styles.append(s)
                 return styles
