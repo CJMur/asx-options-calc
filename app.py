@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.5 (Continuous Yield & Margin Multiplier Fix)
+# VERSION: 1.4.6 (Yield Normalization Fix)
 # ==========================================
 
 import streamlit as st
@@ -482,6 +482,11 @@ def fetch_data(t):
             if not div_yield:
                 div_rate = info.get('dividendRate', 0.0)
                 div_yield = (div_rate / spot) if spot > 0 else 0.0
+            
+            if div_yield > 1.0:
+                div_yield = div_yield / 100.0
+            div_yield = min(float(div_yield), 0.20)
+            
             div_info = {'yield': float(div_yield)}
         except:
             div_info = {'yield': 0.0}
@@ -503,6 +508,10 @@ def fetch_data(t):
             div_rate = info.get('dividendRate', 0.0)
             div_yield = (div_rate / spot) if spot > 0 else 0.0
             
+        if div_yield > 1.0:
+            div_yield = div_yield / 100.0
+        div_yield = min(float(div_yield), 0.20)
+            
         div_info = {'yield': float(div_yield)}
         return "YAHOO", spot, div_info
     except: 
@@ -522,7 +531,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.5</div>
+            <div class="header-sub">Option Strategy Builder v1.4.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #10b981;">${st.session_state.spot_price:.2f}</div>
@@ -801,10 +810,10 @@ if current_view == "🧮 Strategy Builder":
                         s += "background-color: rgba(128,128,128,0.15); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.15); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
-                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.2); "
+                        s += "color: var(--text-color); border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.3); "
                         
                     styles.append(s)
                 return styles
@@ -1342,7 +1351,7 @@ if current_view == "🧮 Strategy Builder":
                     elif val < 0:
                         intensity = min(abs(val) / abs_max, 1.0)
                         alpha = 0.05 + 0.25 * intensity
-                        s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); color: var(--text-color) !important; "
+                        s = f"background-color: rgba(239, 68, 68, {alpha:.2f}); color: var(--text-color) !important; "
                     
                     if is_spot and val == 0:
                         s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
@@ -1388,7 +1397,7 @@ if current_view == "🧮 Strategy Builder":
         fig = go.Figure()
         
         fig.add_hrect(y0=0, y1=1e6, fillcolor="rgba(16, 185, 129, 0.08)", layer="below", line_width=0)
-        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(248, 113, 113, 0.08)", layer="below", line_width=0)
+        fig.add_hrect(y0=-1e6, y1=0, fillcolor="rgba(239, 68, 68, 0.08)", layer="below", line_width=0)
         
         for be in breakevens:
             fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
@@ -1856,7 +1865,7 @@ elif current_view == "💼 Portfolio Tracker":
                             elif val < 0:
                                 intensity = min(abs(val) / abs_max, 1.0)
                                 alpha = 0.05 + 0.25 * intensity
-                                s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); color: var(--text-color) !important; "
+                                s = f"background-color: rgba(239, 68, 68, {alpha:.2f}); color: var(--text-color) !important; "
                             
                             if is_spot and val == 0:
                                 s += "font-weight: bold; background-color: rgba(128,128,128,0.15);"
