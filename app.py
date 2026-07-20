@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.70 (1.3.69 Math + Restored 1.3.64 Formatting & Colors)
+# VERSION: 1.3.68 (Formatting Restored + Portfolio Features + SPAN Math)
 # ==========================================
 
 import streamlit as st
@@ -68,7 +68,6 @@ ASX_NAMES = {
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    footer {visibility: hidden;}
     div[class^="viewerBadge_container"] {display: none !important;}
     [data-testid="stDecoration"] {display: none !important;}
 
@@ -560,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.70</div>
+            <div class="header-sub">Option Strategy Builder v1.3.68</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -909,7 +908,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -1008,7 +1007,7 @@ if current_view == "🧮 Strategy Builder":
                 
             leg_risk_arrays.append(risk_array)
             portfolio_scenarios += risk_array * leg['Qty']
-        
+            
         worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
         base_portfolio_risk = abs(min(0.0, worst_portfolio_loss) * margin_multiplier)
         
@@ -1049,7 +1048,7 @@ if current_view == "🧮 Strategy Builder":
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#4ade80' if premium >= 0 else '#f87171'
-            m_color = '#4ade80' if row_margin <= 0 else '#f87171'
+            m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
@@ -1211,7 +1210,7 @@ if current_view == "🧮 Strategy Builder":
         tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
         
         tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
-        tot_m_color = '#f87171' if total_margin > 0 else '#4ade80'
+        tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
 
         with st.container():
             f = st.columns(h_col_spec)
@@ -1450,7 +1449,9 @@ if current_view == "🧮 Strategy Builder":
                 title="Profit / Loss ($)", tickprefix="$", 
                 zeroline=True, zerolinewidth=2, zerolinecolor='black',
                 range=[min_pnl - padding, max_pnl + padding]
-            )
+            ),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
         )
         st.plotly_chart(fig, use_container_width=True)
 
