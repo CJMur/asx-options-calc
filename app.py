@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.65 (Stable 1.3.64 Baseline + Portfolio Features)
+# VERSION: 1.4.8 (Stable 1.3.64 Baseline + Portfolio Features + Menu Restored)
 # ==========================================
 
 import streamlit as st
@@ -68,8 +68,6 @@ ASX_NAMES = {
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
     footer {visibility: hidden;}
     div[class^="viewerBadge_container"] {display: none !important;}
     [data-testid="stDecoration"] {display: none !important;}
@@ -531,7 +529,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.65</div>
+            <div class="header-sub">Option Strategy Builder v1.4.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -595,7 +593,7 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2]) 
         
         with bc2:
-            if st.button("🔄 RESTART", width=3000):
+            if st.button("🔄 RESTART", use_container_width=True):
                 st.query_params.clear() 
                 saved_db = st.session_state.get('ref_data', None)
                 saved_fwd = st.session_state.get('fwd_spreads', {})
@@ -617,7 +615,7 @@ if current_view == "🧮 Strategy Builder":
                 st.rerun()
 
         with bc1:
-            do_load = st.button("🔍 LOAD OPTIONS", type="primary", width=3000)
+            do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
 
@@ -880,7 +878,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -1321,15 +1319,11 @@ if current_view == "🧮 Strategy Builder":
         capital_at_risk = total_margin if total_premium >= 0 else abs(total_premium)
         
         def format_pnl(val):
-            try:
-                if pd.isna(val): return ""
-                if capital_at_risk <= 0.001:
-                    return f"${float(val):,.0f} (0.0%)"
-                pct = (float(val) / capital_at_risk) * 100
-                sign = "+" if float(val) > 0 else ""
-                return f"${float(val):,.0f} ({sign}{pct:.1f}%)"
-            except:
-                return ""
+            if capital_at_risk <= 0.001:
+                return f"${val:,.0f} (0.0%)"
+            pct = (val / capital_at_risk) * 100
+            sign = "+" if val > 0 else ""
+            return f"${val:,.0f} ({sign}{pct:.1f}%)"
 
         def make_heatmap(df):
             max_val = df.max().max()
@@ -1430,7 +1424,9 @@ if current_view == "🧮 Strategy Builder":
                 title="Profit / Loss ($)", tickprefix="$", 
                 zeroline=True, zerolinewidth=2, zerolinecolor='black',
                 range=[min_pnl - padding, max_pnl + padding]
-            )
+            ),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -1785,21 +1781,21 @@ elif current_view == "💼 Portfolio Tracker":
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            a_c1, a_c2, a_c3 = st.columns([1, 1, 4])
+            a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
             with a_c2:
-                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", width='content'):
+                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
                     new_strat = copy.deepcopy(strat)
                     new_strat['id'] = str(uuid.uuid4())
                     new_strat['name'] = new_strat.get('name', 'Strategy') + " (Copy)"
