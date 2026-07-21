@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.80 (Gross Margin Premium Overlay + Unchanged 1.3.79 UI)
+# VERSION: 1.4.0 (Fixed Matrix Percentage Calculation)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.80</div>
+            <div class="header-sub">Option Strategy Builder v1.4.0</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1374,13 +1374,11 @@ if current_view == "🧮 Strategy Builder":
             
         df_mx = pd.DataFrame(matrix_data).set_index("Price")
         
-        capital_at_risk = total_margin if total_margin > 0 else 1.0
+        capital_at_risk = max(total_margin, abs(total_premium)) if max(total_margin, abs(total_premium)) > 0 else 1.0
         
         def format_pnl(val):
             try:
                 if pd.isna(val): return ""
-                if capital_at_risk <= 1.0:
-                    return f"${float(val):,.0f} (0.0%)"
                 pct = (float(val) / capital_at_risk) * 100
                 sign = "+" if float(val) > 0 else ""
                 return f"${float(val):,.0f} ({sign}{pct:.1f}%)"
@@ -1917,7 +1915,7 @@ elif current_view == "💼 Portfolio Tracker":
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
@@ -2005,6 +2003,18 @@ elif current_view == "💼 Portfolio Tracker":
                     
                 df_mx = pd.DataFrame(matrix_data).set_index("Price")
                 
+                port_tot_prem = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in strat['legs'])
+                capital_at_risk = max(port_total_margin, abs(port_tot_prem)) if max(port_total_margin, abs(port_tot_prem)) > 0 else 1.0
+                
+                def format_pnl(val):
+                    try:
+                        if pd.isna(val): return ""
+                        pct = (float(val) / capital_at_risk) * 100
+                        sign = "+" if float(val) > 0 else ""
+                        return f"${float(val):,.0f} ({sign}{pct:.1f}%)"
+                    except:
+                        return ""
+
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
@@ -2013,7 +2023,7 @@ elif current_view == "💼 Portfolio Tracker":
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_pnl), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
