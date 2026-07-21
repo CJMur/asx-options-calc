@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.79 (Margin Formatting Updates)
+# VERSION: 1.3.80 (Gross Margin Premium Overlay + Unchanged 1.3.79 UI)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.79</div>
+            <div class="header-sub">Option Strategy Builder v1.3.80</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -977,7 +977,6 @@ if current_view == "🧮 Strategy Builder":
         
         st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
-        # TRUE PORTFOLIO MARGIN CALCULATION
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
         leg_risk_arrays = []
         tkr = st.session_state.ticker.replace(".AX", "")
@@ -1002,8 +1001,10 @@ if current_view == "🧮 Strategy Builder":
             else:
                 leg_risk_arrays.append(np.zeros(len(scen_cols)) if scen_cols else np.zeros(1))
 
-        def port_compute_margin(legs_list, arrays_list):
+        def compute_gross_margin(legs_list, arrays_list):
             if not legs_list: return 0.0
+            
+            subset_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in legs_list)
             
             if len(arrays_list) > 0 and len(arrays_list[0]) > 1:
                 port_scen = np.zeros(len(arrays_list[0]))
@@ -1029,15 +1030,17 @@ if current_view == "🧮 Strategy Builder":
             synthetic_span_loss = abs(min(0.0, min(synthetic_pnls)))
             unbounded_span_loss = max(array_span_loss, synthetic_span_loss)
             
+            unbounded_gross_risk = max(0.0, unbounded_span_loss + subset_premium)
+            
             call_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Call')
             put_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Put')
             is_unbounded = (call_qty < 0) or (put_qty < 0)
             
             if is_unbounded:
-                return unbounded_span_loss
+                return unbounded_gross_risk
                 
             strikes = [float(l['Strike']) for l in legs_list]
-            if not strikes: return unbounded_span_loss
+            if not strikes: return unbounded_gross_risk
             
             bound_test_spots = strikes + [0.0, max(strikes) * 3.0]
             bound_pnls = []
@@ -1049,9 +1052,9 @@ if current_view == "🧮 Strategy Builder":
                 bound_pnls.append(pnl)
                 
             intrinsic_loss = abs(min(0.0, min(bound_pnls)))
-            return min(unbounded_span_loss, intrinsic_loss)
+            return min(unbounded_gross_risk, intrinsic_loss)
 
-        total_margin = port_compute_margin(st.session_state.legs, leg_risk_arrays)
+        total_margin = compute_gross_margin(st.session_state.legs, leg_risk_arrays)
 
         total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -1073,10 +1076,9 @@ if current_view == "🧮 Strategy Builder":
             net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
-            # Marginal Impact Calculation
             legs_without = st.session_state.legs[:i] + st.session_state.legs[i+1:]
             arrays_without = leg_risk_arrays[:i] + leg_risk_arrays[i+1:]
-            margin_without = port_compute_margin(legs_without, arrays_without)
+            margin_without = compute_gross_margin(legs_without, arrays_without)
             
             row_margin = total_margin - margin_without
             
@@ -1716,8 +1718,10 @@ elif current_view == "💼 Portfolio Tracker":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            def port_compute_margin(legs_list, arrays_list):
+            def port_compute_gross_margin(legs_list, arrays_list):
                 if not legs_list: return 0.0
+                
+                subset_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in legs_list)
                 
                 if len(arrays_list) > 0 and len(arrays_list[0]) > 1:
                     port_scen = np.zeros(len(arrays_list[0]))
@@ -1743,15 +1747,17 @@ elif current_view == "💼 Portfolio Tracker":
                 synthetic_span_loss = abs(min(0.0, min(synthetic_pnls)))
                 unbounded_span_loss = max(array_span_loss, synthetic_span_loss)
                 
+                unbounded_gross_risk = max(0.0, unbounded_span_loss + subset_premium)
+                
                 call_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Call')
                 put_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Put')
                 is_unbounded = (call_qty < 0) or (put_qty < 0)
                 
                 if is_unbounded:
-                    return unbounded_span_loss
+                    return unbounded_gross_risk
                     
                 strikes = [float(l['Strike']) for l in legs_list]
-                if not strikes: return unbounded_span_loss
+                if not strikes: return unbounded_gross_risk
                 
                 bound_test_spots = strikes + [0.0, max(strikes) * 3.0]
                 bound_pnls = []
@@ -1763,7 +1769,28 @@ elif current_view == "💼 Portfolio Tracker":
                     bound_pnls.append(pnl)
                     
                 intrinsic_loss = abs(min(0.0, min(bound_pnls)))
-                return min(unbounded_span_loss, intrinsic_loss)
+                return min(unbounded_gross_risk, intrinsic_loss)
+
+            scen_cols_p = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
+            leg_risk_arrays_p = []
+            tkr_p = ticker_display.replace(".AX", "")
+            
+            for leg in strat['legs']:
+                match = pd.DataFrame()
+                if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
+                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr_p == 'XJO' else st.session_state.ref_data['Ticker'] == tkr_p
+                    match = st.session_state.ref_data[
+                        ticker_mask & 
+                        (st.session_state.ref_data['Type'] == leg['Type']) & 
+                        (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
+                        (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+                    ]
+                if not match.empty and scen_cols_p:
+                    leg_risk_arrays_p.append(match.iloc[0][scen_cols_p].values.astype(float))
+                else:
+                    leg_risk_arrays_p.append(np.zeros(len(scen_cols_p)) if scen_cols_p else np.zeros(1))
+
+            port_total_margin = port_compute_gross_margin(strat['legs'], leg_risk_arrays_p)
 
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
             p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
