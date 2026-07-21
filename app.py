@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.74 (UI Locked + Spread Margin Caps + Green Formatting)
+# VERSION: 1.3.75 (Corrected Margin Cap + Locked UI Formatting)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.74</div>
+            <div class="header-sub">Option Strategy Builder v1.3.75</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -959,7 +959,6 @@ if current_view == "🧮 Strategy Builder":
         st.subheader("Strategy")
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
-        margin_multiplier = 10 if st.session_state.ticker == 'XJO' else 1
         
         h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.5, 1.8, 1.0, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
@@ -1025,10 +1024,10 @@ if current_view == "🧮 Strategy Builder":
             return abs(min(0.0, min_pnl))
 
         max_loss = get_max_loss(st.session_state.legs)
-        worst_span_loss = abs(min(0.0, np.min(portfolio_scenarios)) * margin_multiplier) if len(portfolio_scenarios) > 0 else 0.0
+        worst_span_loss = abs(min(0.0, np.min(portfolio_scenarios))) if len(portfolio_scenarios) > 0 else 0.0
         
         if max_loss < 1e7:
-            total_margin = max(worst_span_loss, max_loss)
+            total_margin = min(worst_span_loss, max_loss)
         else:
             total_margin = worst_span_loss
 
@@ -1052,18 +1051,19 @@ if current_view == "🧮 Strategy Builder":
             net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
+            # Individual Row Margin Display
             if leg['Qty'] > 0:
                 row_margin = abs(premium)
             else:
                 row_risk = leg_risk_arrays[i] * leg['Qty']
-                row_margin = abs(min(0.0, np.min(row_risk)) * margin_multiplier) if len(row_risk) > 0 else 0.0
+                row_margin = abs(min(0.0, np.min(row_risk))) if len(row_risk) > 0 else 0.0
             
             total_delta += net_delta
             total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#4ade80' if premium >= 0 else '#f87171'
-            m_color = '#4ade80'
+            m_color = '#4ade80' if leg['Qty'] > 0 else '#f87171'
             
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
