@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.76 (1.3.72 UI Locked + Marginal Impact & Spread Caps)
+# VERSION: 1.3.77 (1.3.72 UI Locked + Bounded/Unbounded SPAN Engine)
 # ==========================================
 
 import streamlit as st
@@ -371,7 +371,7 @@ if st.session_state.ref_data is None:
     st.session_state.fwd_spreads = extracted_spreads
     st.session_state.data_date = d_date
 
-# --- 4. MATH ENGINE (Black '76 & BS) ---
+# --- 4. MATH ENGINE (Black '76, BS, & Binomial Tree) ---
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
@@ -404,10 +404,42 @@ def black_scholes_european(S, K, T, r, sigma, option_type, q=0.0):
     else:
         return K * math.exp(-r * T) * norm_cdf(-d2) - S * math.exp(-q * T) * norm_cdf(-d1)
 
-def bjerksund_stensland_american(S, K, T, r, sigma, option_type):
-    bs_price = black_scholes_european(S, K, T, r, sigma, option_type, q=0.0)
-    if option_type == 'Call': return bs_price 
-    else: return max(bs_price, max(0, K - S))
+def american_binomial_pricer(S, K, T, r, sigma, option_type, q=0.0, steps=100):
+    if T <= 0:
+        px = max(0, S - K) if option_type == 'Call' else max(0, K - S)
+        delta = 1.0 if (option_type == 'Call' and S > K) else (-1.0 if (option_type == 'Put' and S < K) else 0.0)
+        return px, delta
+    
+    dt = T / steps
+    u = math.exp(sigma * math.sqrt(dt))
+    d = 1.0 / u
+    p = (math.exp((r - q) * dt) - d) / (u - d)
+    
+    asset_prices = S * (u ** np.arange(steps, -1, -1)) * (d ** np.arange(0, steps + 1))
+    
+    if option_type == 'Call':
+        values = np.maximum(0, asset_prices - K)
+    else:
+        values = np.maximum(0, K - asset_prices)
+    
+    discount = math.exp(-r * dt)
+    v_u, v_d = 0.0, 0.0
+    
+    for j in range(steps - 1, -1, -1):
+        asset_prices = S * (u ** np.arange(j, -1, -1)) * (d ** np.arange(0, j + 1))
+        values = discount * (p * values[:-1] + (1 - p) * values[1:])
+        
+        if option_type == 'Call':
+            values = np.maximum(values, asset_prices - K)
+        else:
+            values = np.maximum(values, K - asset_prices)
+            
+        if j == 1:
+            v_u = values[0]
+            v_d = values[1]
+            
+    delta = (v_u - v_d) / (S * u - S * d)
+    return values[0], delta
 
 def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
     if simulated_spot <= 0 or strike <= 0 or time_days < 0:
@@ -420,7 +452,7 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
     try:
         S = float(simulated_spot)
         K = float(strike)
-        v = vol_pct / 100.0
+        v = max(0.0001, vol_pct / 100.0)
         T = time_days / 365.0
         
         if T <= 0.0:
@@ -451,14 +483,13 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
         
         if style.upper() == 'EUROPEAN':
             price = black_scholes_european(S, K, T, r, v, kind, q)
+            d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
+            if kind == 'Call':
+                delta = math.exp(-q * T) * norm_cdf(d1)
+            else:
+                delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
         else:
-            price = bjerksund_stensland_american(S, K, T, r, v, kind)
-            
-        d1 = (math.log(S / K) + (r - q + 0.5 * v ** 2) * T) / (v * math.sqrt(T))
-        if kind == 'Call':
-            delta = math.exp(-q * T) * norm_cdf(d1)
-        else:
-            delta = math.exp(-q * T) * (norm_cdf(d1) - 1)
+            price, delta = american_binomial_pricer(S, K, T, r, v, kind, q, steps=100)
             
         return price, delta
     except: 
@@ -528,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.76</div>
+            <div class="header-sub">Option Strategy Builder v1.3.72</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -877,7 +908,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -949,7 +980,6 @@ if current_view == "🧮 Strategy Builder":
         # TRUE PORTFOLIO MARGIN CALCULATION
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
         leg_risk_arrays = []
-        
         tkr = st.session_state.ticker.replace(".AX", "")
         
         for leg in st.session_state.legs:
@@ -977,17 +1007,25 @@ if current_view == "🧮 Strategy Builder":
         def compute_margin(legs_list, arrays_list):
             if not legs_list: return 0.0
             
-            port_scen = np.zeros(len(arrays_list[0])) if len(arrays_list) > 0 and len(arrays_list[0]) > 0 else np.zeros(1)
-            for r, l in zip(arrays_list, legs_list):
-                port_scen += r * l['Qty']
+            if len(arrays_list) > 0 and len(arrays_list[0]) > 1:
+                port_scen = np.zeros(len(arrays_list[0]))
+                for r, l in zip(arrays_list, legs_list):
+                    port_scen += r * l['Qty']
+                span_loss = abs(min(0.0, np.min(port_scen)))
+            else:
+                span_loss = 0.0
                 
-            span_loss = abs(min(0.0, np.min(port_scen)))
+            call_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Call')
+            put_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Put')
+            is_unbounded = (call_qty < 0) or (put_qty < 0)
             
-            strikes = [float(l['Strike']) for l in legs_list]
-            if not strikes:
+            if is_unbounded:
                 return span_loss
                 
-            test_spots = strikes + [0.0, max(strikes) * 3]
+            strikes = [float(l['Strike']) for l in legs_list]
+            if not strikes: return span_loss
+            
+            test_spots = strikes + [0.0, max(strikes) * 2.0]
             pnls = []
             for spot in test_spots:
                 pnl = 0.0
@@ -996,13 +1034,7 @@ if current_view == "🧮 Strategy Builder":
                     pnl += l['Qty'] * val * contract_multiplier
                 pnls.append(pnl)
                 
-            min_pnl = min(pnls)
-            
-            if min_pnl < -1e7:
-                intrinsic_loss = 0.0
-            else:
-                intrinsic_loss = abs(min(0.0, min_pnl))
-                
+            intrinsic_loss = abs(min(0.0, min(pnls)))
             return max(span_loss, intrinsic_loss)
 
         total_margin = compute_margin(st.session_state.legs, leg_risk_arrays)
@@ -1027,7 +1059,6 @@ if current_view == "🧮 Strategy Builder":
             net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
-            # Marginal Impact Calculation
             legs_without = st.session_state.legs[:i] + st.session_state.legs[i+1:]
             arrays_without = leg_risk_arrays[:i] + leg_risk_arrays[i+1:]
             margin_without = compute_margin(legs_without, arrays_without)
@@ -1208,8 +1239,8 @@ if current_view == "🧮 Strategy Builder":
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1804,7 +1835,7 @@ elif current_view == "💼 Portfolio Tracker":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            a_c1, a_c2, a_c3 = st.columns([1, 1, 4])
+            a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
             with a_c1:
                 if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
