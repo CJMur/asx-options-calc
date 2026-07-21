@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.73 (UI Locked + True Marginal Impact + Spread Risk Caps)
+# VERSION: 1.3.74 (UI Locked + Spread Margin Caps + Green Formatting)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.73</div>
+            <div class="header-sub">Option Strategy Builder v1.3.74</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -959,6 +959,7 @@ if current_view == "🧮 Strategy Builder":
         st.subheader("Strategy")
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
+        margin_multiplier = 10 if st.session_state.ticker == 'XJO' else 1
         
         h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.5, 1.8, 1.0, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
@@ -979,7 +980,9 @@ if current_view == "🧮 Strategy Builder":
 
         # TRUE PORTFOLIO MARGIN CALCULATION
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
+        portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
         leg_risk_arrays = []
+        
         tkr = st.session_state.ticker.replace(".AX", "")
         
         for leg in st.session_state.legs:
@@ -998,48 +1001,38 @@ if current_view == "🧮 Strategy Builder":
                 ]
             
             if not match.empty and scen_cols:
-                leg_risk_arrays.append(match.iloc[0][scen_cols].values.astype(float))
+                risk_array = match.iloc[0][scen_cols].values.astype(float)
             else:
-                leg_risk_arrays.append(np.zeros(len(scen_cols)) if scen_cols else np.zeros(1))
+                risk_array = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
                 
-        def compute_margin(legs, risk_arrays, contract_mult):
-            if not legs: return 0.0
-            
-            # 1. SPAN Risk (Scenario Scans)
-            if len(risk_arrays) > 0 and len(risk_arrays[0]) > 1:
-                port_scen = np.zeros(len(risk_arrays[0]))
-                for r, l in zip(risk_arrays, legs):
-                    port_scen += r * l['Qty']
-                span_loss = np.min(port_scen)
-            else:
-                span_loss = 0.0
-                
-            # 2. Structural Risk Capping (Spread Width Max Loss)
-            def calc_intrinsic(spot):
+            leg_risk_arrays.append(risk_array)
+            portfolio_scenarios += risk_array * leg['Qty']
+
+        def get_max_loss(legs_list):
+            if not legs_list: return 0.0
+            strikes = [float(l['Strike']) for l in legs_list]
+            test_spots = strikes + [0.0, max(strikes) * 3]
+            pnls = []
+            for spot in test_spots:
                 pnl = 0.0
-                for leg in legs:
-                    val = max(0.0, spot - float(leg['Strike'])) if leg['Type'] == 'Call' else max(0.0, float(leg['Strike']) - spot)
-                    pnl += leg['Qty'] * val
-                return pnl
-                
-            all_k = [float(l['Strike']) for l in legs]
-            if all_k:
-                intr_pnls = [calc_intrinsic(k) for k in all_k]
-                bounded_loss = abs(min(0.0, min(intr_pnls))) * contract_mult
-            else:
-                bounded_loss = 0.0
-                
-            base_risk = max(abs(min(0.0, span_loss)), bounded_loss)
-            
-            # 3. Total Premium Overlay
-            tot_prem = sum(-(l['Qty'] * l['Entry'] * contract_mult) for l in legs)
-            
-            return base_risk + (tot_prem if tot_prem > 0 else 0.0)
+                for l in legs_list:
+                    val = max(0.0, spot - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - spot)
+                    pnl += l['Qty'] * val * contract_multiplier
+                pnls.append(pnl)
+            min_pnl = min(pnls)
+            if min_pnl < -1e7: 
+                return float('inf')
+            return abs(min(0.0, min_pnl))
 
-        total_margin = compute_margin(st.session_state.legs, leg_risk_arrays, contract_multiplier)
-        total_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in st.session_state.legs)
+        max_loss = get_max_loss(st.session_state.legs)
+        worst_span_loss = abs(min(0.0, np.min(portfolio_scenarios)) * margin_multiplier) if len(portfolio_scenarios) > 0 else 0.0
+        
+        if max_loss < 1e7:
+            total_margin = max(worst_span_loss, max_loss)
+        else:
+            total_margin = worst_span_loss
 
-        total_delta, raw_theo_sum = 0, 0
+        total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
         
         for i, leg in enumerate(st.session_state.legs):
@@ -1059,23 +1052,23 @@ if current_view == "🧮 Strategy Builder":
             net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
-            # True Marginal Impact Engine
-            legs_without = st.session_state.legs[:i] + st.session_state.legs[i+1:]
-            arrays_without = leg_risk_arrays[:i] + leg_risk_arrays[i+1:]
-            margin_without = compute_margin(legs_without, arrays_without, contract_multiplier)
-            
-            row_margin = margin_without - total_margin
+            if leg['Qty'] > 0:
+                row_margin = abs(premium)
+            else:
+                row_risk = leg_risk_arrays[i] * leg['Qty']
+                row_margin = abs(min(0.0, np.min(row_risk)) * margin_multiplier) if len(row_risk) > 0 else 0.0
             
             total_delta += net_delta
+            total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#4ade80' if premium >= 0 else '#f87171'
-            m_color = '#4ade80' if row_margin >= 0 else '#f87171'
+            m_color = '#4ade80'
             
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
             premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
-            margin_str = f"${row_margin:,.0f}" if row_margin >= 0 else f"-${abs(row_margin):,.0f}"
+            margin_str = f"${row_margin:,.0f}"
             
             c = st.columns(h_col_spec)
             
@@ -1229,18 +1222,18 @@ if current_view == "🧮 Strategy Builder":
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
         tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
-        tot_mar_str = f"${total_margin:,.0f}" if total_margin >= 0 else f"-${abs(total_margin):,.0f}"
+        tot_mar_str = f"${total_margin:,.0f}"
         
         tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
-        tot_m_color = '#f87171' if total_margin > 0 else '#4ade80'
+        tot_m_color = '#4ade80'
 
         with st.container():
             f = st.columns(h_col_spec)
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1714,7 +1707,7 @@ elif current_view == "💼 Portfolio Tracker":
                 disp_data = display_legs[j]
                 c = st.columns(p_h_col_spec)
                 
-                row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
+                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
                 
                 # QTY
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
