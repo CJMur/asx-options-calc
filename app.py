@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.68 (Formatting Restored + Portfolio Features + SPAN Math)
+# VERSION: 1.3.72 (Strict 1.3.64 UI Restore + Math Fixes)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.68</div>
+            <div class="header-sub">Option Strategy Builder v1.3.72</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -833,12 +833,12 @@ if current_view == "🧮 Strategy Builder":
                 for col in row.index:
                     s = ""
                     if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot:
-                        s += "background-color: rgba(74, 222, 128, 0.10); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot:
-                        s += "background-color: rgba(74, 222, 128, 0.10); "
+                        s += "background-color: rgba(128,128,128,0.15); "
                     
                     if col == 'STRIKE':
-                        s += "font-weight: bold; background-color: rgba(255,255,255,0.05); "
+                        s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
                     
                     if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None":
                         s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
@@ -908,7 +908,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"➕ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
                         for leg in selected_legs:
                             r = leg['row']
                             kind = leg['kind']
@@ -959,9 +959,8 @@ if current_view == "🧮 Strategy Builder":
         st.subheader("Strategy")
         
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
-        margin_multiplier = 10 if st.session_state.ticker == 'XJO' else 1
         
-        h_col_spec = [0.9, 1.3, 0.6, 0.8, 1.5, 1.5, 1.1, 1.0, 1.0, 1.2, 1.3, 0.4]
+        h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.5, 1.8, 1.0, 1.0, 1.0, 1.2, 1.3, 0.4]
         cols_header = st.columns(h_col_spec)
         
         with cols_header[0]: st.markdown('<div class="trade-header" title="Quantity (Editable)">Qty</div>', unsafe_allow_html=True)
@@ -1007,14 +1006,44 @@ if current_view == "🧮 Strategy Builder":
                 
             leg_risk_arrays.append(risk_array)
             portfolio_scenarios += risk_array * leg['Qty']
-            
-        worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-        base_portfolio_risk = abs(min(0.0, worst_portfolio_loss) * margin_multiplier)
         
-        total_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in st.session_state.legs)
-        total_margin = base_portfolio_risk + (total_premium if total_premium > 0 else 0.0)
+        # NEW MARGIN LOGIC: Generalized covered debit spread detection
+        total_margin = 0.0
+        legs_list = st.session_state.legs
+        has_short = any(leg['Qty'] < 0 for leg in legs_list)
+        is_covered_debit_spread = False
+        
+        if has_short:
+            uncovered_shorts = False
+            available_longs = [{'leg': l, 'rem_qty': l['Qty']} for l in legs_list if l['Qty'] > 0]
+            
+            for s_leg in [l for l in legs_list if l['Qty'] < 0]:
+                short_qty_needed = abs(s_leg['Qty'])
+                for al in available_longs:
+                    l_leg = al['leg']
+                    if al['rem_qty'] > 0 and l_leg['Type'] == s_leg['Type'] and l_leg['ExpDateStr'] == s_leg['ExpDateStr']:
+                        if (s_leg['Type'] == 'Call' and l_leg['Strike'] <= s_leg['Strike']) or \
+                           (s_leg['Type'] == 'Put' and l_leg['Strike'] >= s_leg['Strike']):
+                            cover_amount = min(short_qty_needed, al['rem_qty'])
+                            al['rem_qty'] -= cover_amount
+                            short_qty_needed -= cover_amount
+                            if short_qty_needed == 0:
+                                break
+                if short_qty_needed > 0:
+                    uncovered_shorts = True
+                    break
+            
+            net_premium = sum(-(l['Qty'] * l['Entry']) for l in legs_list)
+            if not uncovered_shorts and net_premium <= 0:
+                is_covered_debit_spread = True
 
-        total_delta, raw_theo_sum = 0, 0
+        if is_covered_debit_spread:
+            total_margin = 0.0
+        else:
+            worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
+            total_margin = min(0.0, worst_portfolio_loss)
+
+        total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
         
         for i, leg in enumerate(st.session_state.legs):
@@ -1034,17 +1063,15 @@ if current_view == "🧮 Strategy Builder":
             net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
-            # Marginal Impact Calculation (Matches Tradefloor rows)
-            portfolio_without_leg = portfolio_scenarios - (leg_risk_arrays[i] * leg['Qty'])
-            worst_without_leg = np.min(portfolio_without_leg) if len(portfolio_without_leg) > 0 else 0.0
-            base_risk_without = abs(min(0.0, worst_without_leg) * margin_multiplier)
-            
-            prem_without_leg = total_premium - premium
-            margin_without_leg = base_risk_without + (prem_without_leg if prem_without_leg > 0 else 0.0)
-            
-            row_margin = total_margin - margin_without_leg
+            # Individual Row Margin Display
+            if leg['Qty'] > 0:
+                row_margin = 0.0
+            else:
+                row_risk = leg_risk_arrays[i] * leg['Qty']
+                row_margin = min(0.0, np.min(row_risk)) if len(row_risk) > 0 else 0.0
             
             total_delta += net_delta
+            total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#4ade80' if premium >= 0 else '#f87171'
@@ -1053,7 +1080,7 @@ if current_view == "🧮 Strategy Builder":
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
             premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
-            margin_str = f"${row_margin:,.2f}" if row_margin >= 0 else f"-${abs(row_margin):,.2f}"
+            margin_str = f"${row_margin:,.0f}" if row_margin >= 0 else f"-${abs(row_margin):,.0f}"
             
             c = st.columns(h_col_spec)
             
@@ -1207,7 +1234,7 @@ if current_view == "🧮 Strategy Builder":
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
         tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
-        tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
+        tot_mar_str = f"${total_margin:,.0f}" if total_margin >= 0 else f"-${abs(total_margin):,.0f}"
         
         tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
         tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
@@ -1217,8 +1244,8 @@ if current_view == "🧮 Strategy Builder":
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
-            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
+            with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1806,21 +1833,21 @@ elif current_view == "💼 Portfolio Tracker":
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
+            a_c1, a_c2, a_c3 = st.columns([1, 1, 4])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
             with a_c2:
-                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
+                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", width='content'):
                     new_strat = copy.deepcopy(strat)
                     new_strat['id'] = str(uuid.uuid4())
                     new_strat['name'] = new_strat.get('name', 'Strategy') + " (Copy)"
