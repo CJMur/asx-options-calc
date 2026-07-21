@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.72 (Strict 1.3.64 UI Restore + Math Fixes)
+# VERSION: 1.3.73 (UI Locked + True Marginal Impact + Spread Risk Caps)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.72</div>
+            <div class="header-sub">Option Strategy Builder v1.3.73</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -979,9 +979,7 @@ if current_view == "🧮 Strategy Builder":
 
         # TRUE PORTFOLIO MARGIN CALCULATION
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
-        portfolio_scenarios = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
         leg_risk_arrays = []
-        
         tkr = st.session_state.ticker.replace(".AX", "")
         
         for leg in st.session_state.legs:
@@ -1000,50 +998,48 @@ if current_view == "🧮 Strategy Builder":
                 ]
             
             if not match.empty and scen_cols:
-                risk_array = match.iloc[0][scen_cols].values.astype(float)
+                leg_risk_arrays.append(match.iloc[0][scen_cols].values.astype(float))
             else:
-                risk_array = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
+                leg_risk_arrays.append(np.zeros(len(scen_cols)) if scen_cols else np.zeros(1))
                 
-            leg_risk_arrays.append(risk_array)
-            portfolio_scenarios += risk_array * leg['Qty']
-        
-        # NEW MARGIN LOGIC: Generalized covered debit spread detection
-        total_margin = 0.0
-        legs_list = st.session_state.legs
-        has_short = any(leg['Qty'] < 0 for leg in legs_list)
-        is_covered_debit_spread = False
-        
-        if has_short:
-            uncovered_shorts = False
-            available_longs = [{'leg': l, 'rem_qty': l['Qty']} for l in legs_list if l['Qty'] > 0]
+        def compute_margin(legs, risk_arrays, contract_mult):
+            if not legs: return 0.0
             
-            for s_leg in [l for l in legs_list if l['Qty'] < 0]:
-                short_qty_needed = abs(s_leg['Qty'])
-                for al in available_longs:
-                    l_leg = al['leg']
-                    if al['rem_qty'] > 0 and l_leg['Type'] == s_leg['Type'] and l_leg['ExpDateStr'] == s_leg['ExpDateStr']:
-                        if (s_leg['Type'] == 'Call' and l_leg['Strike'] <= s_leg['Strike']) or \
-                           (s_leg['Type'] == 'Put' and l_leg['Strike'] >= s_leg['Strike']):
-                            cover_amount = min(short_qty_needed, al['rem_qty'])
-                            al['rem_qty'] -= cover_amount
-                            short_qty_needed -= cover_amount
-                            if short_qty_needed == 0:
-                                break
-                if short_qty_needed > 0:
-                    uncovered_shorts = True
-                    break
+            # 1. SPAN Risk (Scenario Scans)
+            if len(risk_arrays) > 0 and len(risk_arrays[0]) > 1:
+                port_scen = np.zeros(len(risk_arrays[0]))
+                for r, l in zip(risk_arrays, legs):
+                    port_scen += r * l['Qty']
+                span_loss = np.min(port_scen)
+            else:
+                span_loss = 0.0
+                
+            # 2. Structural Risk Capping (Spread Width Max Loss)
+            def calc_intrinsic(spot):
+                pnl = 0.0
+                for leg in legs:
+                    val = max(0.0, spot - float(leg['Strike'])) if leg['Type'] == 'Call' else max(0.0, float(leg['Strike']) - spot)
+                    pnl += leg['Qty'] * val
+                return pnl
+                
+            all_k = [float(l['Strike']) for l in legs]
+            if all_k:
+                intr_pnls = [calc_intrinsic(k) for k in all_k]
+                bounded_loss = abs(min(0.0, min(intr_pnls))) * contract_mult
+            else:
+                bounded_loss = 0.0
+                
+            base_risk = max(abs(min(0.0, span_loss)), bounded_loss)
             
-            net_premium = sum(-(l['Qty'] * l['Entry']) for l in legs_list)
-            if not uncovered_shorts and net_premium <= 0:
-                is_covered_debit_spread = True
+            # 3. Total Premium Overlay
+            tot_prem = sum(-(l['Qty'] * l['Entry'] * contract_mult) for l in legs)
+            
+            return base_risk + (tot_prem if tot_prem > 0 else 0.0)
 
-        if is_covered_debit_spread:
-            total_margin = 0.0
-        else:
-            worst_portfolio_loss = np.min(portfolio_scenarios) if len(portfolio_scenarios) > 0 else 0.0
-            total_margin = min(0.0, worst_portfolio_loss)
+        total_margin = compute_margin(st.session_state.legs, leg_risk_arrays, contract_multiplier)
+        total_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in st.session_state.legs)
 
-        total_delta, total_premium, raw_theo_sum = 0, 0, 0
+        total_delta, raw_theo_sum = 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
         
         for i, leg in enumerate(st.session_state.legs):
@@ -1063,15 +1059,14 @@ if current_view == "🧮 Strategy Builder":
             net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
             
-            # Individual Row Margin Display
-            if leg['Qty'] > 0:
-                row_margin = 0.0
-            else:
-                row_risk = leg_risk_arrays[i] * leg['Qty']
-                row_margin = min(0.0, np.min(row_risk)) if len(row_risk) > 0 else 0.0
+            # True Marginal Impact Engine
+            legs_without = st.session_state.legs[:i] + st.session_state.legs[i+1:]
+            arrays_without = leg_risk_arrays[:i] + leg_risk_arrays[i+1:]
+            margin_without = compute_margin(legs_without, arrays_without, contract_multiplier)
+            
+            row_margin = margin_without - total_margin
             
             total_delta += net_delta
-            total_premium += premium
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#4ade80' if premium >= 0 else '#f87171'
@@ -1237,7 +1232,7 @@ if current_view == "🧮 Strategy Builder":
         tot_mar_str = f"${total_margin:,.0f}" if total_margin >= 0 else f"-${abs(total_margin):,.0f}"
         
         tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
-        tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
+        tot_m_color = '#f87171' if total_margin > 0 else '#4ade80'
 
         with st.container():
             f = st.columns(h_col_spec)
@@ -1719,7 +1714,7 @@ elif current_view == "💼 Portfolio Tracker":
                 disp_data = display_legs[j]
                 c = st.columns(p_h_col_spec)
                 
-                row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+                row_bg = "rgba(16, 185, 129, 0.15)" if leg['Qty'] > 0 else "rgba(239, 68, 68, 0.15)"
                 
                 # QTY
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
@@ -1833,21 +1828,21 @@ elif current_view == "💼 Portfolio Tracker":
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            a_c1, a_c2, a_c3 = st.columns([1, 1, 4])
+            a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
             with a_c2:
-                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", width='content'):
+                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
                     new_strat = copy.deepcopy(strat)
                     new_strat['id'] = str(uuid.uuid4())
                     new_strat['name'] = new_strat.get('name', 'Strategy') + " (Copy)"
