@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.3.78 (1.3.72 UI Locked + Synthetic SPAN Scanning bounds)
+# VERSION: 1.3.79 (Margin Formatting Updates)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.3.78</div>
+            <div class="header-sub">Option Strategy Builder v1.3.79</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -980,7 +980,6 @@ if current_view == "🧮 Strategy Builder":
         # TRUE PORTFOLIO MARGIN CALCULATION
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
         leg_risk_arrays = []
-        
         tkr = st.session_state.ticker.replace(".AX", "")
         
         for leg in st.session_state.legs:
@@ -999,16 +998,13 @@ if current_view == "🧮 Strategy Builder":
                 ]
             
             if not match.empty and scen_cols:
-                risk_array = match.iloc[0][scen_cols].values.astype(float)
+                leg_risk_arrays.append(match.iloc[0][scen_cols].values.astype(float))
             else:
-                risk_array = np.zeros(len(scen_cols)) if scen_cols else np.zeros(1)
-                
-            leg_risk_arrays.append(risk_array)
+                leg_risk_arrays.append(np.zeros(len(scen_cols)) if scen_cols else np.zeros(1))
 
-        def compute_margin(legs_list, arrays_list):
+        def port_compute_margin(legs_list, arrays_list):
             if not legs_list: return 0.0
             
-            # 1. Parquet Array Risk (Already in dollars)
             if len(arrays_list) > 0 and len(arrays_list[0]) > 1:
                 port_scen = np.zeros(len(arrays_list[0]))
                 for r, l in zip(arrays_list, legs_list):
@@ -1017,7 +1013,6 @@ if current_view == "🧮 Strategy Builder":
             else:
                 array_span_loss = 0.0
                 
-            # 2. Synthetic Extreme Scan Risk (Catches far OTM unbounded risks missed by narrow Parquet scans)
             S = st.session_state.spot_price
             scan_pct = 0.065 if st.session_state.ticker == 'XJO' else 0.15
             test_spots = [S * (1 - scan_pct), S * (1 + scan_pct)]
@@ -1034,7 +1029,6 @@ if current_view == "🧮 Strategy Builder":
             synthetic_span_loss = abs(min(0.0, min(synthetic_pnls)))
             unbounded_span_loss = max(array_span_loss, synthetic_span_loss)
             
-            # 3. Check for Bounded Risk (Spreads / Iron Condors)
             call_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Call')
             put_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Put')
             is_unbounded = (call_qty < 0) or (put_qty < 0)
@@ -1042,7 +1036,6 @@ if current_view == "🧮 Strategy Builder":
             if is_unbounded:
                 return unbounded_span_loss
                 
-            # 4. Intrinsic Capping for Bounded Spreads
             strikes = [float(l['Strike']) for l in legs_list]
             if not strikes: return unbounded_span_loss
             
@@ -1058,7 +1051,7 @@ if current_view == "🧮 Strategy Builder":
             intrinsic_loss = abs(min(0.0, min(bound_pnls)))
             return min(unbounded_span_loss, intrinsic_loss)
 
-        total_margin = compute_margin(st.session_state.legs, leg_risk_arrays)
+        total_margin = port_compute_margin(st.session_state.legs, leg_risk_arrays)
 
         total_delta, total_premium, raw_theo_sum = 0, 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
@@ -1083,7 +1076,7 @@ if current_view == "🧮 Strategy Builder":
             # Marginal Impact Calculation
             legs_without = st.session_state.legs[:i] + st.session_state.legs[i+1:]
             arrays_without = leg_risk_arrays[:i] + leg_risk_arrays[i+1:]
-            margin_without = compute_margin(legs_without, arrays_without)
+            margin_without = port_compute_margin(legs_without, arrays_without)
             
             row_margin = total_margin - margin_without
             
@@ -1092,7 +1085,6 @@ if current_view == "🧮 Strategy Builder":
             raw_theo_sum += leg['Qty'] * new_theo
             
             p_color = '#4ade80' if premium >= 0 else '#f87171'
-            m_color = '#4ade80' if row_margin >= 0 else '#f87171'
             
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
@@ -1240,7 +1232,7 @@ if current_view == "🧮 Strategy Builder":
             with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
             with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
             with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{p_color}; font-weight:600;'>{premium_str}</span></div>", unsafe_allow_html=True)
-            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{m_color}; font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
+            with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
             with c[11]:
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
@@ -1251,10 +1243,9 @@ if current_view == "🧮 Strategy Builder":
 
         strategy_net_theo = raw_theo_sum / max_qty if max_qty != 0 else 0.0
         tot_prem_str = f"${total_premium:,.2f}" if total_premium >= 0 else f"-${abs(total_premium):,.2f}"
-        tot_mar_str = f"${total_margin:,.0f}" if total_margin >= 0 else f"-${abs(total_margin):,.0f}"
+        tot_mar_str = f"${total_margin:,.2f}" if total_margin >= 0 else f"-${abs(total_margin):,.2f}"
         
         tot_p_color = '#4ade80' if total_premium >= 0 else '#f87171'
-        tot_m_color = '#4ade80' if total_margin >= 0 else '#f87171'
 
         with st.container():
             f = st.columns(h_col_spec)
@@ -1262,7 +1253,7 @@ if current_view == "🧮 Strategy Builder":
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{total_delta:,.2f}</div>", unsafe_allow_html=True)
             with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
-            with f[10]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_m_color}; font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
+            with f[10]: st.markdown(f"<div class='strategy-text'><span style='font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
 
         # --- NEW: SAVE TO PORTFOLIO MODULE (Moved Up) ---
         st.markdown("---")
@@ -1725,13 +1716,6 @@ elif current_view == "💼 Portfolio Tracker":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
-            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
-            h_cols = st.columns(p_h_col_spec)
-            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
-            for col, h in zip(h_cols, headers):
-                col.markdown(f'<div class="trade-header">{h}</div>', unsafe_allow_html=True)
-
             def port_compute_margin(legs_list, arrays_list):
                 if not legs_list: return 0.0
                 
@@ -1781,26 +1765,12 @@ elif current_view == "💼 Portfolio Tracker":
                 intrinsic_loss = abs(min(0.0, min(bound_pnls)))
                 return min(unbounded_span_loss, intrinsic_loss)
 
-            scen_cols_p = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
-            leg_risk_arrays_p = []
-            tkr_p = ticker_display.replace(".AX", "")
-            
-            for leg in strat['legs']:
-                match = pd.DataFrame()
-                if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
-                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr_p == 'XJO' else st.session_state.ref_data['Ticker'] == tkr_p
-                    match = st.session_state.ref_data[
-                        ticker_mask & 
-                        (st.session_state.ref_data['Type'] == leg['Type']) & 
-                        (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
-                        (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
-                    ]
-                if not match.empty and scen_cols_p:
-                    leg_risk_arrays_p.append(match.iloc[0][scen_cols_p].values.astype(float))
-                else:
-                    leg_risk_arrays_p.append(np.zeros(len(scen_cols_p)) if scen_cols_p else np.zeros(1))
-
-            port_total_margin = port_compute_margin(strat['legs'], leg_risk_arrays_p)
+            # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
+            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
+            h_cols = st.columns(p_h_col_spec)
+            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
+            for col, h in zip(h_cols, headers):
+                col.markdown(f'<div class="trade-header">{h}</div>', unsafe_allow_html=True)
 
             for j, leg in enumerate(strat['legs']):
                 disp_data = display_legs[j]
@@ -1920,21 +1890,21 @@ elif current_view == "💼 Portfolio Tracker":
                 # DELETE LEG
                 with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
+                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", use_container_width=True):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
                         st.rerun()
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            a_c1, a_c2, a_c3 = st.columns([1, 1, 4])
+            a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='content'):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
                     st.rerun()
             with a_c2:
-                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", width='content'):
+                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
                     new_strat = copy.deepcopy(strat)
                     new_strat['id'] = str(uuid.uuid4())
                     new_strat['name'] = new_strat.get('name', 'Strategy') + " (Copy)"
