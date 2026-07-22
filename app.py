@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.0 (Fixed Matrix Percentage Calculation)
+# VERSION: 1.4.1 (Portfolio Rows Display Premium instead of P&L)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.0</div>
+            <div class="header-sub">Option Strategy Builder v1.4.1</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1653,6 +1653,9 @@ elif current_view == "💼 Portfolio Tracker":
             strat_pnl += leg_pnl
             net_live_theo_sum += cur_theo * leg['Qty']
             
+            premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
+            premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
+            
             row = {
                 "Code": leg['Code'],
                 "Action": "Buy" if leg['Qty'] > 0 else "Sell",
@@ -1661,10 +1664,10 @@ elif current_view == "💼 Portfolio Tracker":
                 "Strike": f"${leg['Strike']:.2f}",
                 "Expiry": leg['ExpDateStr'],
                 "Entry Theo": f"{leg['Entry']:.3f}",
-                "Live Theo": f"{cur_theo:.3f}"
+                "Live Theo": f"{cur_theo:.3f}",
+                "Premium": premium_str,
+                "Raw_Premium": premium
             }
-            sign = "+" if leg_pnl >= 0 else ""
-            row["Open P&L"] = f"{sign}${leg_pnl:,.2f}"
             display_legs.append(row)
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
@@ -1793,7 +1796,7 @@ elif current_view == "💼 Portfolio Tracker":
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
             p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
-            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Open P&L", ""]
+            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Premium", ""]
             for col, h in zip(h_cols, headers):
                 col.markdown(f'<div class="trade-header">{h}</div>', unsafe_allow_html=True)
 
@@ -1904,13 +1907,13 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.trigger_ls_save = True
                     st.rerun()
 
-                # LIVE THEO & P&L
+                # LIVE THEO & PREMIUM (Replaces Open P&L)
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
-                pnl_val = disp_data['Open P&L']
-                pnl_color = '#4ade80' if "+" in str(disp_data['Open P&L']) else '#f87171'
+                prem_val = disp_data['Raw_Premium']
+                prem_color = '#4ade80' if prem_val >= 0 else '#f87171'
                 
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{pnl_color}; font-weight:600;'>{disp_data['Open P&L']}</span></div>", unsafe_allow_html=True)
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{prem_color}; font-weight:600;'>{disp_data['Premium']}</span></div>", unsafe_allow_html=True)
                 
                 # DELETE LEG
                 with c[9]:
@@ -2003,18 +2006,6 @@ elif current_view == "💼 Portfolio Tracker":
                     
                 df_mx = pd.DataFrame(matrix_data).set_index("Price")
                 
-                port_tot_prem = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in strat['legs'])
-                capital_at_risk = max(port_total_margin, abs(port_tot_prem)) if max(port_total_margin, abs(port_tot_prem)) > 0 else 1.0
-                
-                def format_pnl(val):
-                    try:
-                        if pd.isna(val): return ""
-                        pct = (float(val) / capital_at_risk) * 100
-                        sign = "+" if float(val) > 0 else ""
-                        return f"${float(val):,.0f} ({sign}{pct:.1f}%)"
-                    except:
-                        return ""
-
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
@@ -2023,7 +2014,7 @@ elif current_view == "💼 Portfolio Tracker":
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_pnl), use_container_width=True)
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
