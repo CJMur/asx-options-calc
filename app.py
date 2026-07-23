@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.1 (Portfolio Rows Display Premium instead of P&L)
+# VERSION: 1.4.2 (Restored Portfolio Theoretical Matrix)
 # ==========================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.1</div>
+            <div class="header-sub">Option Strategy Builder v1.4.2</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
