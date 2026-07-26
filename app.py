@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.2 (Restored Portfolio Theoretical Matrix)
+# VERSION: 1.4.3 (Light Mode UI Text Adjustments)
 # ==========================================
 
 import streamlit as st
@@ -114,7 +114,7 @@ st.markdown("""
     div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
     div[role="slider"] { background-color: #0050FF !important; border: none !important; box-shadow: none !important; }
     div[data-testid="stSlider"] svg path { fill: #0050FF !important; stroke: #0050FF !important; }
-    div[data-testid="stSlider"] p { color: white !important; }
+    div[data-testid="stSlider"] p { color: var(--text-color) !important; }
     input[type=range] { accent-color: #0050FF !important; }
     
     [data-testid="stDataFrame"] [aria-selected="true"] > div {
@@ -559,7 +559,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.2</div>
+            <div class="header-sub">Option Strategy Builder v1.4.3</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -849,7 +849,9 @@ if current_view == "🧮 Strategy Builder":
             styled_disp = disp.style.apply(highlight_itm, axis=1).format({
                 'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}', 'STRIKE': '{:.3f}',
                 'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
-            })
+            }).set_table_styles([
+                {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+            ])
 
             editor_key = f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}"
             
@@ -1411,7 +1413,9 @@ if current_view == "🧮 Strategy Builder":
                     styles_df.loc[idx, col] = s
             return styles_df
 
-        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
+        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl).set_table_styles([
+            {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+        ]), use_container_width=True, height=500)
 
         # --- ADVANCED CHARTING ENGINE ---
         st.markdown("### Payoff Chart")
@@ -2014,7 +2018,9 @@ elif current_view == "💼 Portfolio Tracker":
                     return styles_df
 
                 format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict), use_container_width=True)
+                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
+                    {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+                ]), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
