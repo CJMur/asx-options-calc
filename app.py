@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.3 (Light Mode UI Text Adjustments)
+# VERSION: 1.4.4 (Automated Historical Dividend Cloning)
 # ==========================================
 
 import streamlit as st
@@ -540,6 +540,26 @@ def fetch_data(t):
                     amt = info.get('lastDividendValue', 0)
                     if amt == 0: amt = info.get('dividendRate', 0) / 2
                     div_info = {'amount': amt, 'date': ex_date}
+
+        # Historical dividend cloning fallback
+        if div_info is None and clean != 'XJO':
+            try:
+                divs = tk.dividends
+                if not divs.empty:
+                    now = get_sydney_time()
+                    projected_divs = []
+                    for d_date, amt in divs.items():
+                        if amt > 0:
+                            clean_date = pd.to_datetime(d_date).replace(tzinfo=None)
+                            proj_date = clean_date + timedelta(days=364) 
+                            if proj_date > now:
+                                projected_divs.append({'amount': float(amt), 'date': proj_date})
+                                
+                    if projected_divs:
+                        projected_divs.sort(key=lambda x: x['date'])
+                        div_info = projected_divs[0]
+            except Exception:
+                pass
                     
         return "YAHOO", spot, div_info
     except: 
@@ -559,7 +579,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.3</div>
+            <div class="header-sub">Option Strategy Builder v1.4.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
