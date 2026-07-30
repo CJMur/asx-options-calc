@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.4 (Automated Historical Dividend Cloning)
+# VERSION: 1.4.5 (Unified Matrix Toggle System)
 # ==========================================
 
 import streamlit as st
@@ -579,7 +579,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.4</div>
+            <div class="header-sub">Option Strategy Builder v1.4.5</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1311,7 +1311,9 @@ if current_view == "🧮 Strategy Builder":
 
         # --- MATRIX ---
         st.markdown("---")
-        st.subheader("Payoff Matrix")
+        st.subheader("Matrix")
+        
+        matrix_view = st.radio("Matrix Display Mode", ["Profit / Loss", "Theoretical Price"], horizontal=True)
         
         m1, m2 = st.columns([1, 1.2], gap="large")
         
@@ -1373,6 +1375,7 @@ if current_view == "🧮 Strategy Builder":
             row = {"Price": row_label}
             for d in dates:
                 pnl = 0
+                net_theo_sum = 0
                 for leg in st.session_state.legs:
                     sim_vol = max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod)
                     exp_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
@@ -1388,10 +1391,15 @@ if current_view == "🧮 Strategy Builder":
                         rem_days, sim_vol, leg['ExpDateStr']
                     )
                     pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
+                    net_theo_sum += exit_px * leg['Qty']
                 
                 col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
                 if d == 0: col_name = f"Today ({col_name})"
-                row[col_name] = pnl
+                
+                if matrix_view == "Profit / Loss":
+                    row[col_name] = pnl
+                else:
+                    row[col_name] = net_theo_sum / max_qty if max_qty != 0 else 0.0
             matrix_data.append(row)
             
         df_mx = pd.DataFrame(matrix_data).set_index("Price")
@@ -1432,10 +1440,23 @@ if current_view == "🧮 Strategy Builder":
                         
                     styles_df.loc[idx, col] = s
             return styles_df
+            
+        def highlight_spot(df):
+            styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+            for idx in df.index:
+                if "SPOT" in str(idx):
+                    styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+            return styles_df
 
-        st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl).set_table_styles([
-            {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
-        ]), use_container_width=True, height=500)
+        if matrix_view == "Profit / Loss":
+            st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl).set_table_styles([
+                {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+            ]), use_container_width=True, height=500)
+        else:
+            format_dict = {col: "{:.3f}" for col in df_mx.columns}
+            st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
+                {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+            ]), use_container_width=True, height=500)
 
         # --- ADVANCED CHARTING ENGINE ---
         st.markdown("### Payoff Chart")
@@ -1967,9 +1988,11 @@ elif current_view == "💼 Portfolio Tracker":
                     st.rerun()
 
             # --- PORTFOLIO THEO MATRIX ---
-            show_matrix = st.checkbox("📈 Show Theoretical Price Matrix", key=f"show_mx_{strat['id']}")
+            show_matrix = st.checkbox("📈 Show Matrix", key=f"show_mx_{strat['id']}")
             if show_matrix:
-                st.markdown("##### Theoretical Net Theo Matrix")
+                st.markdown("##### Matrix")
+                
+                matrix_view_p = st.radio("Matrix Display Mode", ["Profit / Loss", "Theoretical Price"], horizontal=True, key=f"mx_mode_{strat['id']}")
                 
                 mx_c1, mx_c2 = st.columns([1, 1.2], gap="large")
                 with mx_c1:
@@ -2010,6 +2033,7 @@ elif current_view == "💼 Portfolio Tracker":
                     row_label = f"» ${p:.2f} (SPOT) «" if is_spot else f"${p:.2f}"
                     row = {"Price": row_label}
                     for d in mx_dates:
+                        pnl = 0
                         net_theo_sum = 0
                         for leg in strat['legs']:
                             sim_vol = max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod)
@@ -2021,15 +2045,58 @@ elif current_view == "💼 Portfolio Tracker":
                                 ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], 
                                 rem_days, sim_vol, leg['ExpDateStr']
                             )
+                            pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                             net_theo_sum += exit_px * leg['Qty']
                         
                         col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
                         if d == 0: col_name = f"Today ({col_name})"
-                        row[col_name] = net_theo_sum / max_qty if max_qty != 0 else 0.0
+                        
+                        if matrix_view_p == "Profit / Loss":
+                            row[col_name] = pnl
+                        else:
+                            row[col_name] = net_theo_sum / max_qty if max_qty != 0 else 0.0
                     matrix_data.append(row)
                     
                 df_mx = pd.DataFrame(matrix_data).set_index("Price")
                 
+                port_tot_prem = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in strat['legs'])
+                capital_at_risk = max(port_total_margin, abs(port_tot_prem)) if max(port_total_margin, abs(port_tot_prem)) > 0 else 1.0
+                
+                def format_pnl(val):
+                    try:
+                        if pd.isna(val): return ""
+                        pct = (float(val) / capital_at_risk) * 100
+                        sign = "+" if float(val) > 0 else ""
+                        return f"${float(val):,.0f} ({sign}{pct:.1f}%)"
+                    except:
+                        return ""
+
+                def make_heatmap(df):
+                    max_val = df.max().max()
+                    min_val = df.min().min()
+                    abs_max = max(abs(max_val), abs(min_val), 1)
+                    
+                    styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+                    for idx in df.index:
+                        is_spot = "SPOT" in str(idx)
+                        for col in df.columns:
+                            val = df.loc[idx, col]
+                            s = ""
+                            if val > 0:
+                                intensity = min(val / abs_max, 1.0)
+                                alpha = 0.05 + 0.35 * intensity
+                                s = f"background-color: rgba(74, 222, 128, {alpha:.2f}); "
+                            elif val < 0:
+                                intensity = min(abs(val) / abs_max, 1.0)
+                                alpha = 0.05 + 0.35 * intensity
+                                s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
+                            
+                            if is_spot:
+                                s += "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+                                
+                            styles_df.loc[idx, col] = s
+                    return styles_df
+                    
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
@@ -2037,10 +2104,15 @@ elif current_view == "💼 Portfolio Tracker":
                             styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
                     return styles_df
 
-                format_dict = {col: "{:.3f}" for col in df_mx.columns}
-                st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
-                    {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
-                ]), use_container_width=True)
+                if matrix_view_p == "Profit / Loss":
+                    st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl).set_table_styles([
+                        {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+                    ]), use_container_width=True)
+                else:
+                    format_dict = {col: "{:.3f}" for col in df_mx.columns}
+                    st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
+                        {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+                    ]), use_container_width=True)
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
