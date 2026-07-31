@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.5 (Unified Matrix Toggle System)
+# VERSION: 1.4.8 (Active State Expander Tracking)
 # ==========================================
 
 import streamlit as st
@@ -166,6 +166,7 @@ if 'portfolio_last_refresh' not in st.session_state: st.session_state.portfolio_
 if 'last_upload_hash' not in st.session_state: st.session_state.last_upload_hash = None
 if 'ls_loaded' not in st.session_state: st.session_state.ls_loaded = False
 if 'trigger_ls_save' not in st.session_state: st.session_state.trigger_ls_save = False
+if 'open_strat_id' not in st.session_state: st.session_state.open_strat_id = None
 
 # Navigation binding
 if 'nav_view' not in st.session_state:
@@ -579,7 +580,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.5</div>
+            <div class="header-sub">Option Strategy Builder v1.4.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -609,6 +610,8 @@ current_view = st.radio(
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
 if current_view == "🧮 Strategy Builder":
+    builder_needs_rerun = False
+    
     # --- 7. CONTROLS ---
     tickers_list = []
     if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
@@ -969,11 +972,11 @@ if current_view == "🧮 Strategy Builder":
                         
                         st.session_state.editor_reset += 1 
                         st.session_state.preselect_code = None 
-                        st.rerun()
+                        builder_needs_rerun = True
                 with b_c2:
                     if st.button("Clear Selection", use_container_width=True):
                         st.session_state.editor_reset += 1
-                        st.rerun()
+                        builder_needs_rerun = True
 
     # --- 10. STRATEGY ---
     if st.session_state.legs:
@@ -1121,7 +1124,7 @@ if current_view == "🧮 Strategy Builder":
                 new_qty = st.number_input("Qty", value=int(leg['Qty']), step=1, key=f"qty_{leg['id']}", label_visibility="collapsed")
                 if new_qty != leg['Qty']:
                     st.session_state.legs[i]['Qty'] = new_qty
-                    st.rerun()
+                    builder_needs_rerun = True
                     
             with c[1]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
             with c[2]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{str(leg['Style'])[0]}</div>", unsafe_allow_html=True)
@@ -1181,7 +1184,7 @@ if current_view == "🧮 Strategy Builder":
                             st.session_state.legs[i]['Entry'] = new_entry
                         else:
                             st.session_state.legs[i]['Code'] = "N/A"
-                    st.rerun()
+                    builder_needs_rerun = True
             
             with c[5]: 
                 subset_st = pd.DataFrame()
@@ -1240,7 +1243,7 @@ if current_view == "🧮 Strategy Builder":
                             st.session_state.legs[i]['Entry'] = matched_theo
                         else:
                             st.session_state.legs[i]['Code'] = "N/A"
-                    st.rerun()
+                    builder_needs_rerun = True
                     
             with c[6]: 
                 new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"vol_{leg['id']}", label_visibility="collapsed")
@@ -1251,7 +1254,7 @@ if current_view == "🧮 Strategy Builder":
                         precise_days_diff, new_vol_input, leg['ExpDateStr']
                     )
                     st.session_state.legs[i]['Entry'] = calibrated_theo
-                    st.rerun()
+                    builder_needs_rerun = True
                     
             with c[7]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{new_theo:.3f}</div>", unsafe_allow_html=True)
             with c[8]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{net_delta:.2f}</div>", unsafe_allow_html=True)
@@ -1261,7 +1264,8 @@ if current_view == "🧮 Strategy Builder":
                 st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                     st.session_state.legs.pop(i)
-                    st.rerun()
+                    builder_needs_rerun = True
+                    break
                     
         st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
@@ -1535,7 +1539,14 @@ if current_view == "🧮 Strategy Builder":
         )
         st.plotly_chart(fig, use_container_width=True)
 
+        if builder_needs_rerun:
+            st.rerun()
+
 elif current_view == "💼 Portfolio Tracker":
+    
+    def set_active_strat(s_id):
+        st.session_state.open_strat_id = s_id
+
     st.markdown("### Saved Strategies")
     
     # Portfolio Control Center
@@ -1565,10 +1576,11 @@ elif current_view == "💼 Portfolio Tracker":
                         
                         # Wipe any local override memory for this strategy so it perfectly snaps to the new spot
                         ovr_key = f"ovr_spot_{strat['id']}"
+                        ui_ovr_key = f"ui_{ovr_key}"
                         if ovr_key in st.session_state:
                             del st.session_state[ovr_key]
-                        if f"ui_{ovr_key}" in st.session_state:
-                            del st.session_state[f"ui_{ovr_key}"]
+                        if ui_ovr_key in st.session_state:
+                            del st.session_state[ui_ovr_key]
                         
                         # Update dynamic IV
                         for leg in strat['legs']:
@@ -1579,6 +1591,8 @@ elif current_view == "💼 Portfolio Tracker":
                             
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_ls_save = True
+                    # Do not explicitly open a strat on global refresh, let them default to closed
+                    st.session_state.open_strat_id = None
                     st.rerun()
         else:
             st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
@@ -1662,11 +1676,19 @@ elif current_view == "💼 Portfolio Tracker":
     
     # Portfolio Display Engine
     for i, strat in enumerate(st.session_state.portfolio):
+        port_needs_rerun = False
         ticker_display = strat.get('ticker', 'Unknown')
-        ovr_key = f"ovr_spot_{strat['id']}"
         
-        # 1. ESTABLISH CURRENT SPOT FOR MATH
-        override_val = st.session_state.get(ovr_key, None)
+        ovr_key = f"ovr_spot_{strat['id']}"
+        ui_ovr_key = f"ui_{ovr_key}"
+        
+        # Pull from the explicit widget state if it exists to prevent sync delays
+        if ui_ovr_key in st.session_state and st.session_state[ui_ovr_key] is not None:
+            override_val = st.session_state[ui_ovr_key]
+            st.session_state[ovr_key] = override_val
+        else:
+            override_val = st.session_state.get(ovr_key, None)
+            
         if override_val is not None:
             current_spot_val = float(override_val)
         else:
@@ -1724,22 +1746,25 @@ elif current_view == "💼 Portfolio Tracker":
         
         pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {emoji} Open P&L: :{pnl_color}[{sign}${strat_pnl:,.2f}]"
             
-        with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=True):
+        # Determine if this expander should be forced open because the user just actively interacted with it
+        is_expanded = (st.session_state.get('open_strat_id') == strat['id'])
+            
+        with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=is_expanded):
             
             c_head0, c_head1, c_head2, c_head3, c_head4 = st.columns([1.5, 1, 1, 1, 1.2])
             with c_head0:
                 st.markdown(f"**Strategy Name:**")
-                new_name = st.text_input("Name", value=strat.get('name', 'Strategy'), key=f"rename_{strat['id']}", label_visibility="collapsed")
+                new_name = st.text_input("Name", value=strat.get('name', 'Strategy'), key=f"rename_{strat['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_name != strat.get('name', ''):
                     strat['name'] = new_name
                     st.session_state.trigger_ls_save = True
-                    st.rerun()
+                    port_needs_rerun = True
             with c_head1:
                 st.markdown(f"**Spot at Entry:**")
                 st.markdown(f"${strat.get('spot_at_entry', 0.0):.2f}")
             with c_head2:
                 st.markdown(f"**Net Entry Theo:**")
-                new_net_entry = st.number_input("Net Entry", value=float(net_entry_theo), step=0.01, format="%.3f", key=f"net_entry_{strat['id']}", label_visibility="collapsed")
+                new_net_entry = st.number_input("Net Entry", value=float(net_entry_theo), step=0.01, format="%.3f", key=f"net_entry_{strat['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if not math.isclose(new_net_entry, net_entry_theo, abs_tol=1e-5) and max_qty != 0:
                     diff = new_net_entry - net_entry_theo
                     total_change = diff * max_qty
@@ -1750,17 +1775,16 @@ elif current_view == "💼 Portfolio Tracker":
                             if l['Qty'] != 0:
                                 l['Entry'] += change_per_leg / l['Qty']
                         st.session_state.trigger_ls_save = True
-                        st.rerun()
+                        port_needs_rerun = True
             with c_head3:
                 st.markdown(f"**Net Live Theo:**")
                 st.markdown(f"{net_live_theo:.3f}")
             with c_head4:
                 st.markdown(f"**Spot Price Override:**")
-                new_spot = st.number_input("Override", value=override_val, step=0.10, key=f"ui_{ovr_key}", label_visibility="collapsed", placeholder="Enter price here")
-                
+                new_spot = st.number_input("Override", value=override_val, step=0.10, key=ui_ovr_key, label_visibility="collapsed", placeholder="Enter price here", on_change=set_active_strat, args=(strat['id'],))
                 if new_spot != override_val:
                     st.session_state[ovr_key] = new_spot
-                    st.rerun()
+                    port_needs_rerun = True
             
             st.markdown("<br>", unsafe_allow_html=True)
             
@@ -1852,11 +1876,11 @@ elif current_view == "💼 Portfolio Tracker":
                 row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
                 
                 # QTY
-                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
+                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_qty != leg['Qty']:
                     strat['legs'][j]['Qty'] = new_qty
                     st.session_state.trigger_ls_save = True
-                    st.rerun()
+                    port_needs_rerun = True
                     
                 # CODE
                 c[1].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
@@ -1892,7 +1916,7 @@ elif current_view == "💼 Portfolio Tracker":
                     exp_strs = [leg['ExpDateStr']]
                     exp_idx = 0
                     
-                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed")
+                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 
                 if new_exp != leg['ExpDateStr']:
                     strat['legs'][j]['ExpDateStr'] = new_exp
@@ -1908,7 +1932,7 @@ elif current_view == "💼 Portfolio Tracker":
                             strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
                             strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
                     st.session_state.trigger_ls_save = True
-                    st.rerun()
+                    port_needs_rerun = True
 
                 # STRIKE
                 subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr']] if not subset_st.empty else pd.DataFrame()
@@ -1925,7 +1949,7 @@ elif current_view == "💼 Portfolio Tracker":
                     avail_stk = [cur_stk]
                     stk_idx = 0
                 
-                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}")
+                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
                 
                 if new_stk != cur_stk:
                     strat['legs'][j]['Strike'] = new_stk
@@ -1936,23 +1960,23 @@ elif current_view == "💼 Portfolio Tracker":
                             strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
                             strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
                     st.session_state.trigger_ls_save = True
-                    st.rerun()
+                    port_needs_rerun = True
 
                 # VOL
-                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed")
+                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_vol != leg['Vol']:
                     strat['legs'][j]['Vol'] = new_vol
                     st.session_state.trigger_ls_save = True
-                    st.rerun()
+                    port_needs_rerun = True
                     
                 # ENTRY THEO
-                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed")
+                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_entry != leg['Entry']:
                     strat['legs'][j]['Entry'] = new_entry
                     st.session_state.trigger_ls_save = True
-                    st.rerun()
+                    port_needs_rerun = True
 
-                # LIVE THEO & PREMIUM (Replaces Open P&L)
+                # LIVE THEO & PREMIUM 
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 prem_val = disp_data['Raw_Premium']
@@ -1966,7 +1990,9 @@ elif current_view == "💼 Portfolio Tracker":
                     if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
-                        st.rerun()
+                        st.session_state.open_strat_id = strat['id']
+                        port_needs_rerun = True
+                        break 
             
             st.markdown("<br>", unsafe_allow_html=True)
             
@@ -1975,7 +2001,8 @@ elif current_view == "💼 Portfolio Tracker":
                 if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
-                    st.rerun()
+                    st.session_state.open_strat_id = None
+                    port_needs_rerun = True
             with a_c2:
                 if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
                     new_strat = copy.deepcopy(strat)
@@ -1985,22 +2012,23 @@ elif current_view == "💼 Portfolio Tracker":
                         l['id'] = str(uuid.uuid4())
                     st.session_state.portfolio.insert(i + 1, new_strat)
                     st.session_state.trigger_ls_save = True
-                    st.rerun()
+                    st.session_state.open_strat_id = new_strat['id']
+                    port_needs_rerun = True
 
             # --- PORTFOLIO THEO MATRIX ---
-            show_matrix = st.checkbox("📈 Show Matrix", key=f"show_mx_{strat['id']}")
+            show_matrix = st.checkbox("📈 Show Matrix", key=f"show_mx_{strat['id']}", on_change=set_active_strat, args=(strat['id'],))
             if show_matrix:
                 st.markdown("##### Matrix")
                 
-                matrix_view_p = st.radio("Matrix Display Mode", ["Profit / Loss", "Theoretical Price"], horizontal=True, key=f"mx_mode_{strat['id']}")
+                matrix_view_p = st.radio("Matrix Display Mode", ["Profit / Loss", "Theoretical Price"], horizontal=True, key=f"mx_mode_{strat['id']}", on_change=set_active_strat, args=(strat['id'],))
                 
                 mx_c1, mx_c2 = st.columns([1, 1.2], gap="large")
                 with mx_c1:
-                    mx_time_step = st.slider("Step (Days)", 1, 30, 1, key=f"mx_ts_{strat['id']}")
+                    mx_time_step = st.slider("Step (Days)", 1, 30, 1, key=f"mx_ts_{strat['id']}", on_change=set_active_strat, args=(strat['id'],))
                     st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
                     
                     vol_opts = ["IV -10%", "IV Flat", "IV +10%"]
-                    vol_shift_sel = st.radio("Simulate Volatility Shift", vol_opts, index=1, horizontal=True, key=f"mx_vs_{strat['id']}")
+                    vol_shift_sel = st.radio("Simulate Volatility Shift", vol_opts, index=1, horizontal=True, key=f"mx_vs_{strat['id']}", on_change=set_active_strat, args=(strat['id'],))
                     
                     mx_vol_mod = 0.0
                     if vol_shift_sel == "IV -10%": mx_vol_mod = -10.0
@@ -2010,19 +2038,19 @@ elif current_view == "💼 Portfolio Tracker":
                     mx_slider_placeholder = st.empty()
                     
                     st.write("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-                    mx_step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True, key=f"mx_st_{strat['id']}")
+                    mx_step_type = st.radio("Step Type", ["Percentage (%)", "Points/Dollars ($)"], horizontal=True, key=f"mx_st_{strat['id']}", on_change=set_active_strat, args=(strat['id'],))
                     
                     spot = float(current_spot_val)
                     if mx_step_type == "Percentage (%)":
                         range_opts = [x / 200.0 for x in range(1, 11)]
-                        mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%", key=f"mx_sv_{strat['id']}")
+                        mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=range_opts, value=0.01, format_func=lambda x: f"{x*100:.1f}%", key=f"mx_sv_{strat['id']}", on_change=set_active_strat, args=(strat['id'],))
                         prices = [spot * (1 + mx_step_val * j) for j in range(6, -7, -1)]
                     else:
                         if spot > 1000: pts_opts = [10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0]; default_pt = 50.0
                         elif spot > 100: pts_opts = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0]; default_pt = 5.0
                         else: pts_opts = [0.10, 0.25, 0.50, 1.00, 2.00, 5.00]; default_pt = 1.00
                         if default_pt not in pts_opts: default_pt = pts_opts[0]
-                        mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}", key=f"mx_sv_{strat['id']}")
+                        mx_step_val = mx_slider_placeholder.select_slider("Price Step", options=pts_opts, value=default_pt, format_func=lambda x: f"{x:g}", key=f"mx_sv_{strat['id']}", on_change=set_active_strat, args=(strat['id'],))
                         prices = [spot + (mx_step_val * j) for j in range(6, -7, -1)]
 
                 mx_dates = [d * mx_time_step for d in range(8)] 
@@ -2075,7 +2103,6 @@ elif current_view == "💼 Portfolio Tracker":
                     max_val = df.max().max()
                     min_val = df.min().min()
                     abs_max = max(abs(max_val), abs(min_val), 1)
-                    
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
                         is_spot = "SPOT" in str(idx)
@@ -2090,10 +2117,8 @@ elif current_view == "💼 Portfolio Tracker":
                                 intensity = min(abs(val) / abs_max, 1.0)
                                 alpha = 0.05 + 0.35 * intensity
                                 s = f"background-color: rgba(248, 113, 113, {alpha:.2f}); "
-                            
                             if is_spot:
                                 s += "font-weight: bold; background-color: rgba(255,255,255,0.05);"
-                                
                             styles_df.loc[idx, col] = s
                     return styles_df
                     
@@ -2113,6 +2138,10 @@ elif current_view == "💼 Portfolio Tracker":
                     st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
                         {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
                     ]), use_container_width=True)
+
+            # Defer the rerun completely to the end of the expander to preserve all checkbox states!
+            if port_needs_rerun:
+                st.rerun()
 
 # --- BROWSER CACHE SYNC ENGINE ---
 if st.session_state.trigger_ls_save:
