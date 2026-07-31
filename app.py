@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.6 (Deferred Reruns + Closed Portfolio Tabs)
+# VERSION: 1.4.7 (Active State Expander Tracking)
 # ==========================================
 
 import streamlit as st
@@ -166,6 +166,7 @@ if 'portfolio_last_refresh' not in st.session_state: st.session_state.portfolio_
 if 'last_upload_hash' not in st.session_state: st.session_state.last_upload_hash = None
 if 'ls_loaded' not in st.session_state: st.session_state.ls_loaded = False
 if 'trigger_ls_save' not in st.session_state: st.session_state.trigger_ls_save = False
+if 'open_strat_id' not in st.session_state: st.session_state.open_strat_id = None
 
 # Navigation binding
 if 'nav_view' not in st.session_state:
@@ -579,7 +580,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.6</div>
+            <div class="header-sub">Option Strategy Builder v1.4.7</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1586,6 +1587,8 @@ elif current_view == "💼 Portfolio Tracker":
                             
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_ls_save = True
+                    # Do not explicitly open a strat on global refresh, let them default to closed
+                    st.session_state.open_strat_id = None
                     st.rerun()
         else:
             st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
@@ -1739,7 +1742,10 @@ elif current_view == "💼 Portfolio Tracker":
         
         pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {emoji} Open P&L: :{pnl_color}[{sign}${strat_pnl:,.2f}]"
             
-        with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=False):
+        # Determine if this expander should be forced open because the user just actively interacted with it
+        is_expanded = (st.session_state.get('open_strat_id') == strat['id'])
+            
+        with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=is_expanded):
             
             c_head0, c_head1, c_head2, c_head3, c_head4 = st.columns([1.5, 1, 1, 1, 1.2])
             with c_head0:
@@ -1748,6 +1754,7 @@ elif current_view == "💼 Portfolio Tracker":
                 if new_name != strat.get('name', ''):
                     strat['name'] = new_name
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
             with c_head1:
                 st.markdown(f"**Spot at Entry:**")
@@ -1765,6 +1772,7 @@ elif current_view == "💼 Portfolio Tracker":
                             if l['Qty'] != 0:
                                 l['Entry'] += change_per_leg / l['Qty']
                         st.session_state.trigger_ls_save = True
+                        st.session_state.open_strat_id = strat['id']
                         port_needs_rerun = True
             with c_head3:
                 st.markdown(f"**Net Live Theo:**")
@@ -1774,10 +1782,85 @@ elif current_view == "💼 Portfolio Tracker":
                 new_spot = st.number_input("Override", value=override_val, step=0.10, key=ui_ovr_key, label_visibility="collapsed", placeholder="Enter price here")
                 if new_spot != override_val:
                     st.session_state[ovr_key] = new_spot
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
             
             st.markdown("<br>", unsafe_allow_html=True)
             
+            def port_compute_gross_margin(legs_list, arrays_list):
+                if not legs_list: return 0.0
+                
+                subset_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in legs_list)
+                
+                if len(arrays_list) > 0 and len(arrays_list[0]) > 1:
+                    port_scen = np.zeros(len(arrays_list[0]))
+                    for r, l in zip(arrays_list, legs_list):
+                        port_scen += r * l['Qty']
+                    array_span_loss = abs(min(0.0, np.min(port_scen)))
+                else:
+                    array_span_loss = 0.0
+                    
+                S = current_spot_val
+                scan_pct = 0.065 if ticker_display == 'XJO' else 0.15
+                test_spots = [S * (1 - scan_pct), S * (1 + scan_pct)]
+                
+                synthetic_pnls = []
+                for spot in test_spots:
+                    pnl = 0.0
+                    for l in legs_list:
+                        val_at_spot = max(0.0, spot - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - spot)
+                        val_change = val_at_spot - l['Entry']
+                        pnl += l['Qty'] * val_change * contract_multiplier
+                    synthetic_pnls.append(pnl)
+                    
+                synthetic_span_loss = abs(min(0.0, min(synthetic_pnls)))
+                unbounded_span_loss = max(array_span_loss, synthetic_span_loss)
+                
+                unbounded_gross_risk = max(0.0, unbounded_span_loss + subset_premium)
+                
+                call_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Call')
+                put_qty = sum(l['Qty'] for l in legs_list if l['Type'] == 'Put')
+                is_unbounded = (call_qty < 0) or (put_qty < 0)
+                
+                if is_unbounded:
+                    return unbounded_gross_risk
+                    
+                strikes = [float(l['Strike']) for l in legs_list]
+                if not strikes: return unbounded_gross_risk
+                
+                bound_test_spots = strikes + [0.0, max(strikes) * 3.0]
+                bound_pnls = []
+                for spot in bound_test_spots:
+                    pnl = 0.0
+                    for l in legs_list:
+                        val = max(0.0, spot - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - spot)
+                        pnl += l['Qty'] * val * contract_multiplier
+                    bound_pnls.append(pnl)
+                    
+                intrinsic_loss = abs(min(0.0, min(bound_pnls)))
+                return min(unbounded_gross_risk, intrinsic_loss)
+
+            scen_cols_p = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
+            leg_risk_arrays_p = []
+            tkr_p = ticker_display.replace(".AX", "")
+            
+            for leg in strat['legs']:
+                match = pd.DataFrame()
+                if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
+                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr_p == 'XJO' else st.session_state.ref_data['Ticker'] == tkr_p
+                    match = st.session_state.ref_data[
+                        ticker_mask & 
+                        (st.session_state.ref_data['Type'] == leg['Type']) & 
+                        (st.session_state.ref_data['Strike'] == float(leg['Strike'])) &
+                        (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])
+                    ]
+                if not match.empty and scen_cols_p:
+                    leg_risk_arrays_p.append(match.iloc[0][scen_cols_p].values.astype(float))
+                else:
+                    leg_risk_arrays_p.append(np.zeros(len(scen_cols_p)) if scen_cols_p else np.zeros(1))
+
+            port_total_margin = port_compute_gross_margin(strat['legs'], leg_risk_arrays_p)
+
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
             p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
@@ -1796,6 +1879,7 @@ elif current_view == "💼 Portfolio Tracker":
                 if new_qty != leg['Qty']:
                     strat['legs'][j]['Qty'] = new_qty
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
                     
                 # CODE
@@ -1848,6 +1932,7 @@ elif current_view == "💼 Portfolio Tracker":
                             strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
                             strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
 
                 # STRIKE
@@ -1876,6 +1961,7 @@ elif current_view == "💼 Portfolio Tracker":
                             strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
                             strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
 
                 # VOL
@@ -1883,6 +1969,7 @@ elif current_view == "💼 Portfolio Tracker":
                 if new_vol != leg['Vol']:
                     strat['legs'][j]['Vol'] = new_vol
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
                     
                 # ENTRY THEO
@@ -1890,6 +1977,7 @@ elif current_view == "💼 Portfolio Tracker":
                 if new_entry != leg['Entry']:
                     strat['legs'][j]['Entry'] = new_entry
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
 
                 # LIVE THEO & PREMIUM
@@ -1906,8 +1994,9 @@ elif current_view == "💼 Portfolio Tracker":
                     if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
                         strat['legs'].pop(j)
                         st.session_state.trigger_ls_save = True
+                        st.session_state.open_strat_id = strat['id']
                         port_needs_rerun = True
-                        break # Prevent loop errors if structural changes occur
+                        break 
             
             st.markdown("<br>", unsafe_allow_html=True)
             
@@ -1916,6 +2005,7 @@ elif current_view == "💼 Portfolio Tracker":
                 if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i)
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = None
                     port_needs_rerun = True
             with a_c2:
                 if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
@@ -1926,6 +2016,7 @@ elif current_view == "💼 Portfolio Tracker":
                         l['id'] = str(uuid.uuid4())
                     st.session_state.portfolio.insert(i + 1, new_strat)
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = new_strat['id']
                     port_needs_rerun = True
 
             # --- PORTFOLIO THEO MATRIX ---
