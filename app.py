@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.9 (Portfolio Summary Row & Margin)
+# VERSION: 1.5.1 (MMM-DD-YYYY Date UI Format)
 # ==========================================
 
 import streamlit as st
@@ -158,6 +158,13 @@ st.markdown("""
 # --- TIMEZONE UTILITY ---
 def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
+
+def format_date_ui(d_str):
+    """Safely formats YYYY-MM-DD to MMM-DD-YYYY for UI display without breaking backend."""
+    try:
+        return datetime.strptime(d_str, "%Y-%m-%d").strftime("%b-%d-%Y")
+    except:
+        return d_str
 
 # --- 2. SESSION STATE & BROWSER CACHING ---
 if 'options_loaded' not in st.session_state: st.session_state.options_loaded = False
@@ -580,7 +587,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.9</div>
+            <div class="header-sub">Option Strategy Builder v1.5.1</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -771,7 +778,7 @@ if current_view == "🧮 Strategy Builder":
                 
                 exp_col1, exp_col2 = st.columns([1, 2])
                 with exp_col1:
-                    current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry")
+                    current_exp = st.selectbox("Expiry", exp_list, index=default_idx, placeholder="Select Expiry", format_func=format_date_ui)
                 with exp_col2:
                     st.write("<div style='height: 29px;'></div>", unsafe_allow_html=True) 
                     view_mode = st.radio("Strikes View", options=["Standard View (30 Strikes)", "All Strikes"], horizontal=True, label_visibility="collapsed")
@@ -843,7 +850,7 @@ if current_view == "🧮 Strategy Builder":
                 atm_idx = df_view['Diff'].idxmin()
                 df_view = df_view.iloc[max(0, atm_idx - radius):min(len(df_view), atm_idx + radius + 1)].drop(columns=['Diff'])
             
-            st.markdown(f"**Chain: {current_exp}**")
+            st.markdown(f"**Chain: {format_date_ui(current_exp)}**")
             
             disp = df_view[['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Buy', 'P_Sell']].copy()
             
@@ -1158,7 +1165,7 @@ if current_view == "🧮 Strategy Builder":
                     exp_strs = [leg['ExpDateStr']]
                     exp_idx = 0
                     
-                new_exp = st.selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"sb_exp_{leg['id']}", label_visibility="collapsed")
+                new_exp = st.selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"sb_exp_{leg['id']}", label_visibility="collapsed", format_func=format_date_ui)
                 
                 if new_exp != leg['ExpDateStr']:
                     st.session_state.legs[i]['ExpDateStr'] = new_exp
@@ -1397,7 +1404,7 @@ if current_view == "🧮 Strategy Builder":
                     pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                     net_theo_sum += exit_px * leg['Qty']
                 
-                col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
+                col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%b-%d-%Y")
                 if d == 0: col_name = f"Today ({col_name})"
                 
                 if matrix_view == "Profit / Loss":
@@ -1720,8 +1727,9 @@ elif current_view == "💼 Portfolio Tracker":
             strat_pnl += leg_pnl
             net_live_theo_sum += cur_theo * leg['Qty']
             
-            premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
-            premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
+            # NOW CALCULATING CURRENT LIVE PREMIUM
+            live_premium = -(leg['Qty'] * cur_theo * contract_multiplier)
+            premium_str = f"${live_premium:,.2f}" if live_premium >= 0 else f"-${abs(live_premium):,.2f}"
             
             row = {
                 "Code": leg['Code'],
@@ -1733,7 +1741,7 @@ elif current_view == "💼 Portfolio Tracker":
                 "Entry Theo": f"{leg['Entry']:.3f}",
                 "Live Theo": f"{cur_theo:.3f}",
                 "Premium": premium_str,
-                "Raw_Premium": premium
+                "Raw_Premium": live_premium
             }
             display_legs.append(row)
             
@@ -1758,6 +1766,7 @@ elif current_view == "💼 Portfolio Tracker":
                 if new_name != strat.get('name', ''):
                     strat['name'] = new_name
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
             with c_head1:
                 st.markdown(f"**Spot at Entry:**")
@@ -1775,6 +1784,7 @@ elif current_view == "💼 Portfolio Tracker":
                             if l['Qty'] != 0:
                                 l['Entry'] += change_per_leg / l['Qty']
                         st.session_state.trigger_ls_save = True
+                        st.session_state.open_strat_id = strat['id']
                         port_needs_rerun = True
             with c_head3:
                 st.markdown(f"**Net Live Theo:**")
@@ -1784,6 +1794,7 @@ elif current_view == "💼 Portfolio Tracker":
                 new_spot = st.number_input("Override", value=override_val, step=0.10, key=ui_ovr_key, label_visibility="collapsed", placeholder="Enter price here", on_change=set_active_strat, args=(strat['id'],))
                 if new_spot != override_val:
                     st.session_state[ovr_key] = new_spot
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
             
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1916,7 +1927,7 @@ elif current_view == "💼 Portfolio Tracker":
                     exp_strs = [leg['ExpDateStr']]
                     exp_idx = 0
                     
-                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
                 
                 if new_exp != leg['ExpDateStr']:
                     strat['legs'][j]['ExpDateStr'] = new_exp
@@ -1932,6 +1943,7 @@ elif current_view == "💼 Portfolio Tracker":
                             strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
                             strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
 
                 # STRIKE
@@ -1960,6 +1972,7 @@ elif current_view == "💼 Portfolio Tracker":
                             strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
                             strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
 
                 # VOL
@@ -1967,6 +1980,7 @@ elif current_view == "💼 Portfolio Tracker":
                 if new_vol != leg['Vol']:
                     strat['legs'][j]['Vol'] = new_vol
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
                     
                 # ENTRY THEO
@@ -1974,9 +1988,10 @@ elif current_view == "💼 Portfolio Tracker":
                 if new_entry != leg['Entry']:
                     strat['legs'][j]['Entry'] = new_entry
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
 
-                # LIVE THEO & PREMIUM
+                # LIVE THEO & CURRENT PREMIUM
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 prem_val = disp_data['Raw_Premium']
@@ -2006,7 +2021,7 @@ elif current_view == "💼 Portfolio Tracker":
             st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
             
             # --- SUMMARY ROW ---
-            port_tot_prem = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in strat['legs'])
+            port_tot_prem = sum(disp['Raw_Premium'] for disp in display_legs)
             tot_prem_str = f"${port_tot_prem:,.2f}" if port_tot_prem >= 0 else f"-${abs(port_tot_prem):,.2f}"
             tot_mar_str = f"${port_total_margin:,.2f}" if port_total_margin >= 0 else f"-${abs(port_total_margin):,.2f}"
             tot_p_color = '#4ade80' if port_tot_prem >= 0 else '#f87171'
@@ -2100,7 +2115,7 @@ elif current_view == "💼 Portfolio Tracker":
                             pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                             net_theo_sum += exit_px * leg['Qty']
                         
-                        col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%Y-%m-%d")
+                        col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%b-%d-%Y")
                         if d == 0: col_name = f"Today ({col_name})"
                         
                         if matrix_view_p == "Profit / Loss":
