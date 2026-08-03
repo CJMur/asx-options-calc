@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.4.8 (Active State Expander Tracking)
+# VERSION: 1.4.9 (Portfolio Summary Row & Margin)
 # ==========================================
 
 import streamlit as st
@@ -580,7 +580,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.4.8</div>
+            <div class="header-sub">Option Strategy Builder v1.4.9</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1788,7 +1788,7 @@ elif current_view == "💼 Portfolio Tracker":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            def port_compute_gross_margin(legs_list, arrays_list):
+            def port_compute_gross_margin_inner(legs_list, arrays_list):
                 if not legs_list: return 0.0
                 
                 subset_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in legs_list)
@@ -1860,12 +1860,12 @@ elif current_view == "💼 Portfolio Tracker":
                 else:
                     leg_risk_arrays_p.append(np.zeros(len(scen_cols_p)) if scen_cols_p else np.zeros(1))
 
-            port_total_margin = port_compute_gross_margin(strat['legs'], leg_risk_arrays_p)
+            port_total_margin = port_compute_gross_margin_inner(strat['legs'], leg_risk_arrays_p)
 
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
-            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
+            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
-            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Premium", ""]
+            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Premium", "Margin", ""]
             for col, h in zip(h_cols, headers):
                 col.markdown(f'<div class="trade-header">{h}</div>', unsafe_allow_html=True)
 
@@ -1976,7 +1976,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.trigger_ls_save = True
                     port_needs_rerun = True
 
-                # LIVE THEO & PREMIUM 
+                # LIVE THEO & PREMIUM
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 prem_val = disp_data['Raw_Premium']
@@ -1984,8 +1984,17 @@ elif current_view == "💼 Portfolio Tracker":
                 
                 c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{prem_color}; font-weight:600;'>{disp_data['Premium']}</span></div>", unsafe_allow_html=True)
                 
+                # MARGIN
+                legs_without = strat['legs'][:j] + strat['legs'][j+1:]
+                arrays_without = leg_risk_arrays_p[:j] + leg_risk_arrays_p[j+1:]
+                margin_without = port_compute_gross_margin_inner(legs_without, arrays_without)
+                row_margin = port_total_margin - margin_without
+                margin_str = f"${row_margin:,.0f}" if row_margin >= 0 else f"-${abs(row_margin):,.0f}"
+
+                c[9].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
+
                 # DELETE LEG
-                with c[9]:
+                with c[10]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                     if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
                         strat['legs'].pop(j)
@@ -1994,6 +2003,21 @@ elif current_view == "💼 Portfolio Tracker":
                         port_needs_rerun = True
                         break 
             
+            st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
+            
+            # --- SUMMARY ROW ---
+            port_tot_prem = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in strat['legs'])
+            tot_prem_str = f"${port_tot_prem:,.2f}" if port_tot_prem >= 0 else f"-${abs(port_tot_prem):,.2f}"
+            tot_mar_str = f"${port_total_margin:,.2f}" if port_total_margin >= 0 else f"-${abs(port_total_margin):,.2f}"
+            tot_p_color = '#4ade80' if port_tot_prem >= 0 else '#f87171'
+
+            with st.container():
+                f = st.columns(p_h_col_spec)
+                with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
+                with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{net_live_theo:.3f}</div>", unsafe_allow_html=True)
+                with f[8]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
+                with f[9]: st.markdown(f"<div class='strategy-text'><span style='font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
+
             st.markdown("<br>", unsafe_allow_html=True)
             
             a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
