@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.5.1 (MMM-DD-YYYY Date UI Format)
+# VERSION: 1.5.2 (Persistent Portfolio Spot Overrides)
 # ==========================================
 
 import streamlit as st
@@ -587,7 +587,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.5.1</div>
+            <div class="header-sub">Option Strategy Builder v1.5.2</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1588,6 +1588,9 @@ elif current_view == "💼 Portfolio Tracker":
                             del st.session_state[ovr_key]
                         if ui_ovr_key in st.session_state:
                             del st.session_state[ui_ovr_key]
+                            
+                        if 'override_spot' in strat:
+                            del strat['override_spot']
                         
                         # Update dynamic IV
                         for leg in strat['legs']:
@@ -1696,6 +1699,9 @@ elif current_view == "💼 Portfolio Tracker":
         else:
             override_val = st.session_state.get(ovr_key, None)
             
+        if override_val is None and 'override_spot' in strat and strat['override_spot'] is not None:
+            override_val = strat['override_spot']
+            
         if override_val is not None:
             current_spot_val = float(override_val)
         else:
@@ -1794,6 +1800,8 @@ elif current_view == "💼 Portfolio Tracker":
                 new_spot = st.number_input("Override", value=override_val, step=0.10, key=ui_ovr_key, label_visibility="collapsed", placeholder="Enter price here", on_change=set_active_strat, args=(strat['id'],))
                 if new_spot != override_val:
                     st.session_state[ovr_key] = new_spot
+                    strat['override_spot'] = new_spot 
+                    st.session_state.trigger_ls_save = True
                     st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
             
