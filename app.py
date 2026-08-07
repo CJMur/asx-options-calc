@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.5.2 (Persistent Portfolio Spot Overrides)
+# VERSION: 1.5.2 (Persistent Callback Overrides)
 # ==========================================
 
 import streamlit as st
@@ -1551,7 +1551,43 @@ if current_view == "🧮 Strategy Builder":
 
 elif current_view == "💼 Portfolio Tracker":
     
+    # --- CALLBACK ENGINE FOR INLINE PORTFOLIO EDITS ---
     def set_active_strat(s_id):
+        st.session_state.open_strat_id = s_id
+
+    def on_spot_override_change(s_id, k):
+        val = st.session_state[k]
+        for s in st.session_state.portfolio:
+            if s['id'] == s_id:
+                s['override_spot'] = val if val else None
+                break
+        st.session_state.trigger_ls_save = True
+        st.session_state.open_strat_id = s_id
+
+    def on_name_change(s_id, k):
+        val = st.session_state[k]
+        for s in st.session_state.portfolio:
+            if s['id'] == s_id:
+                s['name'] = val
+                break
+        st.session_state.trigger_ls_save = True
+        st.session_state.open_strat_id = s_id
+
+    def on_net_entry_change(s_id, k, mq, old_val):
+        val = st.session_state[k]
+        if val is not None and not math.isclose(val, old_val, abs_tol=1e-5) and mq != 0:
+            diff = val - old_val
+            tot_change = diff * mq
+            for s in st.session_state.portfolio:
+                if s['id'] == s_id:
+                    n_legs = len(s['legs'])
+                    if n_legs > 0:
+                        c_per_leg = tot_change / n_legs
+                        for l in s['legs']:
+                            if l['Qty'] != 0:
+                                l['Entry'] += c_per_leg / l['Qty']
+                    break
+        st.session_state.trigger_ls_save = True
         st.session_state.open_strat_id = s_id
 
     st.markdown("### Saved Strategies")
@@ -1581,16 +1617,13 @@ elif current_view == "💼 Portfolio Tracker":
                         _, spot, _ = fetch_data(ticker)
                         strat['current_spot'] = spot if spot > 0 else strat.get('spot_at_entry', 0.0)
                         
-                        # Wipe any local override memory for this strategy so it perfectly snaps to the new spot
-                        ovr_key = f"ovr_spot_{strat['id']}"
-                        ui_ovr_key = f"ui_{ovr_key}"
-                        if ovr_key in st.session_state:
-                            del st.session_state[ovr_key]
+                        # Wipe local override memory for this strategy so it perfectly snaps to the new spot
+                        if 'override_spot' in strat:
+                            strat['override_spot'] = None 
+                            
+                        ui_ovr_key = f"ui_ovr_spot_{strat['id']}"
                         if ui_ovr_key in st.session_state:
                             del st.session_state[ui_ovr_key]
-                            
-                        if 'override_spot' in strat:
-                            del strat['override_spot']
                         
                         # Update dynamic IV
                         for leg in strat['legs']:
@@ -1689,18 +1722,10 @@ elif current_view == "💼 Portfolio Tracker":
         port_needs_rerun = False
         ticker_display = strat.get('ticker', 'Unknown')
         
-        ovr_key = f"ovr_spot_{strat['id']}"
-        ui_ovr_key = f"ui_{ovr_key}"
+        ui_ovr_key = f"ui_ovr_spot_{strat['id']}"
         
-        # Pull from the explicit widget state if it exists to prevent sync delays
-        if ui_ovr_key in st.session_state and st.session_state[ui_ovr_key] is not None:
-            override_val = st.session_state[ui_ovr_key]
-            st.session_state[ovr_key] = override_val
-        else:
-            override_val = st.session_state.get(ovr_key, None)
-            
-        if override_val is None and 'override_spot' in strat and strat['override_spot'] is not None:
-            override_val = strat['override_spot']
+        # Safely pull the cached override
+        override_val = strat.get('override_spot', None)
             
         if override_val is not None:
             current_spot_val = float(override_val)
@@ -1733,9 +1758,8 @@ elif current_view == "💼 Portfolio Tracker":
             strat_pnl += leg_pnl
             net_live_theo_sum += cur_theo * leg['Qty']
             
-            # NOW CALCULATING CURRENT LIVE PREMIUM
-            live_premium = -(leg['Qty'] * cur_theo * contract_multiplier)
-            premium_str = f"${live_premium:,.2f}" if live_premium >= 0 else f"-${abs(live_premium):,.2f}"
+            premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
+            premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
             
             row = {
                 "Code": leg['Code'],
@@ -1747,7 +1771,7 @@ elif current_view == "💼 Portfolio Tracker":
                 "Entry Theo": f"{leg['Entry']:.3f}",
                 "Live Theo": f"{cur_theo:.3f}",
                 "Premium": premium_str,
-                "Raw_Premium": live_premium
+                "Raw_Premium": premium
             }
             display_legs.append(row)
             
@@ -1768,46 +1792,25 @@ elif current_view == "💼 Portfolio Tracker":
             c_head0, c_head1, c_head2, c_head3, c_head4 = st.columns([1.5, 1, 1, 1, 1.2])
             with c_head0:
                 st.markdown(f"**Strategy Name:**")
-                new_name = st.text_input("Name", value=strat.get('name', 'Strategy'), key=f"rename_{strat['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
-                if new_name != strat.get('name', ''):
-                    strat['name'] = new_name
-                    st.session_state.trigger_ls_save = True
-                    st.session_state.open_strat_id = strat['id']
-                    port_needs_rerun = True
+                ui_name_key = f"rename_{strat['id']}"
+                st.text_input("Name", value=strat.get('name', 'Strategy'), key=ui_name_key, label_visibility="collapsed", on_change=on_name_change, args=(strat['id'], ui_name_key))
             with c_head1:
                 st.markdown(f"**Spot at Entry:**")
                 st.markdown(f"${strat.get('spot_at_entry', 0.0):.2f}")
             with c_head2:
                 st.markdown(f"**Net Entry Theo:**")
-                new_net_entry = st.number_input("Net Entry", value=float(net_entry_theo), step=0.01, format="%.3f", key=f"net_entry_{strat['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
-                if not math.isclose(new_net_entry, net_entry_theo, abs_tol=1e-5) and max_qty != 0:
-                    diff = new_net_entry - net_entry_theo
-                    total_change = diff * max_qty
-                    num_legs = len(strat['legs'])
-                    if num_legs > 0:
-                        change_per_leg = total_change / num_legs
-                        for l in strat['legs']:
-                            if l['Qty'] != 0:
-                                l['Entry'] += change_per_leg / l['Qty']
-                        st.session_state.trigger_ls_save = True
-                        st.session_state.open_strat_id = strat['id']
-                        port_needs_rerun = True
+                ui_net_key = f"net_entry_{strat['id']}"
+                st.number_input("Net Entry", value=float(net_entry_theo), step=0.01, format="%.3f", key=ui_net_key, label_visibility="collapsed", on_change=on_net_entry_change, args=(strat['id'], ui_net_key, max_qty, net_entry_theo))
             with c_head3:
                 st.markdown(f"**Net Live Theo:**")
                 st.markdown(f"{net_live_theo:.3f}")
             with c_head4:
                 st.markdown(f"**Spot Price Override:**")
-                new_spot = st.number_input("Override", value=override_val, step=0.10, key=ui_ovr_key, label_visibility="collapsed", placeholder="Enter price here", on_change=set_active_strat, args=(strat['id'],))
-                if new_spot != override_val:
-                    st.session_state[ovr_key] = new_spot
-                    strat['override_spot'] = new_spot 
-                    st.session_state.trigger_ls_save = True
-                    st.session_state.open_strat_id = strat['id']
-                    port_needs_rerun = True
+                st.number_input("Override", value=override_val, step=0.10, key=ui_ovr_key, label_visibility="collapsed", placeholder="Enter price here", on_change=on_spot_override_change, args=(strat['id'], ui_ovr_key))
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            def port_compute_gross_margin_inner(legs_list, arrays_list):
+            def port_compute_gross_margin(legs_list, arrays_list):
                 if not legs_list: return 0.0
                 
                 subset_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in legs_list)
@@ -1879,12 +1882,12 @@ elif current_view == "💼 Portfolio Tracker":
                 else:
                     leg_risk_arrays_p.append(np.zeros(len(scen_cols_p)) if scen_cols_p else np.zeros(1))
 
-            port_total_margin = port_compute_gross_margin_inner(strat['legs'], leg_risk_arrays_p)
+            port_total_margin = port_compute_gross_margin(strat['legs'], leg_risk_arrays_p)
 
             # --- PORTFOLIO DYNAMIC IN-LINE EDITOR ---
-            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 1.2, 0.4]
+            p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
-            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Premium", "Margin", ""]
+            headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Premium", ""]
             for col, h in zip(h_cols, headers):
                 col.markdown(f'<div class="trade-header">{h}</div>', unsafe_allow_html=True)
 
@@ -1895,10 +1898,11 @@ elif current_view == "💼 Portfolio Tracker":
                 row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
                 
                 # QTY
-                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
                 if new_qty != leg['Qty']:
                     strat['legs'][j]['Qty'] = new_qty
                     st.session_state.trigger_ls_save = True
+                    st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
                     
                 # CODE
@@ -1935,7 +1939,7 @@ elif current_view == "💼 Portfolio Tracker":
                     exp_strs = [leg['ExpDateStr']]
                     exp_idx = 0
                     
-                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
+                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", format_func=format_date_ui)
                 
                 if new_exp != leg['ExpDateStr']:
                     strat['legs'][j]['ExpDateStr'] = new_exp
@@ -1969,7 +1973,7 @@ elif current_view == "💼 Portfolio Tracker":
                     avail_stk = [cur_stk]
                     stk_idx = 0
                 
-                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
+                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}")
                 
                 if new_stk != cur_stk:
                     strat['legs'][j]['Strike'] = new_stk
@@ -1984,7 +1988,7 @@ elif current_view == "💼 Portfolio Tracker":
                     port_needs_rerun = True
 
                 # VOL
-                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed")
                 if new_vol != leg['Vol']:
                     strat['legs'][j]['Vol'] = new_vol
                     st.session_state.trigger_ls_save = True
@@ -1992,14 +1996,14 @@ elif current_view == "💼 Portfolio Tracker":
                     port_needs_rerun = True
                     
                 # ENTRY THEO
-                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed")
                 if new_entry != leg['Entry']:
                     strat['legs'][j]['Entry'] = new_entry
                     st.session_state.trigger_ls_save = True
                     st.session_state.open_strat_id = strat['id']
                     port_needs_rerun = True
 
-                # LIVE THEO & CURRENT PREMIUM
+                # LIVE THEO & PREMIUM (Replaces Open P&L)
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 
                 prem_val = disp_data['Raw_Premium']
@@ -2007,17 +2011,8 @@ elif current_view == "💼 Portfolio Tracker":
                 
                 c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{prem_color}; font-weight:600;'>{disp_data['Premium']}</span></div>", unsafe_allow_html=True)
                 
-                # MARGIN
-                legs_without = strat['legs'][:j] + strat['legs'][j+1:]
-                arrays_without = leg_risk_arrays_p[:j] + leg_risk_arrays_p[j+1:]
-                margin_without = port_compute_gross_margin_inner(legs_without, arrays_without)
-                row_margin = port_total_margin - margin_without
-                margin_str = f"${row_margin:,.0f}" if row_margin >= 0 else f"-${abs(row_margin):,.0f}"
-
-                c[9].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
-
                 # DELETE LEG
-                with c[10]:
+                with c[9]:
                     st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                     if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
                         strat['legs'].pop(j)
@@ -2026,21 +2021,6 @@ elif current_view == "💼 Portfolio Tracker":
                         port_needs_rerun = True
                         break 
             
-            st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
-            
-            # --- SUMMARY ROW ---
-            port_tot_prem = sum(disp['Raw_Premium'] for disp in display_legs)
-            tot_prem_str = f"${port_tot_prem:,.2f}" if port_tot_prem >= 0 else f"-${abs(port_tot_prem):,.2f}"
-            tot_mar_str = f"${port_total_margin:,.2f}" if port_total_margin >= 0 else f"-${abs(port_total_margin):,.2f}"
-            tot_p_color = '#4ade80' if port_tot_prem >= 0 else '#f87171'
-
-            with st.container():
-                f = st.columns(p_h_col_spec)
-                with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
-                with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{net_live_theo:.3f}</div>", unsafe_allow_html=True)
-                with f[8]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
-                with f[9]: st.markdown(f"<div class='strategy-text'><span style='font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
-
             st.markdown("<br>", unsafe_allow_html=True)
             
             a_c1, a_c2, a_c3 = st.columns([1.5, 1.5, 4])
