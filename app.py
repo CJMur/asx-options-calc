@@ -23,7 +23,7 @@ import copy
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 
 # REPLACE THIS WITH YOUR WORDPRESS DOMAIN:
-WP_PORTFOLIO_API_URL = "https://yourdomain.com/wp-json/tc-options/v1/portfolio"
+WP_PORTFOLIO_API_URL = "https://portal.traderscircle.com.au/wp-json/tc-options/v1/portfolio"
 
 # Direct GitHub Raw CDN URLs
 OPTIONS_SHEET_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/options_data.parquet"
