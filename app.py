@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.5.3 (WordPress Database Sync)
+# VERSION: 1.5.4 (UI Formatting Fix + WordPress Database Sync)
 # ==========================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ import copy
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
 
 # REPLACE THIS WITH YOUR WORDPRESS DOMAIN:
-WP_PORTFOLIO_API_URL = "https://portal.traderscircle.com.au/wp-json/tc-options/v1/portfolio"
+WP_PORTFOLIO_API_URL = "https://yourdomain.com/wp-json/tc-options/v1/portfolio"
 
 # Direct GitHub Raw CDN URLs
 OPTIONS_SHEET_URL = "https://raw.githubusercontent.com/CJMur/tc-options-data/main/options_data.parquet"
@@ -538,7 +538,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.5.3</div>
+            <div class="header-sub">Option Strategy Builder v1.5.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -855,6 +855,9 @@ if current_view == "🧮 Strategy Builder":
             total_delta += net_delta; total_premium += premium; raw_theo_sum += leg['Qty'] * new_theo
             p_color = '#4ade80' if premium >= 0 else '#f87171'
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
+            
+            premium_str = f"${premium:,.2f}" if premium >= 0 else f"-${abs(premium):,.2f}"
+            margin_str = f"${row_margin:,.0f}" if row_margin >= 0 else f"-${abs(row_margin):,.0f}"
             
             c = st.columns(h_col_spec)
             with c[0]: 
@@ -1258,7 +1261,7 @@ elif current_view == "💼 Portfolio Tracker":
                 c = st.columns(p_h_col_spec)
                 row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
                 
-                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed")
+                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_qty != leg['Qty']: strat['legs'][j]['Qty'] = new_qty; st.session_state.trigger_db_save = True; port_needs_rerun = True
                     
                 c[1].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
@@ -1274,7 +1277,7 @@ elif current_view == "💼 Portfolio Tracker":
                 exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps] or [leg['ExpDateStr']]
                 exp_idx = exp_strs.index(leg['ExpDateStr']) if leg['ExpDateStr'] in exp_strs else 0
                     
-                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", format_func=format_date_ui)
+                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
                 if new_exp != leg['ExpDateStr']:
                     strat['legs'][j]['ExpDateStr'] = new_exp
                     subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == new_exp]
@@ -1293,7 +1296,7 @@ elif current_view == "💼 Portfolio Tracker":
                 avail_stk = sorted(subset_exp['Strike'].unique().tolist()) if not subset_exp.empty else [float(leg['Strike'])]
                 stk_idx = avail_stk.index(float(leg['Strike'])) if float(leg['Strike']) in avail_stk else 0
                 
-                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}")
+                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
                 if new_stk != float(leg['Strike']):
                     strat['legs'][j]['Strike'] = new_stk
                     if not subset_exp.empty:
@@ -1304,10 +1307,10 @@ elif current_view == "💼 Portfolio Tracker":
                             strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
                     st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True
 
-                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed")
+                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_vol != leg['Vol']: strat['legs'][j]['Vol'] = new_vol; st.session_state.trigger_db_save = True; port_needs_rerun = True
                     
-                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed")
+                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_entry != leg['Entry']: strat['legs'][j]['Entry'] = new_entry; st.session_state.trigger_db_save = True; port_needs_rerun = True
 
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
