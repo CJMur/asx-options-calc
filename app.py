@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.5.7 (Syntax Fix)
+# VERSION: 1.5.8 (Indentation Fix)
 # ==========================================
 
 import streamlit as st
@@ -541,7 +541,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.5.7</div>
+            <div class="header-sub">Option Strategy Builder v1.5.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1418,7 +1418,7 @@ elif current_view == "💼 Portfolio Tracker":
                             s = f"background-color: rgba(74, 222, 128, {min(val/abs_max,1.0)*0.35+0.05:.2f}); " if val > 0 else (f"background-color: rgba(248, 113, 113, {min(abs(val)/abs_max,1.0)*0.35+0.05:.2f}); " if val < 0 else "")
                             if is_spot: s += "font-weight: bold; background-color: rgba(255,255,255,0.05);"
                             styles_df.loc[idx, col] = s
-            return styles_df
+                    return styles_df
 
                 if matrix_view_p == "Profit / Loss":
                     st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True)
