@@ -168,9 +168,10 @@ def wp_fetch_portfolio(uid):
     if not uid: return []
     try:
         res = requests.get(f"{WP_PORTFOLIO_API_URL}?uid={uid}", timeout=5)
-        if res.status_code == 200:
-            return res.json().get('portfolio', [])
-    except: pass
+        res.raise_for_status() 
+        return res.json().get('portfolio', [])
+    except Exception as e:
+        st.error(f"Failed to load from database: {e}")
     return []
 
 def wp_save_portfolio(uid, portfolio):
@@ -178,8 +179,11 @@ def wp_save_portfolio(uid, portfolio):
     if not uid: return
     try:
         payload = {"uid": uid, "portfolio": portfolio}
-        requests.post(WP_PORTFOLIO_API_URL, json=payload, timeout=5)
-    except: pass
+        res = requests.post(WP_PORTFOLIO_API_URL, json=payload, timeout=5)
+        res.raise_for_status() 
+        st.success("Successfully pushed to WordPress database!") # Confirm it worked
+    except Exception as e:
+        st.error(f"Failed to save to database: {e}")
 
 # --- 2. SESSION STATE & USER INITIALIZATION ---
 if 'options_loaded' not in st.session_state: st.session_state.options_loaded = False
