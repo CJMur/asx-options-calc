@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.5.5 (Portfolio Volatility UI Sync)
+# VERSION: 1.5.6 (Numeric Type Fix & Silent DB Sync)
 # ==========================================
 
 import streamlit as st
@@ -175,13 +175,12 @@ def wp_fetch_portfolio(uid):
     return []
 
 def wp_save_portfolio(uid, portfolio):
-    """Saves user portfolio to WordPress database."""
+    """Saves user portfolio to WordPress database silently."""
     if not uid: return
     try:
         payload = {"uid": uid, "portfolio": portfolio}
         res = requests.post(WP_PORTFOLIO_API_URL, json=payload, timeout=5)
         res.raise_for_status() 
-        st.success("Successfully pushed to WordPress database!") # Confirm it worked
     except Exception as e:
         st.error(f"Failed to save to database: {e}")
 
@@ -542,7 +541,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.5.5</div>
+            <div class="header-sub">Option Strategy Builder v1.5.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1082,7 +1081,7 @@ elif current_view == "💼 Portfolio Tracker":
     def on_spot_override_change(s_id, k):
         val = st.session_state[k]
         for s in st.session_state.portfolio:
-            if s['id'] == s_id: s['override_spot'] = val if val else None; break
+            if s['id'] == s_id: s['override_spot'] = float(val) if val else None; break
         st.session_state.trigger_db_save = True; st.session_state.open_strat_id = s_id
 
     def on_name_change(s_id, k):
@@ -1130,7 +1129,7 @@ elif current_view == "💼 Portfolio Tracker":
                                 if not match.empty: 
                                     live_v = float(match.iloc[0]['Vol'])
                                     leg['Current_Vol'] = live_v
-                                    leg['Vol'] = live_v # Syncs UI box immediately
+                                    leg['Vol'] = live_v
                             
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_db_save = True
@@ -1178,8 +1177,12 @@ elif current_view == "💼 Portfolio Tracker":
         port_needs_rerun = False
         ticker_display = strat.get('ticker', 'Unknown')
         ui_ovr_key = f"ui_ovr_spot_{strat['id']}"
+        
         override_val = strat.get('override_spot', None)
-        current_spot_val = float(override_val) if override_val is not None else float(strat.get('current_spot', strat.get('spot_at_entry', 0.0)))
+        if override_val is not None:
+            override_val = float(override_val)
+            
+        current_spot_val = override_val if override_val is not None else float(strat.get('current_spot', strat.get('spot_at_entry', 0.0)))
         
         max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
         net_entry_theo = (sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])) / max_qty if max_qty != 0 else 0.0
@@ -1205,7 +1208,7 @@ elif current_view == "💼 Portfolio Tracker":
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
         pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {'🟢' if strat_pnl >= 0 else '🔴'} Open P&L: :{'green' if strat_pnl >= 0 else 'red'}[{'+' if strat_pnl >= 0 else ''}${strat_pnl:,.2f}]"
             
-        with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=(st.session_state.get('open_strat_id') == strat['id'])):
+        with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=(st.session_state.get('open_strat_id'] == strat['id'])):
             
             c_head0, c_head1, c_head2, c_head3, c_head4 = st.columns([1.5, 1, 1, 1, 1.2])
             with c_head0:
