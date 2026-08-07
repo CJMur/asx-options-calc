@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.5.4 (UI Formatting Fix + WordPress Database Sync)
+# VERSION: 1.5.5 (Portfolio Volatility UI Sync)
 # ==========================================
 
 import streamlit as st
@@ -542,7 +542,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.5.4</div>
+            <div class="header-sub">Option Strategy Builder v1.5.5</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1127,7 +1127,10 @@ elif current_view == "💼 Portfolio Tracker":
                         for leg in strat['legs']:
                             if not data.empty:
                                 match = data[data['Code'] == leg['Code']]
-                                if not match.empty: leg['Current_Vol'] = float(match.iloc[0]['Vol'])
+                                if not match.empty: 
+                                    live_v = float(match.iloc[0]['Vol'])
+                                    leg['Current_Vol'] = live_v
+                                    leg['Vol'] = live_v # Syncs UI box immediately
                             
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_db_save = True
