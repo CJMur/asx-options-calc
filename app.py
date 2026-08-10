@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.5.8 (Indentation Fix)
+# VERSION: 1.6.2 (Portfolio Payoff Chart Removed)
 # ==========================================
 
 import streamlit as st
@@ -541,7 +541,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.5.8</div>
+            <div class="header-sub">Option Strategy Builder v1.6.2</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1035,11 +1035,23 @@ if current_view == "🧮 Strategy Builder":
                     if is_spot: s += "font-weight: bold; background-color: rgba(255,255,255,0.05);"
                     styles_df.loc[idx, col] = s
             return styles_df
+            
+        def highlight_spot(df):
+            styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+            for idx in df.index:
+                if "SPOT" in str(idx):
+                    styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+            return styles_df
 
         if matrix_view == "Profit / Loss":
-            st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True, height=500)
+            st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl).set_table_styles([
+                {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+            ]), use_container_width=True, height=500)
         else:
-            st.dataframe(df_mx.style.apply(lambda df: pd.DataFrame(np.where(df.index.str.contains("SPOT")[:, None], "font-weight: bold; background-color: rgba(255,255,255,0.05);", ""), index=df.index, columns=df.columns), axis=None).format({col: "{:.3f}" for col in df_mx.columns}), use_container_width=True, height=500)
+            format_dict = {col: "{:.3f}" for col in df_mx.columns}
+            st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
+                {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+            ]), use_container_width=True, height=500)
 
         # PAYOFF CHART
         st.markdown("### Payoff Chart")
@@ -1419,11 +1431,23 @@ elif current_view == "💼 Portfolio Tracker":
                             if is_spot: s += "font-weight: bold; background-color: rgba(255,255,255,0.05);"
                             styles_df.loc[idx, col] = s
                     return styles_df
+                    
+                def highlight_spot(df):
+                    styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
+                    for idx in df.index:
+                        if "SPOT" in str(idx):
+                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+                    return styles_df
 
                 if matrix_view_p == "Profit / Loss":
-                    st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl), use_container_width=True)
+                    st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl).set_table_styles([
+                        {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+                    ]), use_container_width=True, height=500)
                 else:
-                    st.dataframe(df_mx.style.apply(lambda df: pd.DataFrame(np.where(df.index.str.contains("SPOT")[:, None], "font-weight: bold; background-color: rgba(255,255,255,0.05);", ""), index=df.index, columns=df.columns), axis=None).format({col: "{:.3f}" for col in df_mx.columns}), use_container_width=True)
+                    format_dict = {col: "{:.3f}" for col in df_mx.columns}
+                    st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
+                        {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
+                    ]), use_container_width=True, height=500)
 
             if port_needs_rerun: st.rerun()
 
