@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.2 (Portfolio Payoff Chart Removed)
+# VERSION: 1.6.3 (The Monday Rule Implementation)
 # ==========================================
 
 import streamlit as st
@@ -192,6 +192,7 @@ if 'last_upload_hash' not in st.session_state: st.session_state.last_upload_hash
 if 'wp_loaded' not in st.session_state: st.session_state.wp_loaded = False
 if 'trigger_db_save' not in st.session_state: st.session_state.trigger_db_save = False
 if 'open_strat_id' not in st.session_state: st.session_state.open_strat_id = None
+if 'is_monday_data' not in st.session_state: st.session_state.is_monday_data = False
 
 # Detect WordPress User Token from URL
 wp_uid = st.query_params.get("uid", None)
@@ -373,6 +374,10 @@ if st.session_state.ref_data is None:
     st.session_state.sheet_msg = msg
     st.session_state.fwd_spreads = extracted_spreads
     st.session_state.data_date = d_date
+    try: 
+        if d_date != "Unknown":
+            st.session_state.is_monday_data = (pd.to_datetime(d_date).weekday() == 0)
+    except: pass
 
 # --- 4. MATH ENGINE ---
 def norm_cdf(x): return 0.5 * (1 + math.erf(x / math.sqrt(2)))
@@ -432,6 +437,12 @@ def american_binomial_pricer(S, K, T, r, sigma, option_type, q=0.0, steps=100):
 
 def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
     if simulated_spot <= 0 or strike <= 0 or time_days < 0: return 0.0, 0.0
+    
+    # --- THE MONDAY RULE ---
+    # If the data file is dated Monday, it contains Friday's IV. Add 2.8 days to offset the weekend decay.
+    if st.session_state.get('is_monday_data', False):
+        time_days += 2.8
+        
     r = global_rba_rate / 100.0
     q = 0.0
     is_xjo = (ticker_symbol == 'XJO')
@@ -541,7 +552,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.2</div>
+            <div class="header-sub">Option Strategy Builder v1.6.3</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -643,6 +654,10 @@ if current_view == "🧮 Strategy Builder":
                 st.session_state.fetch_time = get_sydney_time()
                 data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
                 st.session_state.ref_data, st.session_state.sheet_msg, st.session_state.fwd_spreads, st.session_state.data_date = data, msg, ext_spreads, d_date
+                try: 
+                    if d_date != "Unknown":
+                        st.session_state.is_monday_data = (pd.to_datetime(d_date).weekday() == 0)
+                except: pass
                 st.session_state.is_market_open, st.session_state.options_loaded = check_market_hours(), True
                 st.rerun()
 
@@ -1127,6 +1142,10 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.portfolio_last_refresh = get_sydney_time()
                     data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
                     st.session_state.ref_data, st.session_state.sheet_msg, st.session_state.fwd_spreads, st.session_state.data_date = data, msg, ext_spreads, d_date
+                    try: 
+                        if d_date != "Unknown":
+                            st.session_state.is_monday_data = (pd.to_datetime(d_date).weekday() == 0)
+                    except: pass
                     
                     for strat in st.session_state.portfolio:
                         _, spot, _ = fetch_data(strat.get('ticker', 'XJO'))
