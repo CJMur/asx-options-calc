@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.4 (Dynamic Dividend Time + Matrix Styles)
+# VERSION: 1.6.6 (Button Text Updates)
 # ==========================================
 
 import streamlit as st
@@ -554,7 +554,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.4</div>
+            <div class="header-sub">Option Strategy Builder v1.6.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1139,7 +1139,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
+            if st.button("🔄 Refresh All Prices", type="primary", use_container_width=True):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1168,9 +1168,8 @@ elif current_view == "💼 Portfolio Tracker":
                             
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_db_save = True
-                    st.session_state.open_strat_id = None
                     st.rerun()
-        else: st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
+        else: st.button("🔄 Refresh All Prices", type="primary", use_container_width=True, disabled=True)
             
     with ctrl_c2:
         if st.session_state.portfolio:
@@ -1203,7 +1202,7 @@ elif current_view == "💼 Portfolio Tracker":
     if st.session_state.portfolio_last_refresh:
         st.info(f"⏱️ **Live Snapshot Taken:** {st.session_state.portfolio_last_refresh.strftime('%d %b %Y, %I:%M %p AEST')}")
     elif st.session_state.portfolio:
-        st.info("ℹ️ Click 'Refresh Live Prices' to load current market data and calculate your Open P&L.")
+        st.info("ℹ️ Click 'Refresh All Prices' to load current market data and calculate your Open P&L.")
 
     st.markdown("---")
     
@@ -1385,7 +1384,7 @@ elif current_view == "💼 Portfolio Tracker":
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            a_c1, a_c2, _ = st.columns([1.5, 1.5, 4])
+            a_c1, a_c2, a_c3, _ = st.columns([1.5, 1.5, 1.5, 2.5])
             with a_c1:
                 if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
                     st.session_state.portfolio.pop(i); st.session_state.trigger_db_save = True; st.session_state.open_strat_id = None; port_needs_rerun = True
@@ -1396,6 +1395,38 @@ elif current_view == "💼 Portfolio Tracker":
                     new_strat['name'] = new_strat.get('name', 'Strategy') + " (Copy)"
                     for l in new_strat['legs']: l['id'] = str(uuid.uuid4())
                     st.session_state.portfolio.insert(i + 1, new_strat); st.session_state.trigger_db_save = True; st.session_state.open_strat_id = new_strat['id']; port_needs_rerun = True
+            with a_c3:
+                if st.button("🔄 Refresh", key=f"ref_live_{strat['id']}", use_container_width=True):
+                    with st.spinner("Fetching live data..."):
+                        data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
+                        if not data.empty:
+                            st.session_state.ref_data = data
+                            st.session_state.sheet_msg = msg
+                            st.session_state.fwd_spreads = ext_spreads
+                            st.session_state.data_date = d_date
+                            try: 
+                                if d_date != "Unknown":
+                                    st.session_state.is_monday_data = (pd.to_datetime(d_date).weekday() == 0)
+                            except: pass
+                        
+                        _, spot, _ = fetch_data(strat.get('ticker', 'XJO'))
+                        if spot > 0: strat['current_spot'] = spot
+                        
+                        if 'override_spot' in strat: strat['override_spot'] = None 
+                        ui_ovr_key = f"ui_ovr_spot_{strat['id']}"
+                        if ui_ovr_key in st.session_state: del st.session_state[ui_ovr_key]
+                        
+                        for leg in strat['legs']:
+                            if not data.empty:
+                                match = data[data['Code'] == leg['Code']]
+                                if not match.empty: 
+                                    live_v = float(match.iloc[0]['Vol'])
+                                    leg['Current_Vol'] = live_v
+                                    leg['Vol'] = live_v
+                        
+                        st.session_state.trigger_db_save = True
+                        st.session_state.open_strat_id = strat['id']
+                        st.rerun()
 
             # THEO MATRIX
             show_matrix = st.checkbox("📈 Show Matrix", key=f"show_mx_{strat['id']}", on_change=set_active_strat, args=(strat['id'],))
