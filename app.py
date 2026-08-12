@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.5 (Individual Refresh & Expander State Fix)
+# VERSION: 1.6.6 (Button Text Updates)
 # ==========================================
 
 import streamlit as st
@@ -554,7 +554,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.5</div>
+            <div class="header-sub">Option Strategy Builder v1.6.6</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1139,7 +1139,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True):
+            if st.button("🔄 Refresh All Prices", type="primary", use_container_width=True):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1169,7 +1169,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_db_save = True
                     st.rerun()
-        else: st.button("🔄 Refresh Live Prices", type="primary", use_container_width=True, disabled=True)
+        else: st.button("🔄 Refresh All Prices", type="primary", use_container_width=True, disabled=True)
             
     with ctrl_c2:
         if st.session_state.portfolio:
@@ -1202,7 +1202,7 @@ elif current_view == "💼 Portfolio Tracker":
     if st.session_state.portfolio_last_refresh:
         st.info(f"⏱️ **Live Snapshot Taken:** {st.session_state.portfolio_last_refresh.strftime('%d %b %Y, %I:%M %p AEST')}")
     elif st.session_state.portfolio:
-        st.info("ℹ️ Click 'Refresh Live Prices' to load current market data and calculate your Open P&L.")
+        st.info("ℹ️ Click 'Refresh All Prices' to load current market data and calculate your Open P&L.")
 
     st.markdown("---")
     
@@ -1396,7 +1396,7 @@ elif current_view == "💼 Portfolio Tracker":
                     for l in new_strat['legs']: l['id'] = str(uuid.uuid4())
                     st.session_state.portfolio.insert(i + 1, new_strat); st.session_state.trigger_db_save = True; st.session_state.open_strat_id = new_strat['id']; port_needs_rerun = True
             with a_c3:
-                if st.button("🔄 Refresh Live", key=f"ref_live_{strat['id']}", use_container_width=True):
+                if st.button("🔄 Refresh", key=f"ref_live_{strat['id']}", use_container_width=True):
                     with st.spinner("Fetching live data..."):
                         data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
                         if not data.empty:
