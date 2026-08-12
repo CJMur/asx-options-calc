@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.3 (The Monday Rule Implementation)
+# VERSION: 1.6.4 (Dynamic Dividend Time + Matrix Styles)
 # ==========================================
 
 import streamlit as st
@@ -435,7 +435,10 @@ def american_binomial_pricer(S, K, T, r, sigma, option_type, q=0.0, steps=100):
     delta = (v_u - v_d) / (S * u - S * d)
     return values[0], delta
 
-def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key):
+def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key, eval_date=None):
+    if eval_date is None:
+        eval_date = st.session_state.get('fetch_time', get_sydney_time())
+        
     if simulated_spot <= 0 or strike <= 0 or time_days < 0: return 0.0, 0.0
     
     # --- THE MONDAY RULE ---
@@ -466,8 +469,7 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
         elif st.session_state.div_info:
             d_info = st.session_state.div_info
             if d_info['amount'] > 0 and d_info['date']:
-                eval_time = st.session_state.get('fetch_time', get_sydney_time())
-                days_to_div = (d_info['date'] - eval_time).days
+                days_to_div = (d_info['date'] - eval_date).days
                 if 0 <= days_to_div < time_days:
                     div_pv = d_info['amount'] * math.exp(-r * (days_to_div / 365.0))
                     S = max(0.01, S - div_pv)
@@ -552,7 +554,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.3</div>
+            <div class="header-sub">Option Strategy Builder v1.6.4</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1023,12 +1025,13 @@ if current_view == "🧮 Strategy Builder":
             row = {"Price": row_label}
             for d in dates:
                 pnl, net_theo_sum = 0, 0
+                eval_dt = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
                 for leg in st.session_state.legs:
-                    rem_days = max(0.0001, ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d))).total_seconds() / 86400.0)
-                    exit_px, _ = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod), leg['ExpDateStr'])
+                    rem_days = max(0.0001, ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - eval_dt).total_seconds() / 86400.0)
+                    exit_px, _ = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod), leg['ExpDateStr'], eval_date=eval_dt)
                     pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                     net_theo_sum += exit_px * leg['Qty']
-                col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%b-%d-%Y")
+                col_name = eval_dt.strftime("%b-%d-%Y")
                 row[f"Today ({col_name})" if d == 0 else col_name] = pnl if matrix_view == "Profit / Loss" else (net_theo_sum / max_qty if max_qty != 0 else 0.0)
             matrix_data.append(row)
             
@@ -1047,7 +1050,8 @@ if current_view == "🧮 Strategy Builder":
                 for col in df.columns:
                     val = df.loc[idx, col]
                     s = f"background-color: rgba(74, 222, 128, {min(val/abs_max,1.0)*0.35+0.05:.2f}); " if val > 0 else (f"background-color: rgba(248, 113, 113, {min(abs(val)/abs_max,1.0)*0.35+0.05:.2f}); " if val < 0 else "")
-                    if is_spot: s += "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+                    if is_spot: 
+                        s += "font-weight: bold; border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
                     styles_df.loc[idx, col] = s
             return styles_df
             
@@ -1055,7 +1059,7 @@ if current_view == "🧮 Strategy Builder":
             styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
             for idx in df.index:
                 if "SPOT" in str(idx):
-                    styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+                    styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05); border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
             return styles_df
 
         if matrix_view == "Profit / Loss":
@@ -1224,7 +1228,7 @@ elif current_view == "💼 Portfolio Tracker":
         
         for leg in strat['legs']:
             rem_days = max(0.0001, ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - ref_time).total_seconds() / 86400.0)
-            cur_theo, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], current_spot_val, leg['Strike'], rem_days, leg.get('Current_Vol', leg['Vol']), leg['ExpDateStr'])
+            cur_theo, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], current_spot_val, leg['Strike'], rem_days, leg.get('Current_Vol', leg['Vol']), leg['ExpDateStr'], eval_date=ref_time)
             
             strat_pnl += (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
             net_live_theo_sum += cur_theo * leg['Qty']
@@ -1423,12 +1427,13 @@ elif current_view == "💼 Portfolio Tracker":
                     row = {"Price": f"» ${p:.2f} (SPOT) «" if math.isclose(p, spot, rel_tol=1e-5) else f"${p:.2f}"}
                     for d in mx_dates:
                         pnl, net_theo_sum = 0, 0
+                        eval_dt_mx = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
                         for leg in strat['legs']:
-                            rem_days = max(0.0001, ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d))).total_seconds() / 86400.0)
-                            exit_px, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod), leg['ExpDateStr'])
+                            rem_days = max(0.0001, ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - eval_dt_mx).total_seconds() / 86400.0)
+                            exit_px, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod), leg['ExpDateStr'], eval_date=eval_dt_mx)
                             pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                             net_theo_sum += exit_px * leg['Qty']
-                        col_name = (st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)).strftime("%b-%d-%Y")
+                        col_name = eval_dt_mx.strftime("%b-%d-%Y")
                         row[f"Today ({col_name})" if d == 0 else col_name] = pnl if matrix_view_p == "Profit / Loss" else (net_theo_sum / max_qty if max_qty != 0 else 0.0)
                     matrix_data.append(row)
                     
@@ -1447,7 +1452,8 @@ elif current_view == "💼 Portfolio Tracker":
                         for col in df.columns:
                             val = df.loc[idx, col]
                             s = f"background-color: rgba(74, 222, 128, {min(val/abs_max,1.0)*0.35+0.05:.2f}); " if val > 0 else (f"background-color: rgba(248, 113, 113, {min(abs(val)/abs_max,1.0)*0.35+0.05:.2f}); " if val < 0 else "")
-                            if is_spot: s += "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+                            if is_spot: 
+                                s += "font-weight: bold; border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
                             styles_df.loc[idx, col] = s
                     return styles_df
                     
@@ -1455,7 +1461,7 @@ elif current_view == "💼 Portfolio Tracker":
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
                         if "SPOT" in str(idx):
-                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05);"
+                            styles_df.loc[idx, :] = "font-weight: bold; background-color: rgba(255,255,255,0.05); border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
                     return styles_df
 
                 if matrix_view_p == "Profit / Loss":
