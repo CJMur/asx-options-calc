@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.8 (Dynamic Premium Sync in Builder)
+# VERSION: 1.6.8 (Indentation Fix)
 # ==========================================
 
 import streamlit as st
@@ -1488,8 +1488,8 @@ elif current_view == "💼 Portfolio Tracker":
                             if is_spot: 
                                 s += "font-weight: bold; border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
                             styles_df.loc[idx, col] = s
-            return styles_df
-            
+                    return styles_df
+                    
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
