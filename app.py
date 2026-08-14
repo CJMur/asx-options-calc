@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.6 (Button Text Updates)
+# VERSION: 1.6.8 (Dynamic Premium Sync in Builder)
 # ==========================================
 
 import streamlit as st
@@ -156,9 +156,9 @@ def get_sydney_time():
     return datetime.now(pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
 
 def format_date_ui(d_str):
-    """Formats YYYY-MM-DD to MMM-DD-YYYY for UI display."""
+    """Formats YYYY-MM-DD to DD-MMM-YYYY for UI display."""
     try:
-        return datetime.strptime(d_str, "%Y-%m-%d").strftime("%b-%d-%Y")
+        return datetime.strptime(d_str, "%Y-%m-%d").strftime("%d-%b-%Y")
     except:
         return d_str
 
@@ -554,7 +554,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.6</div>
+            <div class="header-sub">Option Strategy Builder v1.6.8</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -868,8 +868,10 @@ if current_view == "🧮 Strategy Builder":
             precise_days_diff = max(0.0001, (exp_dt - st.session_state.get('fetch_time', get_sydney_time())).total_seconds() / 86400.0)
             new_theo, new_delta = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], precise_days_diff, leg['Vol'], leg['ExpDateStr'])
             
+            st.session_state.legs[i]['Entry'] = new_theo
+            
             net_delta = leg['Qty'] * new_delta * contract_multiplier
-            premium = -(leg['Qty'] * leg['Entry'] * contract_multiplier)
+            premium = -(leg['Qty'] * new_theo * contract_multiplier)
             row_margin = total_margin - compute_gross_margin(st.session_state.legs[:i] + st.session_state.legs[i+1:], leg_risk_arrays[:i] + leg_risk_arrays[i+1:])
             
             total_delta += net_delta; total_premium += premium; raw_theo_sum += leg['Qty'] * new_theo
@@ -1031,7 +1033,7 @@ if current_view == "🧮 Strategy Builder":
                     exit_px, _ = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod), leg['ExpDateStr'], eval_date=eval_dt)
                     pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                     net_theo_sum += exit_px * leg['Qty']
-                col_name = eval_dt.strftime("%b-%d-%Y")
+                col_name = eval_dt.strftime("%d-%b-%Y")
                 row[f"Today ({col_name})" if d == 0 else col_name] = pnl if matrix_view == "Profit / Loss" else (net_theo_sum / max_qty if max_qty != 0 else 0.0)
             matrix_data.append(row)
             
@@ -1235,7 +1237,7 @@ elif current_view == "💼 Portfolio Tracker":
             
             display_legs.append({
                 "Code": leg['Code'], "Action": "Buy" if leg['Qty'] > 0 else "Sell", "Qty": abs(leg['Qty']), "Type": leg['Type'],
-                "Strike": f"${leg['Strike']:.2f}", "Expiry": leg['ExpDateStr'], "Entry Theo": f"{leg['Entry']:.3f}",
+                "Strike": f"${leg['Strike']:.2f}", "Expiry": format_date_ui(leg['ExpDateStr']), "Entry Theo": f"{leg['Entry']:.3f}",
                 "Live Theo": f"{cur_theo:.3f}", "Premium": f"${live_premium:,.2f}" if live_premium >= 0 else f"-${abs(live_premium):,.2f}", "Raw_Premium": live_premium
             })
             
@@ -1464,7 +1466,7 @@ elif current_view == "💼 Portfolio Tracker":
                             exit_px, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod), leg['ExpDateStr'], eval_date=eval_dt_mx)
                             pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                             net_theo_sum += exit_px * leg['Qty']
-                        col_name = eval_dt_mx.strftime("%b-%d-%Y")
+                        col_name = eval_dt_mx.strftime("%d-%b-%Y")
                         row[f"Today ({col_name})" if d == 0 else col_name] = pnl if matrix_view_p == "Profit / Loss" else (net_theo_sum / max_qty if max_qty != 0 else 0.0)
                     matrix_data.append(row)
                     
@@ -1486,8 +1488,8 @@ elif current_view == "💼 Portfolio Tracker":
                             if is_spot: 
                                 s += "font-weight: bold; border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
                             styles_df.loc[idx, col] = s
-                    return styles_df
-                    
+            return styles_df
+            
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
