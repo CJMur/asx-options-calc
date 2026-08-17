@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.10 (Strict Indentation Fix)
+# VERSION: 1.6.12 (Strict Indentation Fix)
 # ==========================================
 
 import streamlit as st
@@ -567,7 +567,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.10</div>
+            <div class="header-sub">Option Strategy Builder v1.6.12</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1042,8 +1042,15 @@ if current_view == "🧮 Strategy Builder":
                 pnl, net_theo_sum = 0, 0
                 eval_dt = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
                 for leg in st.session_state.legs:
-                    rem_days = ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - eval_dt).total_seconds() / 86400.0
-                    exit_px, _ = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod), leg['ExpDateStr'], eval_date=eval_dt)
+                    exp_exact_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+                    if eval_dt.date() >= exp_exact_dt.date():
+                        active_eval_dt = exp_exact_dt
+                        rem_days = 0.0
+                    else:
+                        active_eval_dt = eval_dt
+                        rem_days = (exp_exact_dt - active_eval_dt).total_seconds() / 86400.0
+                        
+                    exit_px, _ = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod), leg['ExpDateStr'], eval_date=active_eval_dt)
                     pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                     net_theo_sum += exit_px * leg['Qty']
                 col_name = eval_dt.strftime("%d-%b-%Y")
@@ -1475,8 +1482,15 @@ elif current_view == "💼 Portfolio Tracker":
                         pnl, net_theo_sum = 0, 0
                         eval_dt_mx = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
                         for leg in strat['legs']:
-                            rem_days = ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - eval_dt_mx).total_seconds() / 86400.0
-                            exit_px, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod), leg['ExpDateStr'], eval_date=eval_dt_mx)
+                            exp_exact_dt = datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)
+                            if eval_dt_mx.date() >= exp_exact_dt.date():
+                                active_eval_dt = exp_exact_dt
+                                rem_days = 0.0
+                            else:
+                                active_eval_dt = eval_dt_mx
+                                rem_days = (exp_exact_dt - active_eval_dt).total_seconds() / 86400.0
+                                
+                            exit_px, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod), leg['ExpDateStr'], eval_date=active_eval_dt)
                             pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                             net_theo_sum += exit_px * leg['Qty']
                         col_name = eval_dt_mx.strftime("%d-%b-%Y")
