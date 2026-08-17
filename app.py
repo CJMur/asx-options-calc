@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.9 (Expiry Kill Switch & Clamp Removal)
+# VERSION: 1.6.10 (Strict Indentation Fix)
 # ==========================================
 
 import streamlit as st
@@ -567,7 +567,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.9</div>
+            <div class="header-sub">Option Strategy Builder v1.6.10</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1501,7 +1501,7 @@ elif current_view == "💼 Portfolio Tracker":
                             if is_spot: 
                                 s += "font-weight: bold; border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
                             styles_df.loc[idx, col] = s
-            return styles_df
+                    return styles_df
             
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
