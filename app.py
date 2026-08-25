@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.13 (Fractional Delta Display)
+# VERSION: 1.6.14 (Fractional Delta / No Summary)
 # ==========================================
 
 import streamlit as st
@@ -243,10 +243,11 @@ if 'preselect_strike' not in st.session_state: st.session_state.preselect_strike
 TOOLTIPS = {
     "Theo": "The theoretical fair value of the option calculated using the Black-Scholes or Bjerksund-Stensland pricing model.",
     "IV": "Implied Volatility: The market's forecast of a likely movement in the security's price.",
-    "Delta": "Legs display Fractional Delta (per-contract exposure between -1.0 and +1.0). The Total Strategy row displays Net Position Delta (true share-equivalent portfolio risk).",
+    "Delta": "Fractional delta (per-contract directional exposure between -1.0 and +1.0).",
     "Strike": "The set price at which the option contract can be exercised.",
     "Code": "The unique ASX exchange ticker symbol for this specific option contract.",
     "Premium": "The total cost or credit for the trade. Calculated as Price × Quantity × Contract Multiplier.",
+    "Margin": "The estimated portfolio collateral required to hold this specific strategy.",
     "Expected Margin": "The estimated portfolio collateral required to hold this specific strategy."
 }
 
@@ -567,7 +568,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.13</div>
+            <div class="header-sub">Option Strategy Builder v1.6.14</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -872,7 +873,7 @@ if current_view == "🧮 Strategy Builder":
             return min(unbounded_gross_risk, abs(min(0.0, min(bound_pnls))))
 
         total_margin = compute_gross_margin(st.session_state.legs, leg_risk_arrays)
-        total_delta, total_premium, raw_theo_sum = 0, 0, 0
+        total_premium, raw_theo_sum = 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
         
         for i, leg in enumerate(st.session_state.legs):
@@ -888,12 +889,10 @@ if current_view == "🧮 Strategy Builder":
             # Leg displays Fractional Delta (between -1.0 and 1.0) based on Buy/Sell direction
             fractional_delta = new_delta * (1 if leg['Qty'] >= 0 else -1)
             
-            # Total Strategy calculates true share-equivalent position delta
-            net_delta = leg['Qty'] * new_delta * contract_multiplier
             premium = -(leg['Qty'] * new_theo * contract_multiplier)
             row_margin = total_margin - compute_gross_margin(st.session_state.legs[:i] + st.session_state.legs[i+1:], leg_risk_arrays[:i] + leg_risk_arrays[i+1:])
             
-            total_delta += net_delta; total_premium += premium; raw_theo_sum += leg['Qty'] * new_theo
+            total_premium += premium; raw_theo_sum += leg['Qty'] * new_theo
             p_color = '#4ade80' if premium >= 0 else '#f87171'
             row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
             
@@ -992,8 +991,8 @@ if current_view == "🧮 Strategy Builder":
             with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
             with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{strategy_net_theo:.3f}</div>", unsafe_allow_html=True)
             
-            # Label NET POS DELTA cleanly so the user knows the total row represents share-equivalent risk.
-            with f[8]: st.markdown(f"<div class='strategy-text' style='font-weight:bold; font-size:12px;' title='{TOOLTIPS.get('Delta', '')}'>NET POS DELTA<br><span style='font-size:14.5px;'>{total_delta:,.2f}</span></div>", unsafe_allow_html=True)
+            # Leave the net delta column cleanly blank
+            with f[8]: st.markdown(f"<div class='strategy-text'></div>", unsafe_allow_html=True)
             
             with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
             with f[10]: st.markdown(f"<div class='strategy-text'><span style='font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
