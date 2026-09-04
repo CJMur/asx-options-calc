@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.14 (Fractional Delta / No Summary)
+# VERSION: 1.6.15 (ASX Dictionary Update)
 # ==========================================
 
 import streamlit as st
@@ -36,26 +36,28 @@ ASX_NAMES = {
     "APA": "APA Group", "ASX": "ASX Limited", "AZJ": "Aurizon Holdings", "BEN": "Bendigo and Adelaide Bank",
     "BGL": "Bellevue Gold", "BHP": "BHP Group", "BOQ": "Bank of Queensland", "BPT": "Beach Energy",
     "BSL": "BlueScope Steel", "BXB": "Brambles Limited", "CAR": "CAR Group Limited", "CBA": "Commonwealth Bank",
-    "COL": "Coles Group", "CPU": "Computershare", "CSL": "CSL Limited", "CTD": "Corporate Travel Management",
-    "CWY": "Cleanaway Waste Management", "DMP": "Domino's Pizza Enterprises", "DNL": "Downer EDI",
-    "DRO": "DroneShield", "DXS": "Dexus", "EDV": "Endeavour Group", "EVN": "Evolution Mining",
-    "FLT": "Flight Centre", "FMG": "Fortescue Metals", "FPH": "Fisher & Paykel Healthcare",
-    "GMG": "Goodman Group", "GOLD": "Global X Physical Gold", "GPT": "GPT Group", "GYG": "Guzman y Gomez",
-    "HUB": "HUB24", "HVN": "Harvey Norman", "IAG": "Insurance Australia", "IEL": "IDP Education",
-    "IGO": "IGO Limited", "ILU": "Iluka Resources", "IVV": "iShares S&P 500 ETF", "JBH": "JB Hi-Fi",
-    "JHX": "James Hardie", "LLC": "Lendlease Group", "LOV": "Lovisa Holdings", "LYC": "Lynas Rare Earths",
-    "MGR": "Mirvac Group", "MIN": "Mineral Resources", "MPL": "Medibank Private", "MQG": "Macquarie Group",
-    "MSB": "Mesoblast", "MTS": "Metcash", "NAB": "National Australia Bank", "NDQ": "BetaShares NASDAQ 100 ETF",
-    "NEC": "Nine Entertainment Co.", "NHC": "New Hope Corporation", "NST": "Northern Star Resources",
-    "NWL": "Netwealth Group", "NXT": "NextDC Limited", "ORG": "Origin Energy", "ORI": "Orica Limited",
-    "PDN": "Paladin Energy", "PLS": "Pilbara Minerals", "PNI": "Pinnacle Investment", "PRU": "Perseus Mining",
-    "QAN": "Qantas Airways", "QBE": "QBE Insurance", "QUB": "Qube Holdings", "REH": "Reece Limited",
-    "RHC": "Ramsay Health Care", "RIO": "Rio Tinto", "RRL": "Regis Resources", "S32": "South32 Limited",
-    "SCG": "Scentre Group", "SDF": "Steadfast Group", "SEK": "Seek Limited", "SFR": "Sandfire Resources",
-    "SGH": "Seven Group Holdings", "SGM": "Sims Limited", "SGP": "Stockland", "SHL": "Sonic Healthcare",
-    "SIG": "Sigma Healthcare", "SOL": "Washington H. Soul Pattinson", "STO": "Santos Limited",
-    "STW": "SPDR S&P/ASX 200 Fund", "SUN": "Suncorp Group", "TAH": "Tabcorp Holdings", "TCL": "Transurban Group",
-    "TLC": "The Lottery Corporation", "TLS": "Telstra Group", "TLX": "Telix Pharmaceuticals",
+    "CGF": "Challenger Limited", "CMM": "Capricorn Metals Ltd", "COH": "Cochlear Limited", "COL": "Coles Group",
+    "CPU": "Computershare", "CSL": "CSL Limited", "CTD": "Corporate Travel Management", "CWY": "Cleanaway Waste Management",
+    "DMP": "Domino's Pizza Enterprises", "DNL": "Dyno Nobel Limited", "DRO": "DroneShield", "DXS": "Dexus",
+    "EDV": "Endeavour Group", "EVN": "Evolution Mining", "FLT": "Flight Centre", "FMG": "Fortescue Metals",
+    "FPH": "Fisher & Paykel Healthcare", "GMD": "Genesis Minerals Limited", "GMG": "Goodman Group",
+    "GOLD": "Global X Physical Gold", "GPT": "GPT Group", "GYG": "Guzman y Gomez", "HUB": "HUB24",
+    "HVN": "Harvey Norman", "IAG": "Insurance Australia", "IEL": "IDP Education", "IGO": "IGO Limited",
+    "ILU": "Iluka Resources", "IVV": "iShares S&P 500 ETF", "JBH": "JB Hi-Fi", "JDO": "Judo Capital Holdings Limited",
+    "JHX": "James Hardie", "LLC": "Lendlease Group", "LOV": "Lovisa Holdings", "LTR": "Liontown Limited",
+    "LYC": "Lynas Rare Earths", "MGR": "Mirvac Group", "MIN": "Mineral Resources", "MPL": "Medibank Private",
+    "MQG": "Macquarie Group", "MSB": "Mesoblast", "MTS": "Metcash", "NAB": "National Australia Bank",
+    "NDQ": "BetaShares NASDAQ 100 ETF", "NEC": "Nine Entertainment Co.", "NHC": "New Hope Corporation",
+    "NIC": "Nickel Industries Limited", "NST": "Northern Star Resources", "NWL": "Netwealth Group",
+    "NXT": "NextDC Limited", "ORG": "Origin Energy", "ORI": "Orica Limited", "PDN": "Paladin Energy",
+    "PLS": "Pilbara Minerals", "PME": "Pro Medicus Limited", "PNI": "Pinnacle Investment", "PRU": "Perseus Mining",
+    "QAN": "Qantas Airways", "QBE": "QBE Insurance", "QUB": "Qube Holdings", "REA": "REA Group Ltd",
+    "REH": "Reece Limited", "RHC": "Ramsay Health Care", "RIO": "Rio Tinto", "RMS": "Ramelius Resources Limited",
+    "RRL": "Regis Resources", "S32": "South32 Limited", "SCG": "Scentre Group", "SDF": "Steadfast Group",
+    "SEK": "Seek Limited", "SFR": "Sandfire Resources", "SGH": "Seven Group Holdings", "SGM": "Sims Limited",
+    "SGP": "Stockland", "SHL": "Sonic Healthcare", "SIG": "Sigma Healthcare", "SOL": "Washington H. Soul Pattinson",
+    "STO": "Santos Limited", "STW": "SPDR S&P/ASX 200 Fund", "SUN": "Suncorp Group", "TAH": "Tabcorp Holdings",
+    "TCL": "Transurban Group", "TLC": "The Lottery Corporation", "TLS": "Telstra Group", "TLX": "Telix Pharmaceuticals",
     "TNE": "Technology One", "TPG": "TPG Telecom", "TWE": "Treasury Wine Estates", "VAU": "Vaneck Gold Bullion",
     "WBC": "Westpac Banking Corp", "WDS": "Woodside Energy Group", "WES": "Wesfarmers Limited",
     "WHC": "Whitehaven Coal", "WOR": "Worley Limited", "WOW": "Woolworths Group", "WTC": "WiseTech Global",
@@ -1524,7 +1526,7 @@ elif current_view == "💼 Portfolio Tracker":
                                 s += "font-weight: bold; border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
                             styles_df.loc[idx, col] = s
                     return styles_df
-            
+
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
