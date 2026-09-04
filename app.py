@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.15 (ASX Dictionary Update)
+# VERSION: 1.6.16 (ASX Dictionary Update 2)
 # ==========================================
 
 import streamlit as st
@@ -39,14 +39,14 @@ ASX_NAMES = {
     "CGF": "Challenger Limited", "CMM": "Capricorn Metals Ltd", "COH": "Cochlear Limited", "COL": "Coles Group",
     "CPU": "Computershare", "CSL": "CSL Limited", "CTD": "Corporate Travel Management", "CWY": "Cleanaway Waste Management",
     "DMP": "Domino's Pizza Enterprises", "DNL": "Dyno Nobel Limited", "DRO": "DroneShield", "DXS": "Dexus",
-    "EDV": "Endeavour Group", "EVN": "Evolution Mining", "FLT": "Flight Centre", "FMG": "Fortescue Metals",
-    "FPH": "Fisher & Paykel Healthcare", "GMD": "Genesis Minerals Limited", "GMG": "Goodman Group",
-    "GOLD": "Global X Physical Gold", "GPT": "GPT Group", "GYG": "Guzman y Gomez", "HUB": "HUB24",
-    "HVN": "Harvey Norman", "IAG": "Insurance Australia", "IEL": "IDP Education", "IGO": "IGO Limited",
-    "ILU": "Iluka Resources", "IVV": "iShares S&P 500 ETF", "JBH": "JB Hi-Fi", "JDO": "Judo Capital Holdings Limited",
-    "JHX": "James Hardie", "LLC": "Lendlease Group", "LOV": "Lovisa Holdings", "LTR": "Liontown Limited",
-    "LYC": "Lynas Rare Earths", "MGR": "Mirvac Group", "MIN": "Mineral Resources", "MPL": "Medibank Private",
-    "MQG": "Macquarie Group", "MSB": "Mesoblast", "MTS": "Metcash", "NAB": "National Australia Bank",
+    "DYL": "Deep Yellow Limited", "EDV": "Endeavour Group", "EVN": "Evolution Mining", "FLT": "Flight Centre", 
+    "FMG": "Fortescue Metals", "FPH": "Fisher & Paykel Healthcare", "GGP": "Greatland Resources Limited", 
+    "GMD": "Genesis Minerals Limited", "GMG": "Goodman Group", "GOLD": "Global X Physical Gold", "GPT": "GPT Group", 
+    "GYG": "Guzman y Gomez", "HUB": "HUB24", "HVN": "Harvey Norman", "IAG": "Insurance Australia", "IEL": "IDP Education", 
+    "IGO": "IGO Limited", "ILU": "Iluka Resources", "IVV": "iShares S&P 500 ETF", "JBH": "JB Hi-Fi", 
+    "JDO": "Judo Capital Holdings Limited", "JHX": "James Hardie", "LLC": "Lendlease Group", "LOV": "Lovisa Holdings", 
+    "LTR": "Liontown Limited", "LYC": "Lynas Rare Earths", "MGR": "Mirvac Group", "MIN": "Mineral Resources", 
+    "MPL": "Medibank Private", "MQG": "Macquarie Group", "MSB": "Mesoblast", "MTS": "Metcash", "NAB": "National Australia Bank",
     "NDQ": "BetaShares NASDAQ 100 ETF", "NEC": "Nine Entertainment Co.", "NHC": "New Hope Corporation",
     "NIC": "Nickel Industries Limited", "NST": "Northern Star Resources", "NWL": "Netwealth Group",
     "NXT": "NextDC Limited", "ORG": "Origin Energy", "ORI": "Orica Limited", "PDN": "Paladin Energy",
@@ -570,7 +570,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.14</div>
+            <div class="header-sub">Option Strategy Builder v1.6.16</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -1526,7 +1526,7 @@ elif current_view == "💼 Portfolio Tracker":
                                 s += "font-weight: bold; border-top: 2px solid rgba(255,255,255,0.5); border-bottom: 2px solid rgba(255,255,255,0.5);"
                             styles_df.loc[idx, col] = s
                     return styles_df
-
+            
                 def highlight_spot(df):
                     styles_df = pd.DataFrame('', index=df.index, columns=df.columns)
                     for idx in df.index:
