@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.16 (ASX Dictionary Update 2)
+# VERSION: 1.6.18 (Layout & Chart Polish)
 # ==========================================
 
 import streamlit as st
@@ -18,6 +18,10 @@ import json
 import base64
 import io
 import copy
+
+# Single source of truth for the on-screen version label.
+# (Also update the VERSION line in the header comment at the top of this file.)
+APP_VERSION = "1.6.18"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -570,7 +574,7 @@ st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
             <div class="header-title">TradersCircle Options Calculator</div>
-            <div class="header-sub">Option Strategy Builder v1.6.16</div>
+            <div class="header-sub">Option Strategy Builder v{APP_VERSION}</div>
         </div>
         <div style="text-align: right;">
             <div class="header-title" style="color: #4ade80;">${st.session_state.spot_price:.2f}</div>
@@ -834,7 +838,7 @@ if current_view == "🧮 Strategy Builder":
         st.subheader("Strategy")
         contract_multiplier = 10 if st.session_state.ticker == 'XJO' else 100
         
-        h_col_spec = [0.8, 1.2, 0.6, 0.8, 1.5, 1.8, 1.0, 1.0, 1.0, 1.2, 1.3, 0.4]
+        h_col_spec = [0.8, 1.1, 0.6, 0.8, 1.9, 1.5, 1.5, 0.9, 0.9, 1.1, 1.2, 0.4]
         cols_header = st.columns(h_col_spec)
         headers = ["Qty", "Code", "Style", "Type", "Expiry", "Strike", "Vol", "Theo", "Delta", "Premium", "Expected Margin"]
         
@@ -977,7 +981,6 @@ if current_view == "🧮 Strategy Builder":
             with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{p_color}; font-weight:600;'>{premium_str}</span></div>", unsafe_allow_html=True)
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
             with c[11]:
-                st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                 if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
                     st.session_state.legs.pop(i); builder_needs_rerun = True; break
                     
@@ -1070,7 +1073,7 @@ if current_view == "🧮 Strategy Builder":
         capital_at_risk = max(total_margin, abs(total_premium)) if max(total_margin, abs(total_premium)) > 0 else 1.0
         
         def format_pnl(val):
-            try: return f"${float(val):,.0f} ({'+' if float(val)>0 else ''}{(float(val)/capital_at_risk)*100:.1f}%)" if pd.notna(val) else ""
+            try: return f"{'-' if round(float(val)) < 0 else ''}${abs(float(val)):,.0f} ({'+' if float(val)>0 else ''}{(float(val)/capital_at_risk)*100:.1f}%)" if pd.notna(val) else ""
             except: return ""
 
         def make_heatmap(df):
@@ -1123,14 +1126,28 @@ if current_view == "🧮 Strategy Builder":
         
         for be in breakevens:
             fig.add_vline(x=be, line_dash="dot", line_color="#10b981", opacity=0.8)
-            fig.add_annotation(x=be, y=0, text=f"BE: ${be:.2f}", showarrow=True, arrowhead=2, arrowcolor="#10b981", ax=0, ay=-40, bgcolor="#0f172a", bordercolor="#10b981", font=dict(color="#10b981", size=11))
+            fig.add_annotation(x=be, y=0, text=f"BE: ${be:.2f}", showarrow=True, arrowhead=2, arrowcolor="#10b981", ax=(-55 if be <= spot else 55), ay=-40, bgcolor="#0f172a", bordercolor="#10b981", font=dict(color="#10b981", size=11))
         
         fig.add_trace(go.Scatter(x=chart_prices, y=pnl_today, name="Today", line=dict(color='#0050FF', width=3)))
         fig.add_trace(go.Scatter(x=chart_prices, y=pnl_expiry, name="Expiry", line=dict(color='#1DBFD2', dash='dash', width=3)))
         fig.add_vline(x=spot, line_dash="dot", line_color="grey")
+
+        # Max profit / max loss labels: only when the payoff is bounded at both ends
+        # (equal long/short calls and puts) and every leg shares one expiry.
+        _legs = st.session_state.legs
+        _call_net = sum(l['Qty'] for l in _legs if l['Type'] == 'Call')
+        _put_net = sum(l['Qty'] for l in _legs if l['Type'] == 'Put')
+        if _call_net == 0 and _put_net == 0 and len({l['ExpDateStr'] for l in _legs}) == 1:
+            _exp_vals = [sum(((max(0.0, float(k['Strike']) - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - float(k['Strike']))) - l['Entry']) * l['Qty'] * contract_multiplier for l in _legs) for k in _legs]
+            _max_p, _max_l = max(_exp_vals), min(_exp_vals)
+            def _usd(v): return f"-${abs(v):,.0f}" if round(v) < 0 else f"${v:,.0f}"
+            if _max_p > 0:
+                fig.add_hline(y=_max_p, line_dash="dot", line_color="#10b981", opacity=0.5, annotation_text=f"Max Profit: {_usd(_max_p)}", annotation_position="top left", annotation_font=dict(color="#10b981", size=11))
+            if _max_l < 0:
+                fig.add_hline(y=_max_l, line_dash="dot", line_color="#f87171", opacity=0.5, annotation_text=f"Max Loss: {_usd(_max_l)}", annotation_position="bottom right", annotation_font=dict(color="#f87171", size=11))
         
         padding = max(abs(max(max(pnl_expiry), max(pnl_today))), abs(min(min(pnl_expiry), min(pnl_today)))) * 0.1
-        fig.update_layout(height=450, template="plotly_white", margin=dict(t=30, b=30), xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"), yaxis=dict(title="Profit / Loss ($)", tickprefix="$", zeroline=True, zerolinewidth=2, zerolinecolor='black', range=[min(min(pnl_expiry), min(pnl_today)) - padding, max(max(pnl_expiry), max(pnl_today)) + padding]), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        fig.update_layout(height=450, template="plotly_white", margin=dict(t=55, b=30), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"), yaxis=dict(title="Profit / Loss ($)", tickformat="$,.0f", zeroline=True, zerolinewidth=2, zerolinecolor='black', range=[min(min(pnl_expiry), min(pnl_today)) - padding, max(max(pnl_expiry), max(pnl_today)) + padding]), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
 
         if builder_needs_rerun: st.rerun()
@@ -1271,7 +1288,7 @@ elif current_view == "💼 Portfolio Tracker":
             })
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
-        pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {'🟢' if strat_pnl >= 0 else '🔴'} Open P&L: :{'green' if strat_pnl >= 0 else 'red'}[{'+' if strat_pnl >= 0 else ''}${strat_pnl:,.2f}]"
+        pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {'🟢' if strat_pnl >= 0 else '🔴'} Open P&L: :{'green' if strat_pnl >= 0 else 'red'}[{'+' if strat_pnl >= 0 else '-'}${abs(strat_pnl):,.2f}]"
             
         with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=(st.session_state.get('open_strat_id') == strat['id'])):
             
@@ -1392,10 +1409,9 @@ elif current_view == "💼 Portfolio Tracker":
                 c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{'#4ade80' if disp_data['Raw_Premium']>=0 else '#f87171'}; font-weight:600;'>{disp_data['Premium']}</span></div>", unsafe_allow_html=True)
                 
                 row_margin = port_total_margin - port_compute_gross_margin(strat['legs'][:j] + strat['legs'][j+1:], leg_risk_arrays_p[:j] + leg_risk_arrays_p[j+1:])
-                c[9].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>${row_margin:,.0f}</span></div>", unsafe_allow_html=True)
+                c[9].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>{'-' if row_margin < 0 else ''}${abs(row_margin):,.0f}</span></div>", unsafe_allow_html=True)
 
                 with c[10]:
-                    st.markdown("<div style='height: 1px;'></div>", unsafe_allow_html=True)
                     if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
                         strat['legs'].pop(j); st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True; break 
             
@@ -1510,7 +1526,7 @@ elif current_view == "💼 Portfolio Tracker":
                 capital_at_risk = max(port_total_margin, abs(sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in strat['legs']))) or 1.0
                 
                 def format_pnl(val):
-                    try: return f"${float(val):,.0f} ({'+' if float(val)>0 else ''}{(float(val)/capital_at_risk)*100:.1f}%)" if pd.notna(val) else ""
+                    try: return f"{'-' if round(float(val)) < 0 else ''}${abs(float(val)):,.0f} ({'+' if float(val)>0 else ''}{(float(val)/capital_at_risk)*100:.1f}%)" if pd.notna(val) else ""
                     except: return ""
 
                 def make_heatmap(df):
