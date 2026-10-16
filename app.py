@@ -595,7 +595,7 @@ if current_view == "🧮 Strategy Builder":
     builder_needs_rerun = False
     tickers_list = sorted(st.session_state.ref_data['Ticker'].dropna().unique().tolist()) if (st.session_state.ref_data is not None and not st.session_state.ref_data.empty) else []
 
-    c1, c2, c3, c4 = st.columns([1.4, 0.8, 0.7, 1.6], gap="medium")
+    c1, c2, c3, c4 = st.columns([1.4, 0.8, 0.7, 1.6], gap="medium", vertical_alignment="bottom")
     with c1: 
         asset_options = [f"{t} - {ASX_NAMES[t]}" if t in ASX_NAMES else t for t in tickers_list] or ["XJO - S&P/ASX 200 Index"]
         default_idx = tickers_list.index(st.session_state.ticker) if st.session_state.ticker in tickers_list else 0
@@ -611,8 +611,7 @@ if current_view == "🧮 Strategy Builder":
                 st.session_state.manual_spot = True
 
     with c4:
-        st.write(""); st.write("")
-        bc1, bc2 = st.columns([2.5, 1.2]) 
+        bc1, bc2 = st.columns([2.5, 1.2], vertical_alignment="bottom")
         with bc2:
             if st.button("🔄 RESTART", use_container_width=True):
                 st.query_params.clear() 
