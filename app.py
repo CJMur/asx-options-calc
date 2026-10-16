@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.18 (Layout & Chart Polish)
+# VERSION: 1.6.21 (Per-Strategy Dividend Fix)
 # ==========================================
 
 import streamlit as st
@@ -21,7 +21,7 @@ import copy
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.6.18"
+APP_VERSION = "1.6.21"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -199,6 +199,7 @@ if 'wp_loaded' not in st.session_state: st.session_state.wp_loaded = False
 if 'trigger_db_save' not in st.session_state: st.session_state.trigger_db_save = False
 if 'open_strat_id' not in st.session_state: st.session_state.open_strat_id = None
 if 'is_monday_data' not in st.session_state: st.session_state.is_monday_data = False
+if 'div_by_ticker' not in st.session_state: st.session_state.div_by_ticker = {}  # {clean ticker: dividend info or None}, filled by fetch_data
 
 # Detect WordPress User Token from URL
 wp_uid = st.query_params.get("uid", None)
@@ -442,7 +443,9 @@ def american_binomial_pricer(S, K, T, r, sigma, option_type, q=0.0, steps=100):
     delta = (v_u - v_d) / (S * u - S * d)
     return values[0], delta
 
-def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key, eval_date=None):
+_USE_SESSION_DIV = object()  # sentinel: price with the Strategy Builder's loaded dividend (default)
+
+def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key, eval_date=None, div_info=_USE_SESSION_DIV):
     if eval_date is None:
         eval_date = st.session_state.get('fetch_time', get_sydney_time())
         
@@ -476,6 +479,7 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
     is_xjo = (ticker_symbol == 'XJO')
     
     try:
+        div_src = st.session_state.div_info if div_info is _USE_SESSION_DIV else div_info
         S, K = float(simulated_spot), float(strike)
         v = max(0.0001, vol_pct / 100.0)
         T = time_days / 365.0
@@ -486,8 +490,8 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
                 basis_offset = st.session_state.fwd_spreads[expiry_str_key]
                 return black_76_futures_model(S, S + basis_offset, K, T, r, v, kind)
             else: q = 0.04
-        elif st.session_state.div_info:
-            d_info = st.session_state.div_info
+        elif div_src:
+            d_info = div_src
             if d_info['amount'] > 0 and d_info['date']:
                 days_to_div = (d_info['date'] - eval_date).days
                 if 0 <= days_to_div < time_days:
@@ -527,6 +531,7 @@ def fetch_data(t):
                     amt = info.get('lastDividendValue', info.get('dividendRate', 0)/2)
                     if ex_date > get_sydney_time(): div_info = {'amount': amt, 'date': ex_date}
         except: pass
+        if div_info is not None: st.session_state.div_by_ticker[clean] = div_info
         return "MANUAL", spot, div_info
 
     try:
@@ -561,8 +566,20 @@ def fetch_data(t):
                         projected_divs.sort(key=lambda x: x['date'])
                         div_info = projected_divs[0]
             except: pass
+        st.session_state.div_by_ticker[clean] = div_info
         return "YAHOO", spot, div_info
     except: return "ERROR", 0.0, None
+
+def get_div_info_for(ticker):
+    """Dividend info for a specific ticker (used by the Portfolio Tracker so each strategy
+    prices with its own stock's dividend, not whichever stock the Strategy Builder has loaded)."""
+    clean = str(ticker).upper().replace(".AX", "").strip()
+    if clean == 'XJOW': clean = 'XJO'
+    known = st.session_state.get('div_by_ticker', {})
+    if clean in known: return known[clean]
+    b = str(st.session_state.get('ticker') or '').upper().replace(".AX", "").strip()
+    if b == 'XJOW': b = 'XJO'
+    return st.session_state.get('div_info') if b == clean else None
 
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
@@ -620,9 +637,13 @@ if current_view == "🧮 Strategy Builder":
             if st.button("🔄 RESTART", use_container_width=True):
                 st.query_params.clear() 
                 saved_db, saved_fwd, saved_date = st.session_state.get('ref_data'), st.session_state.get('fwd_spreads'), st.session_state.get('data_date')
+                saved_monday = st.session_state.get('is_monday_data', False)
+                saved_divs = st.session_state.get('div_by_ticker', {})
                 saved_port, saved_refresh, saved_hash = st.session_state.get('portfolio'), st.session_state.get('portfolio_last_refresh'), st.session_state.get('last_upload_hash')
                 st.session_state.clear() 
                 st.session_state.ref_data, st.session_state.fwd_spreads, st.session_state.data_date = saved_db, saved_fwd, saved_date
+                st.session_state.is_monday_data = saved_monday
+                st.session_state.div_by_ticker = saved_divs
                 st.session_state.portfolio, st.session_state.portfolio_last_refresh, st.session_state.last_upload_hash = saved_port, saved_refresh, saved_hash
                 st.session_state.options_loaded, st.session_state.wp_loaded = False, True
                 st.rerun()
@@ -1191,7 +1212,9 @@ elif current_view == "💼 Portfolio Tracker":
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
-                    st.session_state.portfolio_last_refresh = get_sydney_time()
+                    _refresh_ts = get_sydney_time()
+                    st.session_state.portfolio_last_refresh = _refresh_ts
+                    st.session_state.fetch_time = _refresh_ts  # shared pricing clock (same one the Strategy Builder uses)
                     data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
                     st.session_state.ref_data, st.session_state.sheet_msg, st.session_state.fwd_spreads, st.session_state.data_date = data, msg, ext_spreads, d_date
                     try: 
@@ -1248,7 +1271,7 @@ elif current_view == "💼 Portfolio Tracker":
                 except Exception as e: st.error(f"Error loading file: {e}")
 
     if st.session_state.portfolio_last_refresh:
-        st.info(f"⏱️ **Live Snapshot Taken:** {st.session_state.portfolio_last_refresh.strftime('%d %b %Y, %I:%M %p AEST')}")
+        st.info(f"⏱️ **Live Snapshot Taken:** {st.session_state.fetch_time.strftime('%d %b %Y, %I:%M %p AEST')}")
     elif st.session_state.portfolio:
         st.info("ℹ️ Click 'Refresh All Prices' to load current market data and calculate your Open P&L.")
 
@@ -1271,11 +1294,11 @@ elif current_view == "💼 Portfolio Tracker":
         contract_multiplier = 10 if ticker_display == 'XJO' else 100
         
         strat_pnl, display_legs, net_live_theo_sum = 0.0, [], 0.0
-        ref_time = st.session_state.get('portfolio_last_refresh') or get_sydney_time()
+        ref_time = st.session_state.get('fetch_time', get_sydney_time())
         
         for leg in strat['legs']:
             rem_days = ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - ref_time).total_seconds() / 86400.0
-            cur_theo, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], current_spot_val, leg['Strike'], rem_days, leg.get('Current_Vol', leg['Vol']), leg['ExpDateStr'], eval_date=ref_time)
+            cur_theo, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], current_spot_val, leg['Strike'], rem_days, leg.get('Current_Vol', leg['Vol']), leg['ExpDateStr'], eval_date=ref_time, div_info=get_div_info_for(ticker_display))
             
             strat_pnl += (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
             net_live_theo_sum += cur_theo * leg['Qty']
@@ -1372,6 +1395,7 @@ elif current_view == "💼 Portfolio Tracker":
                 new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
                 if new_exp != leg['ExpDateStr']:
                     strat['legs'][j]['ExpDateStr'] = new_exp
+                    strat['legs'][j].pop('Current_Vol', None)  # new contract must not inherit the old contract's refreshed vol
                     subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == new_exp]
                     if not subset_exp.empty:
                         avail_stk = sorted(subset_exp['Strike'].unique().tolist())
@@ -1391,6 +1415,7 @@ elif current_view == "💼 Portfolio Tracker":
                 new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
                 if new_stk != float(leg['Strike']):
                     strat['legs'][j]['Strike'] = new_stk
+                    strat['legs'][j].pop('Current_Vol', None)  # new contract must not inherit the old contract's refreshed vol
                     if not subset_exp.empty:
                         match = subset_exp[subset_exp['Strike'] == new_stk].sort_values('Code', ascending=False)
                         if not match.empty:
@@ -1400,7 +1425,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True
 
                 new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
-                if new_vol != leg['Vol']: strat['legs'][j]['Vol'] = new_vol; st.session_state.trigger_db_save = True; port_needs_rerun = True
+                if new_vol != leg['Vol']: strat['legs'][j]['Vol'] = new_vol; strat['legs'][j].pop('Current_Vol', None); st.session_state.trigger_db_save = True; port_needs_rerun = True
                     
                 new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_entry != leg['Entry']: strat['legs'][j]['Entry'] = new_entry; st.session_state.trigger_db_save = True; port_needs_rerun = True
@@ -1451,6 +1476,7 @@ elif current_view == "💼 Portfolio Tracker":
                             st.session_state.sheet_msg = msg
                             st.session_state.fwd_spreads = ext_spreads
                             st.session_state.data_date = d_date
+                            st.session_state.fetch_time = get_sydney_time()  # shared pricing clock
                             try: 
                                 if d_date != "Unknown":
                                     st.session_state.is_monday_data = (pd.to_datetime(d_date).weekday() == 0)
@@ -1515,7 +1541,7 @@ elif current_view == "💼 Portfolio Tracker":
                                 active_eval_dt = eval_dt_mx
                                 rem_days = (exp_exact_dt - active_eval_dt).total_seconds() / 86400.0
                                 
-                            exit_px, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod), leg['ExpDateStr'], eval_date=active_eval_dt)
+                            exit_px, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod), leg['ExpDateStr'], eval_date=active_eval_dt, div_info=get_div_info_for(ticker_display))
                             pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
                             net_theo_sum += exit_px * leg['Qty']
                         col_name = eval_dt_mx.strftime("%d-%b-%Y")
