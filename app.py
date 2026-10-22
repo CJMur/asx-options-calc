@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.21 (Per-Strategy Dividend Fix)
+# VERSION: 1.6.22 (Vol Parsing, Contract Size, Width API)
 # ==========================================
 
 import streamlit as st
@@ -21,7 +21,7 @@ import copy
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.6.21"
+APP_VERSION = "1.6.22"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -332,6 +332,8 @@ def load_databases(opts_url, fwd_url, cb="default"):
             'Settlement': 'Settlement', 'Style': 'Style', 'Lookup Key': 'LookupKey'
         }
         df = df.rename(columns=header_map)
+        _cs_cols = [c for c in df.columns if str(c).lower().replace(' ', '').replace('_', '').startswith(('contractsiz', 'contractsz', 'contractmult'))]
+        if _cs_cols: df = df.rename(columns={_cs_cols[0]: 'ContractSize'})
         
         required = ['Code', 'Ticker', 'Strike', 'Expiry']
         missing_cols = [c for c in required if c not in df.columns]
@@ -357,11 +359,17 @@ def load_databases(opts_url, fwd_url, cb="default"):
         
         if 'Vol' in df.columns:
             df['Vol'] = pd.to_numeric(df['Vol'].astype(str).str.replace('%', ''), errors='coerce')
-            mask = df['Vol'] <= 1.0 
-            df.loc[mask, 'Vol'] = df.loc[mask, 'Vol'] * 100
+            # The source file stores vol as a decimal (0.67 = 67%). Decide once for the whole column so an IV above 100%
+            # (e.g. 1.25) is not mistaken for 1.25%. A column already in percent (typical values 10-100) is left alone.
+            _vol_typical = df['Vol'].dropna().median()
+            if pd.notna(_vol_typical) and _vol_typical <= 3.0:
+                df['Vol'] = df['Vol'] * 100
         else: df['Vol'] = 30.0
             
         df['Settlement'] = pd.to_numeric(df['Settlement'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce') if 'Settlement' in df.columns else 0.0
+
+        if 'ContractSize' in df.columns:
+            df['ContractSize'] = pd.to_numeric(df['ContractSize'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
 
         scen_cols = [c for c in df.columns if 'Scenario' in str(c)]
         if scen_cols:
@@ -581,6 +589,27 @@ def get_div_info_for(ticker):
     if b == 'XJOW': b = 'XJO'
     return st.session_state.get('div_info') if b == clean else None
 
+def _contract_size_map():
+    """{ASX code: contract size} from the loaded options data (rebuilt only when the data changes)."""
+    df = st.session_state.get('ref_data')
+    cache = st.session_state.get('_cs_cache')
+    if cache is not None and cache[0] is df: return cache[1]
+    m = {}
+    try:
+        if df is not None and hasattr(df, 'columns') and 'ContractSize' in df.columns:
+            sub = df[['Code', 'ContractSize']].dropna()
+            m = {str(c).upper(): float(v) for c, v in zip(sub['Code'], sub['ContractSize']) if float(v) > 0}
+    except Exception: m = {}
+    st.session_state._cs_cache = (df, m)
+    return m
+
+def leg_mult(leg, default_mult):
+    """Contract multiplier for one leg. XJO is always 10. Equity options use the contract size in the data
+    (e.g. 104 after a corporate-action adjustment), falling back to the standard 100 if it is missing."""
+    if default_mult == 10: return default_mult
+    try: return _contract_size_map().get(str(leg.get('Code', '')).upper(), default_mult)
+    except Exception: return default_mult
+
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
@@ -634,7 +663,7 @@ if current_view == "🧮 Strategy Builder":
     with c4:
         bc1, bc2 = st.columns([2.5, 1.2], vertical_alignment="bottom")
         with bc2:
-            if st.button("🔄 RESTART", use_container_width=True):
+            if st.button("🔄 RESTART", width='stretch'):
                 st.query_params.clear() 
                 saved_db, saved_fwd, saved_date = st.session_state.get('ref_data'), st.session_state.get('fwd_spreads'), st.session_state.get('data_date')
                 saved_monday = st.session_state.get('is_monday_data', False)
@@ -648,7 +677,7 @@ if current_view == "🧮 Strategy Builder":
                 st.session_state.options_loaded, st.session_state.wp_loaded = False, True
                 st.rerun()
 
-        with bc1: do_load = st.button("🔍 LOAD OPTIONS", type="primary", use_container_width=True)
+        with bc1: do_load = st.button("🔍 LOAD OPTIONS", type="primary", width='stretch')
 
     query = code_sel.strip() if code_sel.strip() else asset_sel.split(' - ')[0]
     trigger_search = do_load or (query and query.upper() != (st.session_state.preselect_code if st.session_state.preselect_code else st.session_state.ticker))
@@ -808,7 +837,7 @@ if current_view == "🧮 Strategy Builder":
                     "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
                     "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
                 },
-                hide_index=True, use_container_width=True, key=f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}",
+                hide_index=True, width='stretch', key=f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}",
                 disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
             )
             
@@ -832,7 +861,7 @@ if current_view == "🧮 Strategy Builder":
                 st.write("")
                 b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
                 with b_c1:
-                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", use_container_width=True):
+                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", width='stretch'):
                         for leg in selected_legs:
                             r, kind = leg['row'], leg['kind']
                             px = r['C_Price'] if kind == 'Call' else r['P_Price']
@@ -851,7 +880,7 @@ if current_view == "🧮 Strategy Builder":
                         st.session_state.legs = sorted(st.session_state.legs, key=lambda x: float(x['Strike']), reverse=True)
                         st.session_state.editor_reset += 1; st.session_state.preselect_code = None; builder_needs_rerun = True
                 with b_c2:
-                    if st.button("Clear Selection", use_container_width=True):
+                    if st.button("Clear Selection", width='stretch'):
                         st.session_state.editor_reset += 1; builder_needs_rerun = True
 
     if st.session_state.legs:
@@ -882,20 +911,20 @@ if current_view == "🧮 Strategy Builder":
 
         def compute_gross_margin(legs_list, arrays_list):
             if not legs_list: return 0.0
-            subset_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in legs_list)
+            subset_premium = sum(-(l['Qty'] * l['Entry'] * leg_mult(l, contract_multiplier)) for l in legs_list)
             array_span_loss = abs(min(0.0, np.min(sum(r * l['Qty'] for r, l in zip(arrays_list, legs_list))))) if (len(arrays_list) > 0 and len(arrays_list[0]) > 1) else 0.0
             
             S = st.session_state.spot_price
             scan_pct = 0.065 if st.session_state.ticker == 'XJO' else 0.15
             test_spots = [S * (1 - scan_pct), S * (1 + scan_pct)]
-            synthetic_pnls = [sum(l['Qty'] * ((max(0.0, spot - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - spot)) - l['Entry']) * contract_multiplier for l in legs_list) for spot in test_spots]
+            synthetic_pnls = [sum(l['Qty'] * ((max(0.0, spot - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - spot)) - l['Entry']) * leg_mult(l, contract_multiplier) for l in legs_list) for spot in test_spots]
             
             unbounded_gross_risk = max(0.0, max(array_span_loss, abs(min(0.0, min(synthetic_pnls)))) + subset_premium)
             if (sum(l['Qty'] for l in legs_list if l['Type'] == 'Call') < 0) or (sum(l['Qty'] for l in legs_list if l['Type'] == 'Put') < 0): return unbounded_gross_risk
             
             strikes = [float(l['Strike']) for l in legs_list]
             if not strikes: return unbounded_gross_risk
-            bound_pnls = [sum(l['Qty'] * max(0.0, spot - float(l['Strike'])) * contract_multiplier if l['Type'] == 'Call' else l['Qty'] * max(0.0, float(l['Strike']) - spot) * contract_multiplier for l in legs_list) for spot in strikes + [0.0, max(strikes) * 3.0]]
+            bound_pnls = [sum(l['Qty'] * max(0.0, spot - float(l['Strike'])) * leg_mult(l, contract_multiplier) if l['Type'] == 'Call' else l['Qty'] * max(0.0, float(l['Strike']) - spot) * leg_mult(l, contract_multiplier) for l in legs_list) for spot in strikes + [0.0, max(strikes) * 3.0]]
             return min(unbounded_gross_risk, abs(min(0.0, min(bound_pnls))))
 
         total_margin = compute_gross_margin(st.session_state.legs, leg_risk_arrays)
@@ -915,7 +944,7 @@ if current_view == "🧮 Strategy Builder":
             # Leg displays Fractional Delta (between -1.0 and 1.0) based on Buy/Sell direction
             fractional_delta = new_delta * (1 if leg['Qty'] >= 0 else -1)
             
-            premium = -(leg['Qty'] * new_theo * contract_multiplier)
+            premium = -(leg['Qty'] * new_theo * leg_mult(leg, contract_multiplier))
             row_margin = total_margin - compute_gross_margin(st.session_state.legs[:i] + st.session_state.legs[i+1:], leg_risk_arrays[:i] + leg_risk_arrays[i+1:])
             
             total_premium += premium; raw_theo_sum += leg['Qty'] * new_theo
@@ -1002,7 +1031,7 @@ if current_view == "🧮 Strategy Builder":
             with c[9]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{p_color}; font-weight:600;'>{premium_str}</span></div>", unsafe_allow_html=True)
             with c[10]: st.markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>{margin_str}</span></div>", unsafe_allow_html=True)
             with c[11]:
-                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", use_container_width=True):
+                if st.button("✕", key=f"d_{leg['id']}", type="tertiary", width='stretch'):
                     st.session_state.legs.pop(i); builder_needs_rerun = True; break
                     
         st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
@@ -1027,7 +1056,7 @@ if current_view == "🧮 Strategy Builder":
         s_c1, s_c2 = st.columns([3, 1])
         with s_c1: strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
         with s_c2:
-            if st.button("Save Strategy", type="primary", use_container_width=True):
+            if st.button("Save Strategy", type="primary", width='stretch'):
                 st.session_state.portfolio.append({
                     "id": str(uuid.uuid4()), "name": strat_name, "ticker": st.session_state.ticker,
                     "spot_at_entry": st.session_state.spot_price, "legs": [leg.copy() for leg in st.session_state.legs]
@@ -1084,7 +1113,7 @@ if current_view == "🧮 Strategy Builder":
                         rem_days = (exp_exact_dt - active_eval_dt).total_seconds() / 86400.0
                         
                     exit_px, _ = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg['Vol'] + st.session_state.matrix_vol_mod), leg['ExpDateStr'], eval_date=active_eval_dt)
-                    pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
+                    pnl += (exit_px - leg['Entry']) * leg['Qty'] * leg_mult(leg, contract_multiplier)
                     net_theo_sum += exit_px * leg['Qty']
                 col_name = eval_dt.strftime("%d-%b-%Y")
                 row[f"Today ({col_name})" if d == 0 else col_name] = pnl if matrix_view == "Profit / Loss" else (net_theo_sum / max_qty if max_qty != 0 else 0.0)
@@ -1120,12 +1149,12 @@ if current_view == "🧮 Strategy Builder":
         if matrix_view == "Profit / Loss":
             st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl).set_table_styles([
                 {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
-            ]), use_container_width=True, height=500)
+            ]), width='stretch', height=500)
         else:
             format_dict = {col: "{:.3f}" for col in df_mx.columns}
             st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
                 {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
-            ]), use_container_width=True, height=500)
+            ]), width='stretch', height=500)
 
         # PAYOFF CHART
         st.markdown("### Payoff Chart")
@@ -1135,8 +1164,8 @@ if current_view == "🧮 Strategy Builder":
             for leg in st.session_state.legs:
                 rem_days = ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - st.session_state.get('fetch_time', get_sydney_time())).total_seconds() / 86400.0
                 price_t0, _ = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, leg['Vol'], leg['ExpDateStr'])
-                val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * contract_multiplier
-                val_tF += ((max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)) - leg['Entry']) * leg['Qty'] * contract_multiplier
+                val_t0 += (price_t0 - leg['Entry']) * leg['Qty'] * leg_mult(leg, contract_multiplier)
+                val_tF += ((max(0, p - leg['Strike']) if leg['Type'] == 'Call' else max(0, leg['Strike'] - p)) - leg['Entry']) * leg['Qty'] * leg_mult(leg, contract_multiplier)
             pnl_today.append(val_t0); pnl_expiry.append(val_tF)
             
         breakevens = [chart_prices[i] - pnl_expiry[i] * (chart_prices[i+1] - chart_prices[i]) / (pnl_expiry[i+1] - pnl_expiry[i]) for i in range(len(chart_prices)-1) if pnl_expiry[i] * pnl_expiry[i+1] < 0]
@@ -1159,7 +1188,7 @@ if current_view == "🧮 Strategy Builder":
         _call_net = sum(l['Qty'] for l in _legs if l['Type'] == 'Call')
         _put_net = sum(l['Qty'] for l in _legs if l['Type'] == 'Put')
         if _call_net == 0 and _put_net == 0 and len({l['ExpDateStr'] for l in _legs}) == 1:
-            _exp_vals = [sum(((max(0.0, float(k['Strike']) - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - float(k['Strike']))) - l['Entry']) * l['Qty'] * contract_multiplier for l in _legs) for k in _legs]
+            _exp_vals = [sum(((max(0.0, float(k['Strike']) - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - float(k['Strike']))) - l['Entry']) * l['Qty'] * leg_mult(l, contract_multiplier) for l in _legs) for k in _legs]
             _max_p, _max_l = max(_exp_vals), min(_exp_vals)
             def _usd(v): return f"-${abs(v):,.0f}" if round(v) < 0 else f"${v:,.0f}"
             if _max_p > 0:
@@ -1169,7 +1198,7 @@ if current_view == "🧮 Strategy Builder":
         
         padding = max(abs(max(max(pnl_expiry), max(pnl_today))), abs(min(min(pnl_expiry), min(pnl_today)))) * 0.1
         fig.update_layout(height=450, template="plotly_white", margin=dict(t=55, b=30), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), xaxis=dict(title="Stock Price @ Expiry", tickprefix="$"), yaxis=dict(title="Profit / Loss ($)", tickformat="$,.0f", zeroline=True, zerolinewidth=2, zerolinecolor='black', range=[min(min(pnl_expiry), min(pnl_today)) - padding, max(max(pnl_expiry), max(pnl_today)) + padding]), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         if builder_needs_rerun: st.rerun()
 
@@ -1208,7 +1237,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh All Prices", type="primary", use_container_width=True):
+            if st.button("🔄 Refresh All Prices", type="primary", width='stretch'):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1240,13 +1269,13 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_db_save = True
                     st.rerun()
-        else: st.button("🔄 Refresh All Prices", type="primary", use_container_width=True, disabled=True)
+        else: st.button("🔄 Refresh All Prices", type="primary", width='stretch', disabled=True)
             
     with ctrl_c2:
         if st.session_state.portfolio:
             flat_port = [{"StrategyID": s['id'], "StrategyName": s['name'], "Ticker": s.get('ticker', 'Unknown'), "EntrySpot": s.get('spot_at_entry', 0.0), "LegID": l['id'], "Qty": l['Qty'], "Type": l['Type'], "Style": l['Style'], "Strike": l['Strike'], "Expiry": l['ExpDateStr'], "Vol": l['Vol'], "EntryPrice": l['Entry'], "Code": l['Code']} for s in st.session_state.portfolio for l in s['legs']]
-            st.download_button("💾 Download Backup (CSV)", data=pd.DataFrame(flat_port).to_csv(index=False), file_name="tc_portfolio.csv", mime="text/csv", use_container_width=True)
-        else: st.button("💾 Download Backup (CSV)", disabled=True, use_container_width=True)
+            st.download_button("💾 Download Backup (CSV)", data=pd.DataFrame(flat_port).to_csv(index=False), file_name="tc_portfolio.csv", mime="text/csv", width='stretch')
+        else: st.button("💾 Download Backup (CSV)", disabled=True, width='stretch')
             
     with ctrl_c3:
         uploaded_file = st.file_uploader("Upload", type=["csv"], label_visibility="collapsed")
@@ -1300,9 +1329,9 @@ elif current_view == "💼 Portfolio Tracker":
             rem_days = ((datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - ref_time).total_seconds() / 86400.0
             cur_theo, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], current_spot_val, leg['Strike'], rem_days, leg.get('Current_Vol', leg['Vol']), leg['ExpDateStr'], eval_date=ref_time, div_info=get_div_info_for(ticker_display))
             
-            strat_pnl += (cur_theo - leg['Entry']) * leg['Qty'] * contract_multiplier
+            strat_pnl += (cur_theo - leg['Entry']) * leg['Qty'] * leg_mult(leg, contract_multiplier)
             net_live_theo_sum += cur_theo * leg['Qty']
-            live_premium = -(leg['Qty'] * cur_theo * contract_multiplier)
+            live_premium = -(leg['Qty'] * cur_theo * leg_mult(leg, contract_multiplier))
             
             display_legs.append({
                 "Code": leg['Code'], "Action": "Buy" if leg['Qty'] > 0 else "Sell", "Qty": abs(leg['Qty']), "Type": leg['Type'],
@@ -1336,20 +1365,20 @@ elif current_view == "💼 Portfolio Tracker":
             
             def port_compute_gross_margin(legs_list, arrays_list):
                 if not legs_list: return 0.0
-                subset_premium = sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in legs_list)
+                subset_premium = sum(-(l['Qty'] * l['Entry'] * leg_mult(l, contract_multiplier)) for l in legs_list)
                 array_span_loss = abs(min(0.0, np.min(sum(r * l['Qty'] for r, l in zip(arrays_list, legs_list))))) if (len(arrays_list) > 0 and len(arrays_list[0]) > 1) else 0.0
                 
                 S = current_spot_val
                 scan_pct = 0.065 if ticker_display == 'XJO' else 0.15
                 test_spots = [S * (1 - scan_pct), S * (1 + scan_pct)]
-                synthetic_pnls = [sum(l['Qty'] * ((max(0.0, spot - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - spot)) - l['Entry']) * contract_multiplier for l in legs_list) for spot in test_spots]
+                synthetic_pnls = [sum(l['Qty'] * ((max(0.0, spot - float(l['Strike'])) if l['Type'] == 'Call' else max(0.0, float(l['Strike']) - spot)) - l['Entry']) * leg_mult(l, contract_multiplier) for l in legs_list) for spot in test_spots]
                 
                 unbounded_gross_risk = max(0.0, max(array_span_loss, abs(min(0.0, min(synthetic_pnls)))) + subset_premium)
                 if (sum(l['Qty'] for l in legs_list if l['Type'] == 'Call') < 0) or (sum(l['Qty'] for l in legs_list if l['Type'] == 'Put') < 0): return unbounded_gross_risk
                 
                 strikes = [float(l['Strike']) for l in legs_list]
                 if not strikes: return unbounded_gross_risk
-                bound_pnls = [sum(l['Qty'] * max(0.0, spot - float(l['Strike'])) * contract_multiplier if l['Type'] == 'Call' else l['Qty'] * max(0.0, float(l['Strike']) - spot) * contract_multiplier for l in legs_list) for spot in strikes + [0.0, max(strikes) * 3.0]]
+                bound_pnls = [sum(l['Qty'] * max(0.0, spot - float(l['Strike'])) * leg_mult(l, contract_multiplier) if l['Type'] == 'Call' else l['Qty'] * max(0.0, float(l['Strike']) - spot) * leg_mult(l, contract_multiplier) for l in legs_list) for spot in strikes + [0.0, max(strikes) * 3.0]]
                 return min(unbounded_gross_risk, abs(min(0.0, min(bound_pnls))))
 
             scen_cols_p = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
@@ -1458,17 +1487,17 @@ elif current_view == "💼 Portfolio Tracker":
             
             a_c1, a_c2, a_c3, _ = st.columns([1.5, 1.5, 1.5, 2.5])
             with a_c1:
-                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", use_container_width=True):
+                if st.button("🗑️ Delete Trade", key=f"del_{strat['id']}", width='stretch'):
                     st.session_state.portfolio.pop(i); st.session_state.trigger_db_save = True; st.session_state.open_strat_id = None; port_needs_rerun = True
             with a_c2:
-                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", use_container_width=True):
+                if st.button("📋 Duplicate", key=f"dup_{strat['id']}", width='stretch'):
                     new_strat = copy.deepcopy(strat)
                     new_strat['id'] = str(uuid.uuid4())
                     new_strat['name'] = new_strat.get('name', 'Strategy') + " (Copy)"
                     for l in new_strat['legs']: l['id'] = str(uuid.uuid4())
                     st.session_state.portfolio.insert(i + 1, new_strat); st.session_state.trigger_db_save = True; st.session_state.open_strat_id = new_strat['id']; port_needs_rerun = True
             with a_c3:
-                if st.button("🔄 Refresh", key=f"ref_live_{strat['id']}", use_container_width=True):
+                if st.button("🔄 Refresh", key=f"ref_live_{strat['id']}", width='stretch'):
                     with st.spinner("Fetching live data..."):
                         data, msg, ext_spreads, d_date = load_databases(OPTIONS_SHEET_URL, FWD_CURVE_URL, str(uuid.uuid4())[:8])
                         if not data.empty:
@@ -1542,14 +1571,14 @@ elif current_view == "💼 Portfolio Tracker":
                                 rem_days = (exp_exact_dt - active_eval_dt).total_seconds() / 86400.0
                                 
                             exit_px, _ = calculate_price_and_delta(ticker_display, leg['Style'], leg['Type'], p, leg['Strike'], rem_days, max(1.0, leg.get('Current_Vol', leg['Vol']) + mx_vol_mod), leg['ExpDateStr'], eval_date=active_eval_dt, div_info=get_div_info_for(ticker_display))
-                            pnl += (exit_px - leg['Entry']) * leg['Qty'] * contract_multiplier
+                            pnl += (exit_px - leg['Entry']) * leg['Qty'] * leg_mult(leg, contract_multiplier)
                             net_theo_sum += exit_px * leg['Qty']
                         col_name = eval_dt_mx.strftime("%d-%b-%Y")
                         row[f"Today ({col_name})" if d == 0 else col_name] = pnl if matrix_view_p == "Profit / Loss" else (net_theo_sum / max_qty if max_qty != 0 else 0.0)
                     matrix_data.append(row)
                     
                 df_mx = pd.DataFrame(matrix_data).set_index("Price")
-                capital_at_risk = max(port_total_margin, abs(sum(-(l['Qty'] * l['Entry'] * contract_multiplier) for l in strat['legs']))) or 1.0
+                capital_at_risk = max(port_total_margin, abs(sum(-(l['Qty'] * l['Entry'] * leg_mult(l, contract_multiplier)) for l in strat['legs']))) or 1.0
                 
                 def format_pnl(val):
                     try: return f"{'-' if round(float(val)) < 0 else ''}${abs(float(val)):,.0f} ({'+' if float(val)>0 else ''}{(float(val)/capital_at_risk)*100:.1f}%)" if pd.notna(val) else ""
@@ -1578,12 +1607,12 @@ elif current_view == "💼 Portfolio Tracker":
                 if matrix_view_p == "Profit / Loss":
                     st.dataframe(df_mx.style.apply(make_heatmap, axis=None).format(format_pnl).set_table_styles([
                         {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
-                    ]), use_container_width=True, height=500)
+                    ]), width='stretch', height=500)
                 else:
                     format_dict = {col: "{:.3f}" for col in df_mx.columns}
                     st.dataframe(df_mx.style.apply(highlight_spot, axis=None).format(format_dict).set_table_styles([
                         {'selector': 'th', 'props': [('color', 'var(--text-color)'), ('font-weight', 'bold')]}
-                    ]), use_container_width=True, height=500)
+                    ]), width='stretch', height=500)
 
             if port_needs_rerun: st.rerun()
 
