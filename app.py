@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.7.2 (Portfolio Tooltip, Grey Roll Prompt, Centred Chain)
+# VERSION: 1.7.3 (Chain Alignment: Strike Column Only)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.7.2"
+APP_VERSION = "1.7.3"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -647,19 +647,19 @@ def render_chain_editor(df_view, current_exp):
     edited_df = st.data_editor(
         styled_disp,
         column_config={
-            "C_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False, **_CHAIN_ALIGN),
-            "C_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False, **_CHAIN_ALIGN),
-            "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"], **_CHAIN_ALIGN),
-            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"], **_CHAIN_ALIGN),
-            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"], **_CHAIN_ALIGN),
-            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)", **_CHAIN_ALIGN),
+            "C_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
+            "C_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
+            "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
+            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
+            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
+            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
             "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f", help=TOOLTIPS["Strike"], **_CHAIN_ALIGN),
-            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"], **_CHAIN_ALIGN),
-            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"], **_CHAIN_ALIGN),
-            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)", **_CHAIN_ALIGN),
-            "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"], **_CHAIN_ALIGN),
-            "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False, **_CHAIN_ALIGN),
-            "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False, **_CHAIN_ALIGN),
+            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
+            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
+            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
+            "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
+            "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
+            "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
         },
         hide_index=True, width='stretch', key=f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}",
         disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
