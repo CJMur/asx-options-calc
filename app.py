@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.7.0 (Faster Leg Adding)
+# VERSION: 1.7.1 (Confirm Leg Edits In Portfolio)
 # ==========================================
 
 import streamlit as st
@@ -21,7 +21,7 @@ import copy
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.1"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -702,6 +702,46 @@ def render_chain_editor(df_view, current_exp):
             st.button("Clear Selection", width='stretch', on_click=_clear_chain_selection)
 
 
+def _resolve_target_contract(strat, leg, target_exp, stk_pref):
+    """Which contract a leg would become if moved to target_exp near strike stk_pref (nearest listed strike)."""
+    tkr = str(strat.get('ticker', 'XJO')).replace(".AX", "")
+    ref = st.session_state.get('ref_data')
+    out = {'strike': float(stk_pref)}
+    if ref is not None and not ref.empty:
+        mask = ref['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else ref['Ticker'] == tkr
+        sub = ref[mask & (ref['Type'] == leg['Type']) & (ref['Expiry'].dt.strftime("%Y-%m-%d") == target_exp)]
+        if not sub.empty:
+            avail = sorted(sub['Strike'].unique().tolist())
+            closest = min(avail, key=lambda x: abs(x - float(stk_pref)))
+            out['strike'] = float(closest)
+            match = sub[sub['Strike'] == closest].sort_values('Code', ascending=False)
+            if not match.empty:
+                out.update(code=str(match.iloc[0]['Code']), vol=float(match.iloc[0]['Vol']), style=match.iloc[0].get('Style', 'American'))
+    return out
+
+def resolve_leg_edit(choice):
+    """Button callback for the portfolio 'you changed a strike/expiry' prompt: 'roll', 'keep' or 'cancel'."""
+    p = st.session_state.get('pending_leg_edit')
+    st.session_state.pending_leg_edit = None
+    if not p: return
+    strat = next((x for x in st.session_state.portfolio if x['id'] == p['sid']), None)
+    leg = next((l for l in strat['legs'] if l['id'] == p['leg_id']), None) if strat else None
+    if leg is None: return
+    j = strat['legs'].index(leg)
+    st.session_state.open_strat_id = p['sid']
+    # forget the widget values so every box is rebuilt from the leg's real data on the next run
+    for pre in ('p_exp_', 'p_stk_', 'p_vol_', 'p_ent_'):
+        st.session_state.pop(f"{pre}{p['sid']}_{j}", None)
+    if choice == 'cancel': return
+    target_exp = p['new_exp'] or leg['ExpDateStr']
+    stk_pref = p['new_stk'] if p['new_stk'] is not None else float(leg['Strike'])
+    tgt = _resolve_target_contract(strat, leg, target_exp, stk_pref)
+    leg['ExpDateStr'], leg['Strike'] = target_exp, tgt['strike']
+    leg.pop('Current_Vol', None)  # new contract must not inherit the old contract's refreshed vol
+    if 'code' in tgt: leg['Code'], leg['Vol'], leg['Style'] = tgt['code'], tgt['vol'], tgt['style']
+    if choice == 'roll': leg['_reset_entry'] = True  # entry is set to the new contract's live theo on the next run
+    st.session_state.trigger_db_save = True
+
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
@@ -1342,6 +1382,14 @@ elif current_view == "💼 Portfolio Tracker":
             
         current_spot_val = override_val if override_val is not None else float(strat.get('current_spot', strat.get('spot_at_entry', 0.0)))
         
+        _rt = st.session_state.get('fetch_time', get_sydney_time())
+        for _k, _lg in enumerate(strat['legs']):
+            if _lg.pop('_reset_entry', False):
+                _rd = ((datetime.strptime(_lg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - _rt).total_seconds() / 86400.0
+                _t, _ = calculate_price_and_delta(ticker_display, _lg['Style'], _lg['Type'], current_spot_val, _lg['Strike'], _rd, _lg.get('Current_Vol', _lg['Vol']), _lg['ExpDateStr'], eval_date=_rt, div_info=get_div_info_for(ticker_display))
+                _lg['Entry'] = round(float(_t), 3)
+                st.session_state.pop(f"p_ent_{strat['id']}_{_k}", None)
+                st.session_state.trigger_db_save = True
         max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
         net_entry_theo = (sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])) / max_qty if max_qty != 0 else 0.0
         contract_multiplier = 10 if ticker_display == 'XJO' else 100
@@ -1419,6 +1467,8 @@ elif current_view == "💼 Portfolio Tracker":
             port_total_margin = port_compute_gross_margin(strat['legs'], leg_risk_arrays_p)
 
             # IN-LINE TABLE
+            leg_edit_slot = st.container()  # the strike/expiry confirmation prompt is drawn here (above the table)
+            _mismatch_ids = set()
             p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
             headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Premium", "Margin", ""]
@@ -1446,36 +1496,19 @@ elif current_view == "💼 Portfolio Tracker":
                 exp_idx = exp_strs.index(leg['ExpDateStr']) if leg['ExpDateStr'] in exp_strs else 0
                     
                 new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
-                if new_exp != leg['ExpDateStr']:
-                    strat['legs'][j]['ExpDateStr'] = new_exp
-                    strat['legs'][j].pop('Current_Vol', None)  # new contract must not inherit the old contract's refreshed vol
-                    subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == new_exp]
-                    if not subset_exp.empty:
-                        avail_stk = sorted(subset_exp['Strike'].unique().tolist())
-                        closest = min(avail_stk, key=lambda x: abs(x - float(leg['Strike']))) if avail_stk else float(leg['Strike'])
-                        strat['legs'][j]['Strike'] = float(closest)
-                        match = subset_exp[subset_exp['Strike'] == closest].sort_values('Code', ascending=False)
-                        if not match.empty:
-                            strat['legs'][j]['Code'] = str(match.iloc[0]['Code'])
-                            strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
-                            strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
-                    st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True
-
                 subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr']] if not subset_st.empty else pd.DataFrame()
                 avail_stk = sorted(subset_exp['Strike'].unique().tolist()) if not subset_exp.empty else [float(leg['Strike'])]
                 stk_idx = avail_stk.index(float(leg['Strike'])) if float(leg['Strike']) in avail_stk else 0
                 
                 new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
-                if new_stk != float(leg['Strike']):
-                    strat['legs'][j]['Strike'] = new_stk
-                    strat['legs'][j].pop('Current_Vol', None)  # new contract must not inherit the old contract's refreshed vol
-                    if not subset_exp.empty:
-                        match = subset_exp[subset_exp['Strike'] == new_stk].sort_values('Code', ascending=False)
-                        if not match.empty:
-                            strat['legs'][j]['Code'] = str(match.iloc[0]['Code'])
-                            strat['legs'][j]['Vol'] = float(match.iloc[0]['Vol'])
-                            strat['legs'][j]['Style'] = match.iloc[0].get('Style', 'American')
-                    st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True
+                # A strike/expiry change is not applied straight away: the user is asked how to treat the entry price first.
+                chg_exp, chg_stk = (new_exp != leg['ExpDateStr']), (new_stk != float(leg['Strike']))
+                if chg_exp or chg_stk:
+                    _mismatch_ids.add(leg['id'])
+                    _p = st.session_state.get('pending_leg_edit')
+                    if _p is None or (_p['sid'] == strat['id'] and _p['leg_id'] == leg['id']):
+                        st.session_state.pending_leg_edit = {'sid': strat['id'], 'leg_id': leg['id'], 'new_exp': new_exp if chg_exp else None, 'new_stk': new_stk if chg_stk else None}
+                    st.session_state.open_strat_id = strat['id']
 
                 new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_vol != leg['Vol']: strat['legs'][j]['Vol'] = new_vol; strat['legs'][j].pop('Current_Vol', None); st.session_state.trigger_db_save = True; port_needs_rerun = True
@@ -1493,6 +1526,34 @@ elif current_view == "💼 Portfolio Tracker":
                     if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
                         strat['legs'].pop(j); st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True; break 
             
+            _pp = st.session_state.get('pending_leg_edit')
+            if _pp and _pp['sid'] == strat['id'] and _pp['leg_id'] not in _mismatch_ids:
+                st.session_state.pending_leg_edit = None  # the user changed it back, nothing to confirm
+            elif _pp and _pp['sid'] == strat['id']:
+                _pl = next((l for l in strat['legs'] if l['id'] == _pp['leg_id']), None)
+                if _pl is not None:
+                    _t_exp = _pp['new_exp'] or _pl['ExpDateStr']
+                    _t_stk = _pp['new_stk'] if _pp['new_stk'] is not None else float(_pl['Strike'])
+                    _tgt = _resolve_target_contract(strat, _pl, _t_exp, _t_stk)
+                    _detail = ""
+                    if 'vol' in _tgt:
+                        _rd_new = ((datetime.strptime(_t_exp, "%Y-%m-%d").replace(hour=16, minute=0)) - ref_time).total_seconds() / 86400.0
+                        _rd_old = ((datetime.strptime(_pl['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - ref_time).total_seconds() / 86400.0
+                        _new_theo, _ = calculate_price_and_delta(ticker_display, _tgt['style'], _pl['Type'], current_spot_val, _tgt['strike'], _rd_new, _tgt['vol'], _t_exp, eval_date=ref_time, div_info=get_div_info_for(ticker_display))
+                        _old_theo, _ = calculate_price_and_delta(ticker_display, _pl['Style'], _pl['Type'], current_spot_val, _pl['Strike'], _rd_old, _pl.get('Current_Vol', _pl['Vol']), _pl['ExpDateStr'], eval_date=ref_time, div_info=get_div_info_for(ticker_display))
+                        _jump = (_new_theo - _old_theo) * _pl['Qty'] * leg_mult(_pl, contract_multiplier)
+                        _jump_str = f"+${_jump:,.2f}" if _jump >= 0 else f"-${abs(_jump):,.2f}"
+                        _detail = (f" The new contract ({_tgt.get('code', '?')}, {_tgt['strike']:.2f}, {format_date_ui(_t_exp)}) has a current theo of **{_new_theo:.3f}**. "
+                                   f"Keeping the original entry of {_pl['Entry']:.3f} would move this leg's Open P&L by about **{_jump_str}** straight away.")
+                    with leg_edit_slot:
+                        st.warning(f"**You changed the strike/expiry of {_pl['Code']}.** Choose how to treat its entry price. "
+                                   f"**Roll** sets the entry to the new contract's current theo, so Open P&L carries on from here (the old leg's result is not tracked). "
+                                   f"**Keep** leaves the entry price as it is.{_detail}")
+                        _b1, _b2, _b3 = st.columns(3)
+                        _b1.button("🔁 Roll: reset entry to current theo", key=f"le_roll_{_pl['id']}", type="primary", width='stretch', on_click=resolve_leg_edit, args=("roll",))
+                        _b2.button("📌 Keep original entry price", key=f"le_keep_{_pl['id']}", width='stretch', on_click=resolve_leg_edit, args=("keep",))
+                        _b3.button("↩ Cancel change", key=f"le_cancel_{_pl['id']}", width='stretch', on_click=resolve_leg_edit, args=("cancel",))
+
             st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
             
             # SUMMARY ROW
