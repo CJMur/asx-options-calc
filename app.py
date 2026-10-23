@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.7.3 (Chain Alignment: Strike Column Only)
+# VERSION: 1.7.4 (Upload Button Matches Row)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.7.3"
+APP_VERSION = "1.7.4"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -113,6 +113,16 @@ st.markdown("""
         color: #f87171 !important;
         background-color: rgba(248, 113, 113, 0.1) !important;
         border-color: transparent !important;
+    }
+    
+    /* Portfolio upload field: in its empty state, show it as a full-width button like the others in its row */
+    [data-testid="stFileUploaderDropzone"]:has([data-testid="stFileUploaderDropzoneInstructions"]) {
+        padding: 0 !important; background: transparent !important; border: none !important; min-height: 0 !important;
+    }
+    [data-testid="stFileUploaderDropzoneInstructions"] { display: none !important; }
+    [data-testid="stFileUploaderDropzone"]:has([data-testid="stFileUploaderDropzoneInstructions"]) > div:has(> button) { width: 100% !important; }
+    [data-testid="stFileUploaderDropzone"]:has([data-testid="stFileUploaderDropzoneInstructions"]) > div > button {
+        width: 100% !important; height: 2.5rem !important; min-height: 2.5rem !important; justify-content: center !important;
     }
     
     div[data-baseweb="slider"] > div > div > div { background-color: #0050FF !important; }
