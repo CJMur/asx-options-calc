@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.6.22 (Vol Parsing, Contract Size, Width API)
+# VERSION: 1.7.0 (Faster Leg Adding)
 # ==========================================
 
 import streamlit as st
@@ -21,7 +21,7 @@ import copy
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.6.22"
+APP_VERSION = "1.7.0"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -610,6 +610,98 @@ def leg_mult(leg, default_mult):
     try: return _contract_size_map().get(str(leg.get('Code', '')).upper(), default_mult)
     except Exception: return default_mult
 
+def _clear_chain_selection():
+    """Button callback: runs before the page re-runs, so the chain table is rebuilt with all boxes unticked."""
+    st.session_state.editor_reset += 1
+
+@st.fragment
+def render_chain_editor(df_view, current_exp):
+    """Options chain table + 'Add legs' controls. Runs as a fragment, so ticking a Buy/Sell box only
+    re-runs this table instead of the whole page (strategy table, matrix, payoff chart...)."""
+    st.markdown(f"**Chain: {format_date_ui(current_exp)}**")
+    disp = df_view[['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Buy', 'P_Sell']].copy()
+    
+    def highlight_itm(row):
+        spot, strike, target_code = st.session_state.spot_price, row['STRIKE'], str(st.session_state.preselect_code)
+        styles = []
+        for col in row.index:
+            s = ""
+            if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot: s += "background-color: rgba(128,128,128,0.15); "
+            elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot: s += "background-color: rgba(128,128,128,0.15); "
+            if col == 'STRIKE': s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
+            if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None": s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
+            styles.append(s)
+        return styles
+
+    styled_disp = disp.style.apply(highlight_itm, axis=1).format({
+        'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}', 'STRIKE': '{:.3f}',
+        'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
+    })
+
+    edited_df = st.data_editor(
+        styled_disp,
+        column_config={
+            "C_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
+            "C_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
+            "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
+            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
+            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
+            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
+            "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f", help=TOOLTIPS["Strike"]),
+            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
+            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
+            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
+            "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
+            "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
+            "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
+        },
+        hide_index=True, width='stretch', key=f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}",
+        disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
+    )
+    
+    selected_legs, conflict = [], False
+    for idx in range(len(edited_df)):
+        row, edited_row = df_view.iloc[idx], edited_df.iloc[idx]
+        c_buy, c_sell = edited_row.get('C_Buy', False), edited_row.get('C_Sell', False)
+        p_buy, p_sell = edited_row.get('P_Buy', False), edited_row.get('P_Sell', False)
+        
+        if c_buy and c_sell: conflict = True
+        elif c_buy: selected_legs.append({"side": "Buy", "kind": "Call", "row": row})
+        elif c_sell: selected_legs.append({"side": "Sell", "kind": "Call", "row": row})
+            
+        if p_buy and p_sell: conflict = True
+        elif p_buy: selected_legs.append({"side": "Buy", "kind": "Put", "row": row})
+        elif p_sell: selected_legs.append({"side": "Sell", "kind": "Put", "row": row})
+
+    if conflict: st.error("⚠️ Conflict detected: You cannot select both 'Buy' and 'Sell' for the same exact option contract.")
+    elif len(selected_legs) > 4: st.warning("⚠️ Please select a maximum of 4 legs at once.")
+    elif len(selected_legs) > 0:
+        st.write("")
+        b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
+        with b_c1:
+            if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", width='stretch'):
+                for leg in selected_legs:
+                    r, kind = leg['row'], leg['kind']
+                    px = r['C_Price'] if kind == 'Call' else r['P_Price']
+                    code = r['C_Code'] if kind == 'Call' else r['P_Code']
+                    delta = r['C_Delta'] if kind == 'Call' else r['P_Delta']
+                    style = r['C_Style_Full'] if kind == 'Call' else r['P_Style_Full']
+                    vol = r['C_Vol'] if kind == 'Call' else r['P_Vol']
+                    margin = r['C_Margin'] if kind == 'Call' else r['P_Margin']
+                        
+                    st.session_state.legs.append({
+                        "id": str(uuid.uuid4()), "Qty": 1 if leg['side'] == "Buy" else -1, 
+                        "Type": kind, "Style": str(style), "Strike": float(r['STRIKE']), 
+                        "ExpDateStr": current_exp, "Vol": float(vol), "Entry": float(px), 
+                        "Code": str(code) if pd.notna(code) else "N/A", "Delta": float(delta), "MarginUnit": float(margin)
+                    })
+                st.session_state.legs = sorted(st.session_state.legs, key=lambda x: float(x['Strike']), reverse=True)
+                st.session_state.editor_reset += 1; st.session_state.preselect_code = None
+                st.rerun()  # one clean full-page rerun so the Strategy section picks up the new legs
+        with b_c2:
+            st.button("Clear Selection", width='stretch', on_click=_clear_chain_selection)
+
+
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
@@ -758,38 +850,51 @@ if current_view == "🧮 Strategy Builder":
                 if current_exp:
                     target_dt = exp_map[current_exp].replace(hour=16, minute=0)
                     days_diff_exact = (target_dt - st.session_state.get('fetch_time', get_sydney_time())).total_seconds() / 86400.0
-                    day_chain = subset[subset['Expiry'] == exp_map[current_exp]].copy()
+                    _center_pre = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
+                    _chain_sig = (st.session_state.ticker, float(st.session_state.spot_price), str(st.session_state.get('fetch_time')), current_exp, view_mode, float(_center_pre or 0),
+                                  bool(st.session_state.get('is_monday_data')), repr(st.session_state.get('div_info')), get_sydney_time().strftime('%Y-%m-%d'), global_rba_rate)
+                    _cc = st.session_state.get('_chain_cache')
+                    if (_cc is not None and _cc['sig'] == _chain_sig and _cc['ref'] is st.session_state.ref_data and _cc['fwd'] is st.session_state.get('fwd_spreads')):
+                        df_view = _cc['df_view'].copy()  # nothing that affects prices has changed, so skip re-pricing the chain
+                    else:
+                        day_chain = subset[subset['Expiry'] == exp_map[current_exp]].copy()
+                        _strikes_all = sorted(day_chain['Strike'].dropna().unique())
+                        if view_mode == "Standard View (30 Strikes)" and _center_pre > 0 and 15 < len(_strikes_all):
+                            _diffs = [abs(k - _center_pre) for k in _strikes_all]
+                            _a = _diffs.index(min(_diffs))
+                            day_chain = day_chain[day_chain['Strike'].isin(set(_strikes_all[max(0, _a - 15):min(len(_strikes_all), _a + 16)]))]
                     
-                    def calc_row_metrics(row):
-                        vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
-                        margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
-                        px, delta = calculate_price_and_delta(st.session_state.ticker, row.get('Style', 'American'), row['Type'], st.session_state.spot_price, row['Strike'], days_diff_exact, vol, current_exp)
-                        return pd.Series([px, delta, vol, margin])
+                        def calc_row_metrics(row):
+                            vol = float(row['Vol']) if pd.notna(row['Vol']) else 30.0
+                            margin = float(row['UnitMargin']) if 'UnitMargin' in row else 0.0
+                            px, delta = calculate_price_and_delta(st.session_state.ticker, row.get('Style', 'American'), row['Type'], st.session_state.spot_price, row['Strike'], days_diff_exact, vol, current_exp)
+                            return pd.Series([px, delta, vol, margin])
 
-                    metrics = day_chain.apply(calc_row_metrics, axis=1)
-                    metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
-                    day_chain = pd.concat([day_chain, metrics], axis=1)
+                        metrics = day_chain.apply(calc_row_metrics, axis=1)
+                        metrics.columns = ['Calc_Price', 'Calc_Delta', 'Calc_Vol', 'Calc_Margin']
+                        day_chain = pd.concat([day_chain, metrics], axis=1)
                     
-                    calls = day_chain[day_chain['Type'] == 'Call'].sort_values('Code', ascending=False).drop_duplicates(subset=['Strike']).set_index('Strike')
-                    puts = day_chain[day_chain['Type'] == 'Put'].sort_values('Code', ascending=False).drop_duplicates(subset=['Strike']).set_index('Strike')
-                    all_strikes = sorted(list(set(calls.index) | set(puts.index)))
+                        calls = day_chain[day_chain['Type'] == 'Call'].sort_values('Code', ascending=False).drop_duplicates(subset=['Strike']).set_index('Strike')
+                        puts = day_chain[day_chain['Type'] == 'Put'].sort_values('Code', ascending=False).drop_duplicates(subset=['Strike']).set_index('Strike')
+                        all_strikes = sorted(list(set(calls.index) | set(puts.index)))
                     
-                    df_view = pd.DataFrame({'STRIKE': all_strikes})
-                    df_view.insert(0, 'C_Buy', False); df_view.insert(1, 'C_Sell', False)
-                    df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
-                    df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
-                    df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
-                    df_view['C_Vol'] = df_view['STRIKE'].map(calls['Calc_Vol'])
-                    df_view['C_Delta'] = df_view['STRIKE'].map(calls['Calc_Delta'])
-                    df_view['C_Margin'] = df_view['STRIKE'].map(calls['Calc_Margin'])
+                        df_view = pd.DataFrame({'STRIKE': all_strikes})
+                        df_view.insert(0, 'C_Buy', False); df_view.insert(1, 'C_Sell', False)
+                        df_view['C_Code'] = df_view['STRIKE'].map(calls['Code'])
+                        df_view['C_Style_Full'] = df_view['STRIKE'].map(calls['Style']).fillna('American')
+                        df_view['C_Price'] = df_view['STRIKE'].map(calls['Calc_Price'])
+                        df_view['C_Vol'] = df_view['STRIKE'].map(calls['Calc_Vol'])
+                        df_view['C_Delta'] = df_view['STRIKE'].map(calls['Calc_Delta'])
+                        df_view['C_Margin'] = df_view['STRIKE'].map(calls['Calc_Margin'])
                     
-                    df_view['P_Code'] = df_view['STRIKE'].map(puts['Code'])
-                    df_view['P_Style_Full'] = df_view['STRIKE'].map(puts['Style']).fillna('American')
-                    df_view['P_Price'] = df_view['STRIKE'].map(puts['Calc_Price'])
-                    df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
-                    df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
-                    df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
-                    df_view['P_Buy'] = False; df_view['P_Sell'] = False
+                        df_view['P_Code'] = df_view['STRIKE'].map(puts['Code'])
+                        df_view['P_Style_Full'] = df_view['STRIKE'].map(puts['Style']).fillna('American')
+                        df_view['P_Price'] = df_view['STRIKE'].map(puts['Calc_Price'])
+                        df_view['P_Vol'] = df_view['STRIKE'].map(puts['Calc_Vol'])
+                        df_view['P_Delta'] = df_view['STRIKE'].map(puts['Calc_Delta'])
+                        df_view['P_Margin'] = df_view['STRIKE'].map(puts['Calc_Margin'])
+                        df_view['P_Buy'] = False; df_view['P_Sell'] = False
+                        st.session_state._chain_cache = {'sig': _chain_sig, 'ref': st.session_state.ref_data, 'fwd': st.session_state.get('fwd_spreads'), 'df_view': df_view.copy()}
 
         if not df_view.empty and current_exp:
             center = st.session_state.preselect_strike if (st.session_state.preselect_strike and current_exp == st.session_state.preselect_expiry) else st.session_state.spot_price
@@ -800,88 +905,7 @@ if current_view == "🧮 Strategy Builder":
                 atm_idx = df_view['Diff'].idxmin()
                 df_view = df_view.iloc[max(0, atm_idx - radius):min(len(df_view), atm_idx + radius + 1)].drop(columns=['Diff'])
             
-            st.markdown(f"**Chain: {format_date_ui(current_exp)}**")
-            disp = df_view[['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta', 'STRIKE', 'P_Price', 'P_Vol', 'P_Delta', 'P_Code', 'P_Buy', 'P_Sell']].copy()
-            
-            def highlight_itm(row):
-                spot, strike, target_code = st.session_state.spot_price, row['STRIKE'], str(st.session_state.preselect_code)
-                styles = []
-                for col in row.index:
-                    s = ""
-                    if col in ['C_Buy', 'C_Sell', 'C_Code', 'C_Price', 'C_Vol', 'C_Delta'] and strike < spot: s += "background-color: rgba(128,128,128,0.15); "
-                    elif col in ['P_Code', 'P_Price', 'P_Vol', 'P_Delta', 'P_Buy', 'P_Sell'] and strike > spot: s += "background-color: rgba(128,128,128,0.15); "
-                    if col == 'STRIKE': s += "font-weight: bold; background-color: rgba(128,128,128,0.1); "
-                    if col in ['C_Code', 'P_Code'] and str(row[col]) == target_code and target_code != "None": s += "color: white; border: 1px solid #1DBFD2; background-color: rgba(29, 191, 210, 0.4); "
-                    styles.append(s)
-                return styles
-
-            styled_disp = disp.style.apply(highlight_itm, axis=1).format({
-                'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}', 'STRIKE': '{:.3f}',
-                'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
-            })
-
-            edited_df = st.data_editor(
-                styled_disp,
-                column_config={
-                    "C_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
-                    "C_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
-                    "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
-                    "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
-                    "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
-                    "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
-                    "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f", help=TOOLTIPS["Strike"]),
-                    "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
-                    "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
-                    "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
-                    "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
-                    "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
-                    "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
-                },
-                hide_index=True, width='stretch', key=f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}",
-                disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
-            )
-            
-            selected_legs, conflict = [], False
-            for idx in range(len(edited_df)):
-                row, edited_row = df_view.iloc[idx], edited_df.iloc[idx]
-                c_buy, c_sell = edited_row.get('C_Buy', False), edited_row.get('C_Sell', False)
-                p_buy, p_sell = edited_row.get('P_Buy', False), edited_row.get('P_Sell', False)
-                
-                if c_buy and c_sell: conflict = True
-                elif c_buy: selected_legs.append({"side": "Buy", "kind": "Call", "row": row})
-                elif c_sell: selected_legs.append({"side": "Sell", "kind": "Call", "row": row})
-                    
-                if p_buy and p_sell: conflict = True
-                elif p_buy: selected_legs.append({"side": "Buy", "kind": "Put", "row": row})
-                elif p_sell: selected_legs.append({"side": "Sell", "kind": "Put", "row": row})
-
-            if conflict: st.error("⚠️ Conflict detected: You cannot select both 'Buy' and 'Sell' for the same exact option contract.")
-            elif len(selected_legs) > 4: st.warning("⚠️ Please select a maximum of 4 legs at once.")
-            elif len(selected_legs) > 0:
-                st.write("")
-                b_c1, b_c2, _ = st.columns([2.5, 1.5, 6], gap="small")
-                with b_c1:
-                    if st.button(f"+ Add {len(selected_legs)} Leg(s) to Builder", type="primary", width='stretch'):
-                        for leg in selected_legs:
-                            r, kind = leg['row'], leg['kind']
-                            px = r['C_Price'] if kind == 'Call' else r['P_Price']
-                            code = r['C_Code'] if kind == 'Call' else r['P_Code']
-                            delta = r['C_Delta'] if kind == 'Call' else r['P_Delta']
-                            style = r['C_Style_Full'] if kind == 'Call' else r['P_Style_Full']
-                            vol = r['C_Vol'] if kind == 'Call' else r['P_Vol']
-                            margin = r['C_Margin'] if kind == 'Call' else r['P_Margin']
-                                
-                            st.session_state.legs.append({
-                                "id": str(uuid.uuid4()), "Qty": 1 if leg['side'] == "Buy" else -1, 
-                                "Type": kind, "Style": str(style), "Strike": float(r['STRIKE']), 
-                                "ExpDateStr": current_exp, "Vol": float(vol), "Entry": float(px), 
-                                "Code": str(code) if pd.notna(code) else "N/A", "Delta": float(delta), "MarginUnit": float(margin)
-                            })
-                        st.session_state.legs = sorted(st.session_state.legs, key=lambda x: float(x['Strike']), reverse=True)
-                        st.session_state.editor_reset += 1; st.session_state.preselect_code = None; builder_needs_rerun = True
-                with b_c2:
-                    if st.button("Clear Selection", width='stretch'):
-                        st.session_state.editor_reset += 1; builder_needs_rerun = True
+            render_chain_editor(df_view, current_exp)
 
     if st.session_state.legs:
         st.markdown("---")
