@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.7.1 (Confirm Leg Edits In Portfolio)
+# VERSION: 1.7.2 (Portfolio Tooltip, Grey Roll Prompt, Centred Chain)
 # ==========================================
 
 import streamlit as st
@@ -18,10 +18,11 @@ import json
 import base64
 import io
 import copy
+import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.2"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -614,6 +615,11 @@ def _clear_chain_selection():
     """Button callback: runs before the page re-runs, so the chain table is rebuilt with all boxes unticked."""
     st.session_state.editor_reset += 1
 
+try:  # column alignment needs a recent Streamlit; older versions simply keep the default alignment
+    _CHAIN_ALIGN = {'alignment': 'center'} if 'alignment' in inspect.signature(st.column_config.NumberColumn).parameters else {}
+except Exception:
+    _CHAIN_ALIGN = {}
+
 @st.fragment
 def render_chain_editor(df_view, current_exp):
     """Options chain table + 'Add legs' controls. Runs as a fragment, so ticking a Buy/Sell box only
@@ -641,19 +647,19 @@ def render_chain_editor(df_view, current_exp):
     edited_df = st.data_editor(
         styled_disp,
         column_config={
-            "C_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
-            "C_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
-            "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
-            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
-            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
-            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
-            "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f", help=TOOLTIPS["Strike"]),
-            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
-            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
-            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
-            "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
-            "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
-            "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
+            "C_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False, **_CHAIN_ALIGN),
+            "C_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False, **_CHAIN_ALIGN),
+            "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"], **_CHAIN_ALIGN),
+            "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"], **_CHAIN_ALIGN),
+            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"], **_CHAIN_ALIGN),
+            "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)", **_CHAIN_ALIGN),
+            "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f", help=TOOLTIPS["Strike"], **_CHAIN_ALIGN),
+            "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"], **_CHAIN_ALIGN),
+            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"], **_CHAIN_ALIGN),
+            "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)", **_CHAIN_ALIGN),
+            "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"], **_CHAIN_ALIGN),
+            "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False, **_CHAIN_ALIGN),
+            "P_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False, **_CHAIN_ALIGN),
         },
         hide_index=True, width='stretch', key=f"chain_{current_exp}_{st.session_state.ticker}_{st.session_state.editor_reset}",
         disabled=["C_Code", "C_Price", "C_Vol", "C_Delta", "STRIKE", "P_Price", "P_Vol", "P_Delta", "P_Code"]
@@ -1301,7 +1307,7 @@ elif current_view == "💼 Portfolio Tracker":
     
     with ctrl_c1:
         if st.session_state.portfolio:
-            if st.button("🔄 Refresh All Prices", type="primary", width='stretch'):
+            if st.button("🔄 Refresh All Prices", type="primary", width='stretch', help="Click to load current market data and calculate your Open P&L."):
                 with st.spinner("Fetching live market data and updating Volatility..."):
                     orig_manual = st.session_state.manual_spot
                     st.session_state.manual_spot = False
@@ -1333,7 +1339,7 @@ elif current_view == "💼 Portfolio Tracker":
                     st.session_state.manual_spot = orig_manual
                     st.session_state.trigger_db_save = True
                     st.rerun()
-        else: st.button("🔄 Refresh All Prices", type="primary", width='stretch', disabled=True)
+        else: st.button("🔄 Refresh All Prices", type="primary", width='stretch', disabled=True, help="Click to load current market data and calculate your Open P&L.")
             
     with ctrl_c2:
         if st.session_state.portfolio:
@@ -1365,8 +1371,6 @@ elif current_view == "💼 Portfolio Tracker":
 
     if st.session_state.portfolio_last_refresh:
         st.info(f"⏱️ **Live Snapshot Taken:** {st.session_state.fetch_time.strftime('%d %b %Y, %I:%M %p AEST')}")
-    elif st.session_state.portfolio:
-        st.info("ℹ️ Click 'Refresh All Prices' to load current market data and calculate your Open P&L.")
 
     st.markdown("---")
     
@@ -1543,12 +1547,14 @@ elif current_view == "💼 Portfolio Tracker":
                         _old_theo, _ = calculate_price_and_delta(ticker_display, _pl['Style'], _pl['Type'], current_spot_val, _pl['Strike'], _rd_old, _pl.get('Current_Vol', _pl['Vol']), _pl['ExpDateStr'], eval_date=ref_time, div_info=get_div_info_for(ticker_display))
                         _jump = (_new_theo - _old_theo) * _pl['Qty'] * leg_mult(_pl, contract_multiplier)
                         _jump_str = f"+${_jump:,.2f}" if _jump >= 0 else f"-${abs(_jump):,.2f}"
-                        _detail = (f" The new contract ({_tgt.get('code', '?')}, {_tgt['strike']:.2f}, {format_date_ui(_t_exp)}) has a current theo of **{_new_theo:.3f}**. "
-                                   f"Keeping the original entry of {_pl['Entry']:.3f} would move this leg's Open P&L by about **{_jump_str}** straight away.")
+                        _detail = (f" The new contract ({_tgt.get('code', '?')}, {_tgt['strike']:.2f}, {format_date_ui(_t_exp)}) has a current theo of <b>{_new_theo:.3f}</b>. "
+                                   f"Keeping the original entry of {_pl['Entry']:.3f} would move this leg's Open P&amp;L by about <b>{_jump_str}</b> straight away.")
                     with leg_edit_slot:
-                        st.warning(f"**You changed the strike/expiry of {_pl['Code']}.** Choose how to treat its entry price. "
-                                   f"**Roll** sets the entry to the new contract's current theo, so Open P&L carries on from here (the old leg's result is not tracked). "
-                                   f"**Keep** leaves the entry price as it is.{_detail}")
+                        st.markdown(
+                            "<div style='background-color: rgba(128,128,128,0.16); border: 1px solid rgba(128,128,128,0.35); border-radius: 0.5rem; padding: 0.9rem 1rem; margin-bottom: 0.6rem; line-height: 1.5;'>"
+                            f"<b>You changed the strike/expiry of {_pl['Code']}.</b> Choose how to treat its entry price. "
+                            "<b>Roll</b> sets the entry to the new contract's current theo, so Open P&amp;L carries on from here (the old leg's result is not tracked). "
+                            f"<b>Keep</b> leaves the entry price as it is.{_detail}</div>", unsafe_allow_html=True)
                         _b1, _b2, _b3 = st.columns(3)
                         _b1.button("🔁 Roll: reset entry to current theo", key=f"le_roll_{_pl['id']}", type="primary", width='stretch', on_click=resolve_leg_edit, args=("roll",))
                         _b2.button("📌 Keep original entry price", key=f"le_keep_{_pl['id']}", width='stretch', on_click=resolve_leg_edit, args=("keep",))
