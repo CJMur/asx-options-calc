@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.7.4 (Upload Button Matches Row)
+# VERSION: 1.7.5 (Monday Rule Fades Through The Day)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.7.4"
+APP_VERSION = "1.7.5"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -462,6 +462,31 @@ def american_binomial_pricer(S, K, T, r, sigma, option_type, q=0.0, steps=100):
     delta = (v_u - v_d) / (S * u - S * d)
     return values[0], delta
 
+# --- MONDAY RULE SETTINGS ---
+# Monday-dated data holds Friday's closing IV. Adding back the weekend (2.8 days) keeps Monday-morning theos in line with Friday's close.
+# By the afternoon the market has already priced the weekend decay, so the add-back fades in a straight line from the open to the close.
+MONDAY_RULE_DAYS = 2.8        # days added at (or before) the fade start
+MONDAY_FADE_START_HOUR = 10.0  # market open: full add-back up to this time on the data date
+MONDAY_FADE_END_HOUR = 16.0    # market close: nothing added from this time on
+
+def monday_rule_days(eval_date):
+    """Extra days to add to time-to-expiry for Monday-dated data, as of eval_date."""
+    try:
+        dd = st.session_state.get('data_date')
+        cache = st.session_state.get('_monday_dd_cache')
+        if cache is None or cache[0] != dd:
+            cache = (dd, pd.to_datetime(dd).date())
+            st.session_state._monday_dd_cache = cache
+        data_day = cache[1]
+    except Exception:
+        return MONDAY_RULE_DAYS  # data date unreadable: keep the original full add-back
+    if eval_date.date() < data_day: return MONDAY_RULE_DAYS
+    if eval_date.date() > data_day: return 0.0  # the weekend has already passed
+    hr = eval_date.hour + eval_date.minute / 60.0
+    if hr <= MONDAY_FADE_START_HOUR: return MONDAY_RULE_DAYS
+    if hr >= MONDAY_FADE_END_HOUR: return 0.0
+    return MONDAY_RULE_DAYS * (MONDAY_FADE_END_HOUR - hr) / (MONDAY_FADE_END_HOUR - MONDAY_FADE_START_HOUR)
+
 _USE_SESSION_DIV = object()  # sentinel: price with the Strategy Builder's loaded dividend (default)
 
 def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike, time_days, vol_pct, expiry_str_key, eval_date=None, div_info=_USE_SESSION_DIV):
@@ -489,9 +514,10 @@ def calculate_price_and_delta(ticker_symbol, style, kind, simulated_spot, strike
         return price, delta
     
     # --- THE MONDAY RULE ---
-    # If the data file is dated Monday, it contains Friday's IV. Add 2.8 days to offset the weekend decay.
+    # If the data file is dated Monday, it contains Friday's IV. Add back the weekend decay (2.8 days),
+    # fading to zero between the open and the close on the data date (see monday_rule_days above).
     if st.session_state.get('is_monday_data', False):
-        time_days += 2.8
+        time_days += monday_rule_days(eval_date)
         
     r = global_rba_rate / 100.0
     q = 0.0
