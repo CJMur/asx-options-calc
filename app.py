@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.7.5 (Monday Rule Fades Through The Day)
+# VERSION: 1.8.0 (XJO Vols From Settlement Prices)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.7.5"
+APP_VERSION = "1.8.0"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -282,6 +282,55 @@ def fetch_rba_cash_rate():
 
 global_rba_rate = fetch_rba_cash_rate()
 
+def _b76_implied_vol(F, K, T, px, kind, r):
+    """Black-76 implied vol (as a decimal) for a settlement price, by bisection. None if no solution."""
+    disc = math.exp(-r * T)
+    ncdf = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
+    def price(v):
+        sd = v * math.sqrt(T); d1 = (math.log(F / K) + 0.5 * sd * sd) / sd; d2 = d1 - sd
+        return disc * (F * ncdf(d1) - K * ncdf(d2)) if kind == 'Call' else disc * (K * ncdf(-d2) - F * ncdf(-d1))
+    lo, hi = 0.005, 2.0
+    if price(hi) < px or price(lo) > px: return None
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if price(mid) > px: hi = mid
+        else: lo = mid
+    return 0.5 * (lo + hi)
+
+def derive_xjo_vols_from_settlement(df, fwd_levels, db_date, r_pct):
+    """The file quotes vol in whole percent (about +/-3 index points of price error). Each XJO contract's Settlement price carries
+    far more precision, so work the vol back out of it (Black-76, the sheet's forward at settlement, time from settlement to expiry).
+    Only out-of-the-money contracts are used (calls at/above the forward, puts below it): in-the-money settlements break put-call parity.
+    That vol is then applied to both the call and the put at that strike. Anything that cannot be derived keeps the file's vol."""
+    try:
+        if 'Settlement' not in df.columns or not fwd_levels: return df
+        settle_day = pd.to_datetime(db_date) - pd.Timedelta(days=3 if pd.to_datetime(db_date).weekday() == 0 else 1)  # file = previous business day's close
+        settle_dt = settle_day.replace(hour=16, minute=0)
+        r = r_pct / 100.0
+        df = df.copy()
+        df['VolFile'] = df['Vol']
+        xjo = df[df['Ticker'] == 'XJO']
+        surface = {}
+        for idx, row in xjo.iterrows():
+            exp_key = row['Expiry'].strftime("%Y-%m-%d")
+            F = fwd_levels.get(exp_key)
+            px, K = row['Settlement'], row['Strike']
+            if F is None or not (px >= 1.0 and K > 0): continue
+            kind = row['Type']
+            if not ((kind == 'Call' and K >= F) or (kind == 'Put' and K < F)): continue   # out-of-the-money contracts only
+            T = (row['Expiry'].replace(hour=16) - settle_dt).total_seconds() / 86400.0 / 365.0
+            if T <= 0: continue
+            v = _b76_implied_vol(F, K, T, px, kind, r)
+            if v is None or abs(v * 100 - row['VolFile']) > 3.0: continue   # sanity check against the file's own vol
+            surface[(exp_key, K)] = v * 100
+        if surface:
+            new_vols = [surface.get((row_exp.strftime("%Y-%m-%d"), row_k), v0) if t == 'XJO' else v0
+                        for row_exp, row_k, t, v0 in zip(df['Expiry'], df['Strike'], df['Ticker'], df['Vol'])]
+            df['Vol'] = new_vols
+        return df
+    except Exception:
+        return df
+
 def load_databases(opts_url, fwd_url, cb="default"):
     try:
         live_fwd_url = f"{fwd_url}?cb={cb}"
@@ -289,6 +338,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
         
         fwd_df = pd.DataFrame()
         spreads_dict = {}
+        fwd_levels = {}
         
         try:
             res_fwd = requests.get(live_fwd_url, timeout=10)
@@ -310,6 +360,11 @@ def load_databases(opts_url, fwd_url, cb="default"):
                 valid_mask = fwd_dates.notna() & fwd_vals.notna()
                 for d, v in zip(fwd_dates[valid_mask], fwd_vals[valid_mask]):
                     spreads_dict[d.strftime("%Y-%m-%d")] = v
+                lvl_col = next((c for c in fwd_df.columns if str(c).lower().replace(' ', '') in ('forwardxjo', 'xjoforward')), None)
+                if lvl_col:
+                    lvl_vals = pd.to_numeric(fwd_df[lvl_col].astype(str).str.replace(',', ''), errors='coerce')
+                    for d, v in zip(fwd_dates[fwd_dates.notna() & lvl_vals.notna()], lvl_vals[fwd_dates.notna() & lvl_vals.notna()]):
+                        fwd_levels[d.strftime("%Y-%m-%d")] = float(v)
 
         df = pd.DataFrame()
         try:
@@ -391,6 +446,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
         else: df['UnitMargin'] = 0.0
 
         df = df.dropna(subset=['Code', 'Ticker', 'Strike', 'Expiry'])
+        df = derive_xjo_vols_from_settlement(df, fwd_levels, db_date, global_rba_rate)
         return df, f"success|{len(df)} Codes Loaded", spreads_dict, db_date
     except Exception as e:
         return pd.DataFrame(), f"error|Pipeline failed: {str(e)[:50]}", {}, "Error"
@@ -676,8 +732,8 @@ def render_chain_editor(df_view, current_exp):
         return styles
 
     styled_disp = disp.style.apply(highlight_itm, axis=1).format({
-        'C_Price': '{:.3f}', 'C_Vol': '{:.1f}', 'C_Delta': '{:.3f}', 'STRIKE': '{:.3f}',
-        'P_Price': '{:.3f}', 'P_Vol': '{:.1f}', 'P_Delta': '{:.3f}'
+        'C_Price': '{:.3f}', 'C_Vol': '{:.2f}', 'C_Delta': '{:.3f}', 'STRIKE': '{:.3f}',
+        'P_Price': '{:.3f}', 'P_Vol': '{:.2f}', 'P_Delta': '{:.3f}'
     })
 
     edited_df = st.data_editor(
@@ -687,11 +743,11 @@ def render_chain_editor(df_view, current_exp):
             "C_Sell": st.column_config.CheckboxColumn("☑ Sell", default=False),
             "C_Code": st.column_config.TextColumn("Call Code", help=TOOLTIPS["Code"]),
             "C_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
-            "C_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
+            "C_Vol": st.column_config.NumberColumn("IV %", format="%.2f", help=TOOLTIPS["IV"]),
             "C_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
             "STRIKE": st.column_config.NumberColumn("Strike", format="%.3f", help=TOOLTIPS["Strike"], **_CHAIN_ALIGN),
             "P_Price": st.column_config.NumberColumn("Theo", format="%.3f", help=TOOLTIPS["Theo"]),
-            "P_Vol": st.column_config.NumberColumn("IV %", format="%.1f", help=TOOLTIPS["IV"]),
+            "P_Vol": st.column_config.NumberColumn("IV %", format="%.2f", help=TOOLTIPS["IV"]),
             "P_Delta": st.column_config.NumberColumn("Delta", format="%.3f", help="Pure option delta (probability)"),
             "P_Code": st.column_config.TextColumn("Put Code", help=TOOLTIPS["Code"]),
             "P_Buy": st.column_config.CheckboxColumn("☑ Buy", default=False),
@@ -1125,7 +1181,7 @@ if current_view == "🧮 Strategy Builder":
                     builder_needs_rerun = True
                     
             with c[6]: 
-                new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"vol_{leg['id']}", label_visibility="collapsed")
+                new_vol_input = st.number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.2f", key=f"vol_{leg['id']}", label_visibility="collapsed")
                 if new_vol_input != leg['Vol']:
                     st.session_state.legs[i]['Vol'] = new_vol_input
                     calibrated_theo, _ = calculate_price_and_delta(st.session_state.ticker, leg['Style'], leg['Type'], st.session_state.spot_price, leg['Strike'], precise_days_diff, new_vol_input, leg['ExpDateStr'])
@@ -1550,7 +1606,7 @@ elif current_view == "💼 Portfolio Tracker":
                         st.session_state.pending_leg_edit = {'sid': strat['id'], 'leg_id': leg['id'], 'new_exp': new_exp if chg_exp else None, 'new_stk': new_stk if chg_stk else None}
                     st.session_state.open_strat_id = strat['id']
 
-                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.1f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.2f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_vol != leg['Vol']: strat['legs'][j]['Vol'] = new_vol; strat['legs'][j].pop('Current_Vol', None); st.session_state.trigger_db_save = True; port_needs_rerun = True
                     
                 new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
