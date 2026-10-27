@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.0 (XJO Vols From Settlement Prices)
+# VERSION: 1.8.2 (Margin Breakdown Removed)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.2"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -265,8 +265,8 @@ TOOLTIPS = {
     "Strike": "The set price at which the option contract can be exercised.",
     "Code": "The unique ASX exchange ticker symbol for this specific option contract.",
     "Premium": "The total cost or credit for the trade. Calculated as Price × Quantity × Contract Multiplier.",
-    "Margin": "The estimated portfolio collateral required to hold this specific strategy.",
-    "Expected Margin": "The estimated portfolio collateral required to hold this specific strategy."
+    "Margin": "This leg's share of the strategy's margin (its premium value plus its result in the worst scenario). The legs add up to the total.",
+    "Expected Margin": "This leg's share of the strategy's margin (its premium value plus its result in the worst scenario). The legs add up to the total."
 }
 
 # --- 3. DATA ENGINE ---
@@ -825,11 +825,10 @@ def resolve_leg_edit(choice):
     strat = next((x for x in st.session_state.portfolio if x['id'] == p['sid']), None)
     leg = next((l for l in strat['legs'] if l['id'] == p['leg_id']), None) if strat else None
     if leg is None: return
-    j = strat['legs'].index(leg)
     st.session_state.open_strat_id = p['sid']
     # forget the widget values so every box is rebuilt from the leg's real data on the next run
     for pre in ('p_exp_', 'p_stk_', 'p_vol_', 'p_ent_'):
-        st.session_state.pop(f"{pre}{p['sid']}_{j}", None)
+        st.session_state.pop(f"{pre}{p['sid']}_{leg['id']}", None)
     if choice == 'cancel': return
     target_exp = p['new_exp'] or leg['ExpDateStr']
     stk_pref = p['new_stk'] if p['new_stk'] is not None else float(leg['Strike'])
@@ -839,6 +838,49 @@ def resolve_leg_edit(choice):
     if 'code' in tgt: leg['Code'], leg['Vol'], leg['Style'] = tgt['code'], tgt['vol'], tgt['style']
     if choice == 'roll': leg['_reset_entry'] = True  # entry is set to the new contract's live theo on the next run
     st.session_state.trigger_db_save = True
+
+# --- MARGIN SETTINGS ---
+# "exchange": built the way the clearing house does it (premium value + result in the worst of the 16 scenarios).
+# "legacy": the original calculation (own price-move stress, expiry-payoff cap). Kept so the old behaviour can be restored while testing.
+MARGIN_METHOD = "exchange"
+
+def leg_risk_and_settlement(ticker, leg, scen_cols):
+    """The leg's 16 scenario values and today's settlement price from the options file (settlement is None if not found)."""
+    empty = np.zeros(len(scen_cols) if scen_cols else 1)
+    ref = st.session_state.get('ref_data')
+    if ref is None or ref.empty: return empty, None
+    tk = str(ticker).replace(".AX", "")
+    mask = ref['Ticker'].isin(['XJO', 'XJOW']) if tk == 'XJO' else ref['Ticker'] == tk
+    match = ref[mask & (ref['Type'] == leg['Type']) & (ref['Strike'] == float(leg['Strike'])) & (ref['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])]
+    if match.empty: return empty, None
+    row = match.iloc[0]
+    arr = row[scen_cols].values.astype(float) if scen_cols else empty
+    px = row['Settlement'] if 'Settlement' in match.columns else None
+    return arr, (float(px) if px is not None and pd.notna(px) and float(px) > 0 else None)
+
+def exchange_margin_breakdown(legs, arrays, settles, default_mult):
+    """Margin the way the exchange builds it.
+    Premium = settlement price x qty x contract size (long +, short -). Risk = each leg's result in the ONE scenario (of 16) that is worst for the
+    whole strategy (a scenario value is a loss for a long position, so result = -value x qty). Leg total = premium + risk; margin = -(sum of totals),
+    never below zero. 'contrib' is each leg's share of the margin and adds up to it."""
+    n = len(legs)
+    if n == 0: return {'margin': 0.0, 'prem': [], 'risk': [], 'total': [], 'contrib': [], 'scenario': None, 'net': 0.0}
+    prem = []
+    for l, px in zip(legs, settles):
+        price = px if (px is not None and px == px) else l['Entry']   # no settlement price on file: fall back to the leg's own price
+        prem.append(price * l['Qty'] * leg_mult(l, default_mult))
+    n_scen = max((len(a) for a in arrays), default=0)
+    if n_scen > 1:
+        mat = np.zeros((n, n_scen))
+        for i, (a, l) in enumerate(zip(arrays, legs)):
+            if len(a) == n_scen: mat[i] = -np.asarray(a, dtype=float) * l['Qty']
+        s_star = int(np.argmin(mat.sum(axis=0)))
+        risk = [float(x) for x in mat[:, s_star]]
+    else:
+        s_star, risk = None, [0.0] * n
+    total = [p + r for p, r in zip(prem, risk)]
+    net = float(sum(total))
+    return {'margin': max(0.0, -net), 'prem': prem, 'risk': risk, 'total': total, 'contrib': [-t for t in total], 'scenario': s_star, 'net': net}
 
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
@@ -1061,15 +1103,10 @@ if current_view == "🧮 Strategy Builder":
         st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
-        leg_risk_arrays = []
-        tkr = st.session_state.ticker.replace(".AX", "")
-        
+        leg_risk_arrays, leg_settles = [], []
         for leg in st.session_state.legs:
-            match = pd.DataFrame()
-            if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
-                ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else st.session_state.ref_data['Ticker'] == tkr
-                match = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type']) & (st.session_state.ref_data['Strike'] == float(leg['Strike'])) & (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])]
-            leg_risk_arrays.append(match.iloc[0][scen_cols].values.astype(float) if not match.empty and scen_cols else np.zeros(len(scen_cols) if scen_cols else 1))
+            _arr, _px = leg_risk_and_settlement(st.session_state.ticker, leg, scen_cols)
+            leg_risk_arrays.append(_arr); leg_settles.append(_px)
 
         def compute_gross_margin(legs_list, arrays_list):
             if not legs_list: return 0.0
@@ -1089,7 +1126,8 @@ if current_view == "🧮 Strategy Builder":
             bound_pnls = [sum(l['Qty'] * max(0.0, spot - float(l['Strike'])) * leg_mult(l, contract_multiplier) if l['Type'] == 'Call' else l['Qty'] * max(0.0, float(l['Strike']) - spot) * leg_mult(l, contract_multiplier) for l in legs_list) for spot in strikes + [0.0, max(strikes) * 3.0]]
             return min(unbounded_gross_risk, abs(min(0.0, min(bound_pnls))))
 
-        total_margin = compute_gross_margin(st.session_state.legs, leg_risk_arrays)
+        mb = exchange_margin_breakdown(st.session_state.legs, leg_risk_arrays, leg_settles, contract_multiplier) if MARGIN_METHOD == "exchange" else None
+        total_margin = mb['margin'] if mb else compute_gross_margin(st.session_state.legs, leg_risk_arrays)
         total_premium, raw_theo_sum = 0, 0
         max_qty = max(abs(leg['Qty']) for leg in st.session_state.legs) if st.session_state.legs else 1
         
@@ -1107,7 +1145,7 @@ if current_view == "🧮 Strategy Builder":
             fractional_delta = new_delta * (1 if leg['Qty'] >= 0 else -1)
             
             premium = -(leg['Qty'] * new_theo * leg_mult(leg, contract_multiplier))
-            row_margin = total_margin - compute_gross_margin(st.session_state.legs[:i] + st.session_state.legs[i+1:], leg_risk_arrays[:i] + leg_risk_arrays[i+1:])
+            row_margin = mb['contrib'][i] if mb else total_margin - compute_gross_margin(st.session_state.legs[:i] + st.session_state.legs[i+1:], leg_risk_arrays[:i] + leg_risk_arrays[i+1:])
             
             total_premium += premium; raw_theo_sum += leg['Qty'] * new_theo
             p_color = '#4ade80' if premium >= 0 else '#f87171'
@@ -1375,6 +1413,12 @@ elif current_view == "💼 Portfolio Tracker":
             if s['id'] == s_id: s['override_spot'] = float(val) if val else None; break
         st.session_state.trigger_db_save = True; st.session_state.open_strat_id = s_id
 
+    def on_spot_entry_change(s_id, k):
+        val = st.session_state[k]
+        for s in st.session_state.portfolio:
+            if s['id'] == s_id: s['spot_at_entry'] = float(val) if val is not None else 0.0; break
+        st.session_state.trigger_db_save = True; st.session_state.open_strat_id = s_id
+
     def on_name_change(s_id, k):
         val = st.session_state[k]
         for s in st.session_state.portfolio:
@@ -1479,12 +1523,13 @@ elif current_view == "💼 Portfolio Tracker":
         current_spot_val = override_val if override_val is not None else float(strat.get('current_spot', strat.get('spot_at_entry', 0.0)))
         
         _rt = st.session_state.get('fetch_time', get_sydney_time())
+        for _lg in strat['legs']: _lg.setdefault('id', str(uuid.uuid4()))   # every leg needs a stable id for its boxes
         for _k, _lg in enumerate(strat['legs']):
             if _lg.pop('_reset_entry', False):
                 _rd = ((datetime.strptime(_lg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - _rt).total_seconds() / 86400.0
                 _t, _ = calculate_price_and_delta(ticker_display, _lg['Style'], _lg['Type'], current_spot_val, _lg['Strike'], _rd, _lg.get('Current_Vol', _lg['Vol']), _lg['ExpDateStr'], eval_date=_rt, div_info=get_div_info_for(ticker_display))
                 _lg['Entry'] = round(float(_t), 3)
-                st.session_state.pop(f"p_ent_{strat['id']}_{_k}", None)
+                st.session_state.pop(f"p_ent_{strat['id']}_{_lg['id']}", None)
                 st.session_state.trigger_db_save = True
         max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
         net_entry_theo = (sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])) / max_qty if max_qty != 0 else 0.0
@@ -1518,7 +1563,9 @@ elif current_view == "💼 Portfolio Tracker":
                 ui_name_key = f"rename_{strat['id']}"
                 st.text_input("Name", value=strat.get('name', 'Strategy'), key=ui_name_key, label_visibility="collapsed", on_change=on_name_change, args=(strat['id'], ui_name_key))
             with c_head1:
-                st.markdown(f"**Spot at Entry:**"); st.markdown(f"${strat.get('spot_at_entry', 0.0):.2f}")
+                st.markdown(f"**Spot at Entry:**")
+                ui_spot_entry_key = f"spot_entry_{strat['id']}"
+                st.number_input("Spot at Entry", value=float(strat.get('spot_at_entry', 0.0)), step=0.01, format="%.2f", key=ui_spot_entry_key, label_visibility="collapsed", on_change=on_spot_entry_change, args=(strat['id'], ui_spot_entry_key))
             with c_head2:
                 st.markdown(f"**Net Entry Theo:**")
                 ui_net_key = f"net_entry_{strat['id']}"
@@ -1550,17 +1597,13 @@ elif current_view == "💼 Portfolio Tracker":
                 return min(unbounded_gross_risk, abs(min(0.0, min(bound_pnls))))
 
             scen_cols_p = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
-            leg_risk_arrays_p = []
-            tkr_p = ticker_display.replace(".AX", "")
-            
+            leg_risk_arrays_p, leg_settles_p = [], []
             for leg in strat['legs']:
-                match = pd.DataFrame()
-                if st.session_state.ref_data is not None and not st.session_state.ref_data.empty:
-                    ticker_mask = st.session_state.ref_data['Ticker'].isin(['XJO', 'XJOW']) if tkr_p == 'XJO' else st.session_state.ref_data['Ticker'] == tkr_p
-                    match = st.session_state.ref_data[ticker_mask & (st.session_state.ref_data['Type'] == leg['Type']) & (st.session_state.ref_data['Strike'] == float(leg['Strike'])) & (st.session_state.ref_data['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])]
-                leg_risk_arrays_p.append(match.iloc[0][scen_cols_p].values.astype(float) if not match.empty and scen_cols_p else np.zeros(len(scen_cols_p) if scen_cols_p else 1))
+                _arr, _px = leg_risk_and_settlement(ticker_display, leg, scen_cols_p)
+                leg_risk_arrays_p.append(_arr); leg_settles_p.append(_px)
 
-            port_total_margin = port_compute_gross_margin(strat['legs'], leg_risk_arrays_p)
+            mb_p = exchange_margin_breakdown(strat['legs'], leg_risk_arrays_p, leg_settles_p, contract_multiplier) if MARGIN_METHOD == "exchange" else None
+            port_total_margin = mb_p['margin'] if mb_p else port_compute_gross_margin(strat['legs'], leg_risk_arrays_p)
 
             # IN-LINE TABLE
             leg_edit_slot = st.container()  # the strike/expiry confirmation prompt is drawn here (above the table)
@@ -1575,7 +1618,7 @@ elif current_view == "💼 Portfolio Tracker":
                 c = st.columns(p_h_col_spec)
                 row_bg = "rgba(74, 222, 128, 0.10)" if leg['Qty'] > 0 else "rgba(248, 113, 113, 0.10)"
                 
-                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_qty != leg['Qty']: strat['legs'][j]['Qty'] = new_qty; st.session_state.trigger_db_save = True; port_needs_rerun = True
                     
                 c[1].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
@@ -1591,12 +1634,12 @@ elif current_view == "💼 Portfolio Tracker":
                 exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps] or [leg['ExpDateStr']]
                 exp_idx = exp_strs.index(leg['ExpDateStr']) if leg['ExpDateStr'] in exp_strs else 0
                     
-                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
+                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
                 subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr']] if not subset_st.empty else pd.DataFrame()
                 avail_stk = sorted(subset_exp['Strike'].unique().tolist()) if not subset_exp.empty else [float(leg['Strike'])]
                 stk_idx = avail_stk.index(float(leg['Strike'])) if float(leg['Strike']) in avail_stk else 0
                 
-                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{j}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
+                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{leg['id']}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
                 # A strike/expiry change is not applied straight away: the user is asked how to treat the entry price first.
                 chg_exp, chg_stk = (new_exp != leg['ExpDateStr']), (new_stk != float(leg['Strike']))
                 if chg_exp or chg_stk:
@@ -1606,21 +1649,25 @@ elif current_view == "💼 Portfolio Tracker":
                         st.session_state.pending_leg_edit = {'sid': strat['id'], 'leg_id': leg['id'], 'new_exp': new_exp if chg_exp else None, 'new_stk': new_stk if chg_stk else None}
                     st.session_state.open_strat_id = strat['id']
 
-                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.2f", key=f"p_vol_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.2f", key=f"p_vol_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_vol != leg['Vol']: strat['legs'][j]['Vol'] = new_vol; strat['legs'][j].pop('Current_Vol', None); st.session_state.trigger_db_save = True; port_needs_rerun = True
                     
-                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{j}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_entry != leg['Entry']: strat['legs'][j]['Entry'] = new_entry; st.session_state.trigger_db_save = True; port_needs_rerun = True
 
                 c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
                 c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{'#4ade80' if disp_data['Raw_Premium']>=0 else '#f87171'}; font-weight:600;'>{disp_data['Premium']}</span></div>", unsafe_allow_html=True)
                 
-                row_margin = port_total_margin - port_compute_gross_margin(strat['legs'][:j] + strat['legs'][j+1:], leg_risk_arrays_p[:j] + leg_risk_arrays_p[j+1:])
+                row_margin = mb_p['contrib'][j] if mb_p else port_total_margin - port_compute_gross_margin(strat['legs'][:j] + strat['legs'][j+1:], leg_risk_arrays_p[:j] + leg_risk_arrays_p[j+1:])
                 c[9].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>{'-' if row_margin < 0 else ''}${abs(row_margin):,.0f}</span></div>", unsafe_allow_html=True)
 
                 with c[10]:
-                    if st.button("✕", key=f"p_d_{strat['id']}_{j}", type="tertiary", width='content'):
-                        strat['legs'].pop(j); st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True; break 
+                    if st.button("✕", key=f"p_d_{strat['id']}_{leg['id']}", type="tertiary", width='content'):
+                        _gone = strat['legs'].pop(j)
+                        for _pre in ('p_qty_', 'p_exp_', 'p_stk_', 'p_vol_', 'p_ent_'): st.session_state.pop(f"{_pre}{strat['id']}_{_gone['id']}", None)
+                        _pe = st.session_state.get('pending_leg_edit')
+                        if _pe and _pe.get('leg_id') == _gone['id']: st.session_state.pending_leg_edit = None
+                        st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True; break 
             
             _pp = st.session_state.get('pending_leg_edit')
             if _pp and _pp['sid'] == strat['id'] and _pp['leg_id'] not in _mismatch_ids:
