@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.2 (Margin Breakdown Removed)
+# VERSION: 1.8.3 (Equity Vols From Settlement Prices)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -331,6 +331,80 @@ def derive_xjo_vols_from_settlement(df, fwd_levels, db_date, r_pct):
     except Exception:
         return df
 
+def _norm_cdf_vec(x):
+    """Standard normal CDF for arrays (Abramowitz-Stegun erf approximation, error < 1.5e-7)."""
+    z = np.abs(x) / math.sqrt(2.0)
+    t = 1.0 / (1.0 + 0.3275911 * z)
+    erf = 1.0 - t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * np.exp(-z * z)
+    return np.where(x >= 0, 0.5 * (1.0 + erf), 0.5 * (1.0 - erf))
+
+def _b76_price_vec(F, K, T, v, is_call, r):
+    sd = v * np.sqrt(T)
+    d1 = (np.log(F / K) + 0.5 * sd * sd) / sd
+    d2 = d1 - sd
+    disc = np.exp(-r * T)
+    call = disc * (F * _norm_cdf_vec(d1) - K * _norm_cdf_vec(d2))
+    put = disc * (K * _norm_cdf_vec(-d2) - F * _norm_cdf_vec(-d1))
+    return np.where(is_call, call, put)
+
+def _b76_implied_vol_vec(F, K, T, px, is_call, r):
+    """Implied vol (decimal) for arrays of prices, by bisection. NaN where there is no solution."""
+    lo, hi = np.full(px.shape, 0.005), np.full(px.shape, 3.0)
+    ok = (_b76_price_vec(F, K, T, hi, is_call, r) >= px) & (_b76_price_vec(F, K, T, lo, is_call, r) <= px)
+    for _ in range(55):
+        mid = 0.5 * (lo + hi)
+        above = _b76_price_vec(F, K, T, mid, is_call, r) > px
+        hi, lo = np.where(above, mid, hi), np.where(above, lo, mid)
+    return np.where(ok, 0.5 * (lo + hi), np.nan)
+
+def derive_equity_vols_from_settlement(df, db_date, r_pct):
+    """Same idea as the XJO version, for European-style equity options. The file's whole-percent vols leave real pricing error, and call and
+    put vols at one strike disagree (a box spread then shows value that cannot exist). Each stock's forward comes from put-call parity on the
+    same settlement prices, so no closing price or dividend data is needed. Only out-of-the-money contracts feed the vol, and that one vol is
+    applied to both the call and the put at the strike. Contracts whose settlement price is too coarse to beat the file's rounding, and all
+    American-style contracts, keep the file's vol."""
+    try:
+        if 'Settlement' not in df.columns: return df
+        d = pd.to_datetime(db_date)
+        settle_dt = (d - pd.Timedelta(days=3 if d.weekday() == 0 else 1)).replace(hour=16, minute=0)  # file = previous business day's close
+        r = r_pct / 100.0
+        df = df.copy()
+        if 'VolFile' not in df.columns: df['VolFile'] = df['Vol']
+        e = df[(df['Ticker'] != 'XJO') & (df['Style'] == 'European') & (df['Settlement'] > 0)].copy()
+        if e.empty: return df
+        e['T'] = ((e['Expiry'].dt.normalize() + pd.Timedelta(hours=16) - settle_dt).dt.total_seconds() / 86400.0 / 365.0)
+        e = e[e['T'] > 0]
+        # forward per stock and expiry, from put-call parity at strikes where both prices are meaningful
+        calls = e[e['Type'] == 'Call'][['Ticker', 'Expiry', 'Strike', 'Settlement', 'T']].rename(columns={'Settlement': 'C'})
+        puts = e[e['Type'] == 'Put'][['Ticker', 'Expiry', 'Strike', 'Settlement']].rename(columns={'Settlement': 'P'})
+        m = calls.merge(puts, on=['Ticker', 'Expiry', 'Strike'])
+        thr = np.maximum(0.05, 0.005 * m['Strike'])
+        m = m[(m['C'] >= thr) & (m['P'] >= thr)].copy()
+        m['F'] = m['Strike'] + np.exp(r * m['T']) * (m['C'] - m['P'])
+        m = m[(m['Strike'] - m.groupby(['Ticker', 'Expiry'])['F'].transform('median')).abs() <= 0.10 * m.groupby(['Ticker', 'Expiry'])['F'].transform('median')]
+        g = m.groupby(['Ticker', 'Expiry'])['F']
+        stats = pd.DataFrame({'F': g.median(), 'n': g.count(), 'iqr': g.quantile(0.75) - g.quantile(0.25)})
+        stats = stats[(stats['n'] >= 3) & (stats['iqr'] <= 0.005 * stats['F'])]       # parity must agree across strikes, else keep file vols
+        e = e.merge(stats[['F']].reset_index(), on=['Ticker', 'Expiry'], how='inner')
+        is_call = (e['Type'] == 'Call').values
+        otm = (is_call & (e['Strike'].values >= e['F'].values)) | (~is_call & (e['Strike'].values < e['F'].values))
+        c = e[otm & (e['Settlement'].values >= 0.10)]
+        if c.empty: return df
+        F, K, T, px, ic = c['F'].values, c['Strike'].values, c['T'].values, c['Settlement'].values, (c['Type'] == 'Call').values
+        v = _b76_implied_vol_vec(F, K, T, px, ic, r)
+        vega_pt = (_b76_price_vec(F, K, T, v + 0.005, ic, r) - _b76_price_vec(F, K, T, v - 0.005, ic, r))   # price change per vol point
+        noise = 0.005 / np.where(vega_pt > 1e-9, vega_pt, np.nan)                                            # vol points of error from 2-decimal settlement
+        keep = np.isfinite(v) & (v > 0.03) & (v < 1.5) & (np.abs(v * 100 - c['VolFile'].values) <= 3.0) & (noise <= 0.5)
+        surface = {}
+        for t_, ex_, k_, v_ in zip(c['Ticker'].values[keep], c['Expiry'].values[keep], K[keep], v[keep] * 100):
+            surface.setdefault((t_, ex_, k_), v_)
+        if surface:
+            df['Vol'] = [surface.get((t_, ex_, k_), v0) if st_ == 'European' else v0
+                         for t_, ex_, k_, st_, v0 in zip(df['Ticker'].values, df['Expiry'].values, df['Strike'].values, df['Style'].values, df['Vol'].values)]
+        return df
+    except Exception:
+        return df
+
 def load_databases(opts_url, fwd_url, cb="default"):
     try:
         live_fwd_url = f"{fwd_url}?cb={cb}"
@@ -447,6 +521,7 @@ def load_databases(opts_url, fwd_url, cb="default"):
 
         df = df.dropna(subset=['Code', 'Ticker', 'Strike', 'Expiry'])
         df = derive_xjo_vols_from_settlement(df, fwd_levels, db_date, global_rba_rate)
+        df = derive_equity_vols_from_settlement(df, db_date, global_rba_rate)
         return df, f"success|{len(df)} Codes Loaded", spreads_dict, db_date
     except Exception as e:
         return pd.DataFrame(), f"error|Pipeline failed: {str(e)[:50]}", {}, "Error"
