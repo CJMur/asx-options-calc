@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.1 (Exchange-Style Margin, Leg-Id Keys, Editable Entry Spot)
+# VERSION: 1.8.2 (Margin Breakdown Removed)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -882,28 +882,6 @@ def exchange_margin_breakdown(legs, arrays, settles, default_mult):
     net = float(sum(total))
     return {'margin': max(0.0, -net), 'prem': prem, 'risk': risk, 'total': total, 'contrib': [-t for t in total], 'scenario': s_star, 'net': net}
 
-def margin_if_removed(legs, arrays, settles, default_mult):
-    """For each leg: the strategy's total margin if that leg were removed."""
-    out = []
-    for i in range(len(legs)):
-        out.append(exchange_margin_breakdown(legs[:i] + legs[i+1:], arrays[:i] + arrays[i+1:], settles[:i] + settles[i+1:], default_mult)['margin'])
-    return out
-
-def render_margin_breakdown(legs, mb, removed):
-    """Table that mirrors the risk sheet: premium, risk, total per leg, adding up to the strategy margin."""
-    money = lambda v: f"-${abs(v):,.0f}" if round(v) < 0 else f"${v:,.0f}"
-    rows = [{"Leg": f"{'+' if l['Qty'] > 0 else ''}{l['Qty']} {l['Type']} {float(l['Strike']):.2f} ({l.get('Code', '')})",
-             "Premium value": money(mb['prem'][i]), "Risk (worst scenario)": money(mb['risk'][i]), "Total": money(mb['total'][i]),
-             "Margin share": money(mb['contrib'][i]), "Margin if removed": money(removed[i])} for i, l in enumerate(legs)]
-    rows.append({"Leg": "STRATEGY", "Premium value": money(sum(mb['prem'])), "Risk (worst scenario)": money(sum(mb['risk'])), "Total": money(mb['net']),
-                 "Margin share": money(mb['margin']), "Margin if removed": ""})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
-    note = ("Premium value = today's settlement price x quantity x contract size. Risk = each leg's result in scenario "
-            f"{(mb['scenario'] + 1) if mb['scenario'] is not None else '-'} of 16, the one that is worst for the whole strategy. "
-            "Margin = minus the sum of the totals. 'Margin if removed' is the strategy's margin without that leg, and it is not additive.")
-    if mb['net'] > 0: note += " The strategy's value covers its risk here, so no margin is required."
-    st.caption(note)
-
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
@@ -1272,9 +1250,6 @@ if current_view == "🧮 Strategy Builder":
             
             with f[9]: st.markdown(f"<div class='strategy-text'><span style='color:{tot_p_color}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
             with f[10]: st.markdown(f"<div class='strategy-text'><span style='font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
-
-        if mb and st.checkbox("📊 Show margin breakdown", key="show_margin_breakdown"):
-            render_margin_breakdown(st.session_state.legs, mb, margin_if_removed(st.session_state.legs, leg_risk_arrays, leg_settles, contract_multiplier))
 
         st.markdown("---")
         st.subheader("💾 Save to Portfolio")
@@ -1737,9 +1712,6 @@ elif current_view == "💼 Portfolio Tracker":
                 with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{net_live_theo:.3f}</div>", unsafe_allow_html=True)
                 with f[8]: st.markdown(f"<div class='strategy-text'><span style='color:{'#4ade80' if port_tot_prem>=0 else '#f87171'}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
                 with f[9]: st.markdown(f"<div class='strategy-text'><span style='font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
-
-            if mb_p and st.checkbox("📊 Show margin breakdown", key=f"show_mb_{strat['id']}", on_change=set_active_strat, args=(strat['id'],)):
-                render_margin_breakdown(strat['legs'], mb_p, margin_if_removed(strat['legs'], leg_risk_arrays_p, leg_settles_p, contract_multiplier))
 
             st.markdown("<br>", unsafe_allow_html=True)
             
