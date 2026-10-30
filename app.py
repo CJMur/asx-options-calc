@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.3 (Equity Vols From Settlement Prices)
+# VERSION: 1.8.4 (Matrix Fix For Low-Priced Stocks)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.8.4"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -957,6 +957,15 @@ def exchange_margin_breakdown(legs, arrays, settles, default_mult):
     net = float(sum(total))
     return {'margin': max(0.0, -net), 'prem': prem, 'risk': risk, 'total': total, 'contrib': [-t for t in total], 'scenario': s_star, 'net': net}
 
+def matrix_price_labels(prices, spot):
+    """Row labels for the price matrix. Two decimals suit most stocks, but a 1% step on a 65c stock is under a cent, so neighbouring rows
+    would share a label and the table would fail. Decimals are added until every label is different."""
+    labels = []
+    for dec in (2, 3, 4, 5, 6):
+        labels = [f"» ${p:.{dec}f} (SPOT) «" if math.isclose(p, spot, rel_tol=1e-5) else f"${p:.{dec}f}" for p in prices]
+        if len(set(labels)) == len(labels): return labels
+    return [f"{lab} #{i}" for i, lab in enumerate(labels)]   # last resort: keep every row distinct
+
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
@@ -1372,8 +1381,8 @@ if current_view == "🧮 Strategy Builder":
         dates = [d * time_step for d in range(7)]
         
         matrix_data = []
-        for p in prices:
-            row_label = f"» ${p:.2f} (SPOT) «" if math.isclose(p, spot, rel_tol=1e-5) else f"${p:.2f}"
+        price_labels = matrix_price_labels(prices, spot)
+        for p, row_label in zip(prices, price_labels):
             row = {"Price": row_label}
             for d in dates:
                 pnl, net_theo_sum = 0, 0
@@ -1861,8 +1870,8 @@ elif current_view == "💼 Portfolio Tracker":
 
                 mx_dates = [d * mx_time_step for d in range(8)] 
                 matrix_data = []
-                for p in prices:
-                    row = {"Price": f"» ${p:.2f} (SPOT) «" if math.isclose(p, spot, rel_tol=1e-5) else f"${p:.2f}"}
+                for p, _lbl in zip(prices, matrix_price_labels(prices, spot)):
+                    row = {"Price": _lbl}
                     for d in mx_dates:
                         pnl, net_theo_sum = 0, 0
                         eval_dt_mx = st.session_state.get('fetch_time', get_sydney_time()) + timedelta(days=d)
