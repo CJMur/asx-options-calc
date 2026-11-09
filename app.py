@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.4 (Matrix Fix For Low-Priced Stocks)
+# VERSION: 1.8.5 (Restart Keeps The User ID)
 # ==========================================
 
 import streamlit as st
@@ -22,7 +22,7 @@ import inspect
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.4"
+APP_VERSION = "1.8.5"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -1020,7 +1020,9 @@ if current_view == "🧮 Strategy Builder":
         bc1, bc2 = st.columns([2.5, 1.2], vertical_alignment="bottom")
         with bc2:
             if st.button("🔄 RESTART", width='stretch'):
-                st.query_params.clear() 
+                _keep_uid = st.query_params.get("uid", None)   # the uid is what links this session to the saved portfolio, so it must survive a restart
+                st.query_params.clear()
+                if _keep_uid: st.query_params["uid"] = _keep_uid
                 saved_db, saved_fwd, saved_date = st.session_state.get('ref_data'), st.session_state.get('fwd_spreads'), st.session_state.get('data_date')
                 saved_monday = st.session_state.get('is_monday_data', False)
                 saved_divs = st.session_state.get('div_by_ticker', {})
