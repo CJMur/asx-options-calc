@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.5 (Restart Keeps The User ID)
+# VERSION: 1.8.7 (Database Resilience + New-User Save Fix)
 # ==========================================
 
 import streamlit as st
@@ -19,10 +19,11 @@ import base64
 import io
 import copy
 import inspect
+import time as _time   # (the name `time` is already taken by datetime.time)
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.5"
+APP_VERSION = "1.8.7"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -180,26 +181,123 @@ def format_date_ui(d_str):
         return d_str
 
 # --- WORDPRESS REST API HELPER FUNCTIONS ---
-def wp_fetch_portfolio(uid):
-    """Fetches user portfolio from WordPress database."""
-    if not uid: return []
+WP_GET_TIMEOUT, WP_POST_TIMEOUT, WP_ATTEMPTS = 10, 15, 3   # seconds to wait for a read, seconds for a save, tries before giving up
+
+def _json_safe(obj):
+    """Make the portfolio safe to send as JSON: numpy numbers become plain numbers and NaN/inf become null (WordPress rejects NaN)."""
+    if isinstance(obj, dict): return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.bool_): return bool(obj)
+    if isinstance(obj, np.integer): return int(obj)
+    if isinstance(obj, (np.floating, float)):
+        f = float(obj)
+        return f if math.isfinite(f) else None
+    if isinstance(obj, (pd.Timestamp, datetime)): return obj.isoformat()
+    return obj
+
+def _wp_call(method, uid, payload=None, attempts=WP_ATTEMPTS):
+    """One request to the portfolio endpoint, retried a few times with a short pause. Returns (response, None) or (None, last error)."""
+    err = None
+    for i in range(attempts):
+        try:
+            if method == "GET":   # a changing query value and no-cache header stop a server or CDN cache from returning an old copy
+                res = requests.get(WP_PORTFOLIO_API_URL, params={"uid": uid, "nocache": int(_time.time())}, headers={"Cache-Control": "no-cache"}, timeout=WP_GET_TIMEOUT)
+            else:
+                res = requests.post(WP_PORTFOLIO_API_URL, json=payload, timeout=WP_POST_TIMEOUT)
+            res.raise_for_status()
+            return res, None
+        except Exception as e:
+            err = e
+            if i < attempts - 1: _time.sleep(1.5 * (i + 1))
+    return None, err
+
+def wp_fetch_portfolio(uid, attempts=WP_ATTEMPTS):
+    """Returns (ok, strategies, error text). ok=False means the database could not be read, which is never the same as 'no strategies'."""
+    if not uid: return True, [], None
+    res, err = _wp_call("GET", uid, attempts=attempts)
+    if err is not None: return False, [], str(err)
     try:
-        res = requests.get(f"{WP_PORTFOLIO_API_URL}?uid={uid}", timeout=5)
-        res.raise_for_status() 
-        return res.json().get('portfolio', [])
+        data = res.json()
+        port = data.get('portfolio') if isinstance(data, dict) else None
+        if isinstance(port, str):                       # some setups hand the list back as a JSON string
+            port = json.loads(port) if port.strip() else None
+        if isinstance(port, dict):                      # PHP encodes an array with gaps in its keys as an object
+            port = list(port.values())
+        if port is None or port is False or port == '':  # nothing saved yet (a new user): that is an empty list, not an error
+            port = []
+        if not isinstance(port, list): return False, [], "unexpected reply from the database"
+        return True, [x for x in port if isinstance(x, dict)], None
     except Exception as e:
-        st.error(f"Failed to load from database: {e}")
-    return []
+        return False, [], f"unreadable reply ({e})"
+
+def _portfolio_shape(port):
+    return {str(s.get('id')): len(s.get('legs', [])) for s in port if isinstance(s, dict)}
 
 def wp_save_portfolio(uid, portfolio):
-    """Saves user portfolio to WordPress database silently."""
+    """Saves the portfolio, then reads it back to confirm WordPress really kept it. The outcome goes to st.session_state.wp_status."""
+    if not uid: return False
+    payload_port = _json_safe(portfolio)
+    res, err = _wp_call("POST", uid, {"uid": uid, "portfolio": payload_port})
+    if err is not None:
+        st.session_state.wp_status = {'kind': 'failed', 'time': get_sydney_time(), 'count': len(portfolio), 'msg': str(err)}
+        st.toast("Save failed: your changes are only in this session", icon="⚠️")
+        return False
+    ok, back, rerr = wp_fetch_portfolio(uid, attempts=2)
+    sent = _portfolio_shape(payload_port)
+    if not ok:
+        st.session_state.wp_status = {'kind': 'unverified', 'time': get_sydney_time(), 'count': len(sent), 'msg': rerr}
+        st.toast("Saved, but could not confirm it", icon="ℹ️")
+    elif _portfolio_shape(back) != sent:
+        st.session_state.wp_status = {'kind': 'mismatch', 'time': get_sydney_time(), 'count': len(sent), 'found': len(_portfolio_shape(back))}
+        st.toast("The database did not keep everything", icon="⚠️")
+    else:
+        st.session_state.wp_status = {'kind': 'saved', 'time': get_sydney_time(), 'count': len(sent)}
+        st.toast(f"Saved ({len(sent)} strategies)", icon="✅")
+    return ok and _portfolio_shape(back) == sent
+
+def wp_retry_load(uid):
+    """Tries again to load the saved strategies after a failure. Anything created in the meantime is added to what comes back."""
+    ok, port, err = wp_fetch_portfolio(uid, attempts=2)
+    st.session_state.wp_last_try = get_sydney_time()
+    if not ok:
+        st.session_state.wp_load_error = err
+        return False
+    server_ids = {str(x.get('id')) for x in port}
+    local_new = [x for x in st.session_state.portfolio if str(x.get('id')) not in server_ids]
+    st.session_state.portfolio = port + local_new
+    st.session_state.wp_loaded, st.session_state.wp_load_failed, st.session_state.wp_load_error = True, False, None
+    st.session_state.wp_status = {'kind': 'loaded', 'time': get_sydney_time(), 'count': len(st.session_state.portfolio)}
+    if local_new: st.session_state.trigger_db_save = True
+    return True
+
+def request_save_retry():
+    st.session_state.trigger_db_save = True
+
+def render_db_banners(uid):
+    """Tells the user, under the navigation, whenever their strategies are not being loaded or saved."""
     if not uid: return
-    try:
-        payload = {"uid": uid, "portfolio": portfolio}
-        res = requests.post(WP_PORTFOLIO_API_URL, json=payload, timeout=5)
-        res.raise_for_status() 
-    except Exception as e:
-        st.error(f"Failed to save to database: {e}")
+    if st.session_state.get('wp_load_failed'):
+        st.warning(f"⚠️ Your saved strategies couldn't be loaded from the database ({st.session_state.get('wp_load_error') or 'no reply'}). "
+                   "Saving is paused so nothing gets overwritten. Anything you create now stays in this session and is added back once the connection works.")
+        st.button("🔄 Retry now", key="wp_retry_load_btn", on_click=wp_retry_load, args=(uid,))
+        return
+    stt = st.session_state.get('wp_status')
+    if not stt: return
+    if stt['kind'] == 'failed':
+        st.error(f"⚠️ Your last save didn't reach the database ({stt.get('msg')}). Your changes are only in this session, so please don't close the page yet.")
+        st.button("🔄 Retry save", key="wp_retry_save_btn", on_click=request_save_retry)
+    elif stt['kind'] == 'mismatch':
+        st.warning(f"⚠️ The database didn't keep everything: {stt['count']} strategies were sent but it now holds {stt.get('found', 0)}. "
+                   "This can mean the database is full, a cache is returning an old copy, or a security rule blocked the save.")
+        st.button("🔄 Retry save", key="wp_retry_save_btn", on_click=request_save_retry)
+    elif stt['kind'] == 'unverified':
+        st.info("ℹ️ Your strategies were sent to the database, but I couldn't read them back to confirm.")
+    elif stt['kind'] == 'saved':
+        st.caption(f"💾 Saved {stt['time']:%I:%M %p} · {stt['count']} strateg{'y' if stt['count'] == 1 else 'ies'}")
+
+def no_uid_notice():
+    st.warning("⚠️ This session isn't linked to your account (there is no `uid` in the page link), so strategies **won't be saved** and will be gone when you close the page. "
+               "Please open the app from your TradersCircle link.")
 
 # --- 2. SESSION STATE & USER INITIALIZATION ---
 if 'options_loaded' not in st.session_state: st.session_state.options_loaded = False
@@ -217,8 +315,18 @@ wp_uid = st.query_params.get("uid", None)
 
 # Boot Load from WordPress Database
 if wp_uid and not st.session_state.wp_loaded:
-    st.session_state.portfolio = wp_fetch_portfolio(wp_uid)
-    st.session_state.wp_loaded = True
+    _ok, _port, _err = wp_fetch_portfolio(wp_uid)
+    if _ok:
+        st.session_state.portfolio = _port
+        st.session_state.wp_loaded, st.session_state.wp_load_failed, st.session_state.wp_load_error = True, False, None
+        st.session_state.wp_status = {'kind': 'loaded', 'time': get_sydney_time(), 'count': len(_port)}
+    else:   # could not read the database: do NOT treat this as an empty portfolio, and pause saving until it can be read
+        st.session_state.wp_load_failed, st.session_state.wp_load_error, st.session_state.wp_last_try = True, _err, get_sydney_time()
+elif wp_uid and st.session_state.get('wp_load_failed'):
+    if (get_sydney_time() - st.session_state.get('wp_last_try', get_sydney_time() - timedelta(minutes=5))).total_seconds() > 30:
+        wp_retry_load(wp_uid)
+
+if not isinstance(st.session_state.get('portfolio'), list): st.session_state.portfolio = []   # always a list, whatever came back
 
 # Navigation binding
 if 'nav_view' not in st.session_state:
@@ -995,6 +1103,7 @@ if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.st
 # ==========================================
 
 current_view = st.radio("Navigation", ["🧮 Strategy Builder", "💼 Portfolio Tracker"], horizontal=True, label_visibility="collapsed", key="nav_view")
+render_db_banners(wp_uid)
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
 if current_view == "🧮 Strategy Builder":
@@ -1027,12 +1136,15 @@ if current_view == "🧮 Strategy Builder":
                 saved_monday = st.session_state.get('is_monday_data', False)
                 saved_divs = st.session_state.get('div_by_ticker', {})
                 saved_port, saved_refresh, saved_hash = st.session_state.get('portfolio'), st.session_state.get('portfolio_last_refresh'), st.session_state.get('last_upload_hash')
+                saved_wp = {k: st.session_state.get(k) for k in ('wp_load_failed', 'wp_load_error', 'wp_last_try', 'wp_status', 'trigger_db_save')}
                 st.session_state.clear() 
                 st.session_state.ref_data, st.session_state.fwd_spreads, st.session_state.data_date = saved_db, saved_fwd, saved_date
                 st.session_state.is_monday_data = saved_monday
                 st.session_state.div_by_ticker = saved_divs
                 st.session_state.portfolio, st.session_state.portfolio_last_refresh, st.session_state.last_upload_hash = saved_port, saved_refresh, saved_hash
-                st.session_state.options_loaded, st.session_state.wp_loaded = False, True
+                for _k, _v in saved_wp.items():
+                    if _v is not None: st.session_state[_k] = _v
+                st.session_state.options_loaded, st.session_state.wp_loaded = False, (not st.session_state.get('wp_load_failed', False))
                 st.rerun()
 
         with bc1: do_load = st.button("🔍 LOAD OPTIONS", type="primary", width='stretch')
@@ -1339,6 +1451,7 @@ if current_view == "🧮 Strategy Builder":
 
         st.markdown("---")
         st.subheader("💾 Save to Portfolio")
+        if not wp_uid: no_uid_notice()
         s_c1, s_c2 = st.columns([3, 1])
         with s_c1: strat_name = st.text_input("Strategy Name", value=f"{st.session_state.ticker} Option Strategy", label_visibility="collapsed")
         with s_c2:
@@ -1525,6 +1638,7 @@ elif current_view == "💼 Portfolio Tracker":
         st.session_state.trigger_db_save = True; st.session_state.open_strat_id = s_id
 
     st.markdown("### Saved Strategies")
+    if not wp_uid: no_uid_notice()
     ctrl_c1, ctrl_c2, ctrl_c3 = st.columns([1.2, 1, 1])
     
     with ctrl_c1:
@@ -1934,5 +2048,8 @@ elif current_view == "💼 Portfolio Tracker":
 
 # --- BACKGROUND WORDPRESS DATABASE SYNC ENGINE ---
 if st.session_state.trigger_db_save and wp_uid:
-    wp_save_portfolio(wp_uid, st.session_state.portfolio)
-    st.session_state.trigger_db_save = False
+    if not st.session_state.get('wp_load_failed'):   # while the saved strategies could not be loaded, saving would overwrite them, so it waits
+        wp_save_portfolio(wp_uid, st.session_state.portfolio)
+        st.session_state.trigger_db_save = False
+        if st.session_state.get('wp_status', {}).get('kind') in ('failed', 'mismatch', 'unverified'):
+            st.rerun()   # redraw so the warning banner appears straight away, not on the next click
