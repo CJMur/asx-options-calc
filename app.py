@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.7 (Database Resilience + New-User Save Fix)
+# VERSION: 1.8.8 (Open-Window Spot Safeguards)
 # ==========================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ import time as _time   # (the name `time` is already taken by datetime.time)
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.7"
+APP_VERSION = "1.8.8"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -825,6 +825,19 @@ def fetch_data(t):
         if spot == 0.0:
             hist = tk.history(period="1d")
             if not hist.empty: spot = float(hist['Close'].iloc[-1])
+
+        # v1.8.8: flag a spot that looks like yesterday's close / a pre-open quote (Yahoo lags the ASX open)
+        try:
+            _now_q = get_sydney_time()
+            _pc = float(info.get('regularMarketPreviousClose', info.get('previousClose', 0.0)) or 0.0)
+            _qt = info.get('regularMarketTime')
+            _qdt = (datetime.fromtimestamp(_qt, pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
+                    if isinstance(_qt, (int, float)) and _qt > 0 else None)
+            _open_today = _now_q.replace(hour=10, minute=0, second=0, microsecond=0)
+            _stale = bool((_pc > 0 and math.isclose(spot, _pc, rel_tol=1e-9)) or (_qdt is not None and _qdt < _open_today))
+            if 'spot_quality' not in st.session_state: st.session_state.spot_quality = {}
+            st.session_state.spot_quality[clean] = {'stale': _stale, 'ts': _now_q}
+        except Exception: pass
             
         if 'exDividendDate' in info and info['exDividendDate']:
             ex_ts = info['exDividendDate']
@@ -1074,6 +1087,48 @@ def matrix_price_labels(prices, spot):
         if len(set(labels)) == len(labels): return labels
     return [f"{lab} #{i}" for i, lab in enumerate(labels)]   # last resort: keep every row distinct
 
+# --- v1.8.8: OPENING-WINDOW SPOT SAFEGUARDS ---
+# Yahoo's ASX quotes lag the open, so for the first ~35 minutes the spot can still be the previous close.
+OPEN_WINDOW_START, OPEN_WINDOW_END, AUTO_SPOT_REFRESH_SECS = time(10, 0), time(10, 35), 120
+
+def in_open_window(now=None):
+    now = now or get_sydney_time()
+    return now.weekday() < 5 and OPEN_WINDOW_START <= now.time() < OPEN_WINDOW_END
+
+def spot_needs_refresh():
+    """True when the builder's spot/clock should be re-fetched automatically (opening window only)."""
+    if not st.session_state.get('options_loaded') or st.session_state.get('manual_spot') or not st.session_state.get('ticker'): return False
+    now = get_sydney_time()
+    if not in_open_window(now): return False
+    ft = st.session_state.get('fetch_time')
+    if ft is None: return False
+    if ft < now.replace(hour=10, minute=0, second=0, microsecond=0): return True   # page was loaded before the open
+    last = st.session_state.get('last_spot_fetch', ft)
+    return (now - last).total_seconds() >= AUTO_SPOT_REFRESH_SECS
+
+def auto_refresh_spot():
+    old_px = st.session_state.spot_price
+    source, px, div_data = fetch_data(st.session_state.ticker)
+    now = get_sydney_time()
+    st.session_state.last_spot_fetch = now      # set even on failure so a bad fetch is not retried on every rerun
+    if px > 0:
+        st.session_state.spot_price = px
+        st.session_state.fetch_time = now       # shared pricing clock
+        if div_data is not None: st.session_state.div_info = div_data
+        if abs(px - old_px) > 1e-9: st.toast(f"Spot updated: ${px:,.2f}")
+
+def render_stale_spot_notice():
+    now = get_sydney_time()
+    if not in_open_window(now): return
+    q = st.session_state.get('spot_quality', {})
+    stale = [k for k, v in q.items() if v.get('stale') and (now - v['ts']).total_seconds() < 600]
+    if not stale: return
+    auto = bool(st.session_state.get('options_loaded')) and not st.session_state.get('manual_spot')
+    tail = ("The Strategy Builder re-checks the spot automatically every 2 minutes until about 10:35."
+            if auto else "Click Refresh again in a few minutes to pick up the live price.")
+    st.warning(f"**Opening-period price check:** the spot for {', '.join(sorted(stale))} still looks like the previous close "
+               f"(the price feed can lag the ASX open by up to ~30 minutes), so option prices may be inaccurate. {tail}")
+
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
 date_status = f"📊 Data: {st.session_state.data_date}"
@@ -1097,6 +1152,13 @@ st.markdown(f"""
 
 if isinstance(st.session_state.sheet_msg, str) and st.session_state.sheet_msg.startswith("error|"):
     st.error(f"**Data Engine Warning:** {st.session_state.sheet_msg.split('|')[1]}")
+
+if spot_needs_refresh(): auto_refresh_spot()
+render_stale_spot_notice()
+if in_open_window() and st.session_state.get('options_loaded') and not st.session_state.get('manual_spot'):
+    def _auto_refresh_tick():
+        if spot_needs_refresh(): st.rerun()
+    st.fragment(run_every=60)(_auto_refresh_tick)()
 
 # ==========================================
 # 🗂️ PYTHON NAVIGATION ROUTER
