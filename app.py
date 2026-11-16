@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.8 (Open-Window Spot Safeguards)
+# VERSION: 1.8.9 (Open-Window Warning Wording)
 # ==========================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ import time as _time   # (the name `time` is already taken by datetime.time)
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.8"
+APP_VERSION = "1.8.9"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -1124,10 +1124,9 @@ def render_stale_spot_notice():
     stale = [k for k, v in q.items() if v.get('stale') and (now - v['ts']).total_seconds() < 600]
     if not stale: return
     auto = bool(st.session_state.get('options_loaded')) and not st.session_state.get('manual_spot')
-    tail = ("The Strategy Builder re-checks the spot automatically every 2 minutes until about 10:35."
-            if auto else "Click Refresh again in a few minutes to pick up the live price.")
-    st.warning(f"**Opening-period price check:** the spot for {', '.join(sorted(stale))} still looks like the previous close "
-               f"(the price feed can lag the ASX open by up to ~30 minutes), so option prices may be inaccurate. {tail}")
+    tail = "" if auto else " Click Refresh again in a few minutes to pick up the correct price."
+    st.warning(f"**Opening-period price check:** the spot price for {', '.join(sorted(stale))} still looks like the previous close "
+               f"(prices can lag during the ASX open), so option prices may be inaccurate.{tail}")
 
 # --- HEADER ---
 mkt_status = "🟢 OPEN" if st.session_state.is_market_open else "🔴 CLOSED"
