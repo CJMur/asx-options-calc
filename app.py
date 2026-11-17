@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.9 (Open-Window Warning Wording)
+# VERSION: 1.8.10 (Open-Window Warning False-Positive Fix)
 # ==========================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ import time as _time   # (the name `time` is already taken by datetime.time)
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.9"
+APP_VERSION = "1.8.10"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -830,11 +830,8 @@ def fetch_data(t):
         try:
             _now_q = get_sydney_time()
             _pc = float(info.get('regularMarketPreviousClose', info.get('previousClose', 0.0)) or 0.0)
-            _qt = info.get('regularMarketTime')
-            _qdt = (datetime.fromtimestamp(_qt, pytz.timezone('Australia/Sydney')).replace(tzinfo=None)
-                    if isinstance(_qt, (int, float)) and _qt > 0 else None)
-            _open_today = _now_q.replace(hour=10, minute=0, second=0, microsecond=0)
-            _stale = bool((_pc > 0 and math.isclose(spot, _pc, rel_tol=1e-9)) or (_qdt is not None and _qdt < _open_today))
+            # only flag when the spot IS the previous close (a quote-timestamp test caused false alarms in v1.8.8/1.8.9)
+            _stale = bool(_pc > 0 and math.isclose(spot, _pc, rel_tol=1e-9))
             if 'spot_quality' not in st.session_state: st.session_state.spot_quality = {}
             st.session_state.spot_quality[clean] = {'stale': _stale, 'ts': _now_q}
         except Exception: pass
