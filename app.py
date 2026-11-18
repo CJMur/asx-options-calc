@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.11 (Expiry/Contract Consistency Guard)
+# VERSION: 1.8.12 (Cancel Snaps Boxes Back)
 # ==========================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ import time as _time   # (the name `time` is already taken by datetime.time)
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.11"
+APP_VERSION = "1.8.12"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -1010,6 +1010,17 @@ def _resolve_target_contract(strat, leg, target_exp, stk_pref):
                 out.update(code=str(match.iloc[0]['Code']), vol=float(match.iloc[0]['Vol']), style=match.iloc[0].get('Style', 'American'))
     return out
 
+def _pkey(prefix, strat_id, leg_id):
+    """Widget key for a portfolio leg's box. The key carries a per-leg revision: moving to a new revision gives the leg brand-new boxes that open on the
+    leg's real data. (Deleting a box's saved value is not enough, because the browser keeps showing the value it already holds.)"""
+    rev = st.session_state.get('leg_widget_rev', {}).get(leg_id, 0)
+    return f"{prefix}{strat_id}_{leg_id}_{rev}" if rev else f"{prefix}{strat_id}_{leg_id}"
+
+def _bump_leg_widgets(leg_id):
+    revs = dict(st.session_state.get('leg_widget_rev', {}))
+    revs[leg_id] = revs.get(leg_id, 0) + 1
+    st.session_state.leg_widget_rev = revs
+
 def resolve_leg_edit(choice):
     """Button callback for the portfolio 'you changed a strike/expiry' prompt: 'roll', 'keep' or 'cancel'. Applies to EVERY leg that was
     changed in the strategy, so no leg is ever left showing one contract while it is priced as another."""
@@ -1022,9 +1033,7 @@ def resolve_leg_edit(choice):
     for e in p.get('edits', []):
         leg = next((l for l in strat['legs'] if l['id'] == e['leg_id']), None)
         if leg is None: continue
-        # forget the widget values so every box is rebuilt from the leg's real data on the next run
-        for pre in ('p_exp_', 'p_stk_', 'p_vol_', 'p_ent_'):
-            st.session_state.pop(f"{pre}{p['sid']}_{leg['id']}", None)
+        _bump_leg_widgets(leg['id'])   # every box of this leg is rebuilt from the leg's real data on the next run
         if choice == 'cancel': continue
         target_exp = e['new_exp'] or leg['ExpDateStr']
         stk_pref = e['new_stk'] if e['new_stk'] is not None else float(leg['Strike'])
@@ -1074,8 +1083,8 @@ def check_leg_contracts(ticker, legs, repair=False):
 
 def _leg_edit_pending(strat_id, leg):
     """True while a leg's expiry/strike boxes show something other than the leg's real contract (an edit not yet confirmed)."""
-    ek = st.session_state.get(f"p_exp_{strat_id}_{leg['id']}")
-    sk = st.session_state.get(f"p_stk_{strat_id}_{leg['id']}")
+    ek = st.session_state.get(_pkey('p_exp_', strat_id, leg['id']))
+    sk = st.session_state.get(_pkey('p_stk_', strat_id, leg['id']))
     return (ek is not None and ek != leg['ExpDateStr']) or (sk is not None and abs(float(sk) - float(leg['Strike'])) > 1e-9)
 
 # --- MARGIN SETTINGS ---
@@ -1847,7 +1856,7 @@ elif current_view == "💼 Portfolio Tracker":
                 _rd = ((datetime.strptime(_lg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - _rt).total_seconds() / 86400.0
                 _t, _ = calculate_price_and_delta(ticker_display, _lg['Style'], _lg['Type'], current_spot_val, _lg['Strike'], _rd, _lg.get('Current_Vol', _lg['Vol']), _lg['ExpDateStr'], eval_date=_rt, div_info=get_div_info_for(ticker_display))
                 _lg['Entry'] = round(float(_t), 3)
-                st.session_state.pop(f"p_ent_{strat['id']}_{_lg['id']}", None)
+                _bump_leg_widgets(_lg['id'])
                 st.session_state.trigger_db_save = True
         max_qty = max([abs(leg['Qty']) for leg in strat['legs']]) if strat['legs'] else 1
         net_entry_theo = (sum([leg['Qty'] * leg['Entry'] for leg in strat['legs']])) / max_qty if max_qty != 0 else 0.0
@@ -1960,12 +1969,12 @@ elif current_view == "💼 Portfolio Tracker":
                 exp_strs = [d.strftime("%Y-%m-%d") for d in valid_exps] or [leg['ExpDateStr']]
                 exp_idx = exp_strs.index(leg['ExpDateStr']) if leg['ExpDateStr'] in exp_strs else 0
                     
-                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=f"p_exp_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
+                new_exp = c[3].selectbox("Expiry", options=exp_strs, index=exp_idx, key=_pkey('p_exp_', strat['id'], leg['id']), label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],), format_func=format_date_ui)
                 subset_exp = subset_st[subset_st['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr']] if not subset_st.empty else pd.DataFrame()
                 avail_stk = sorted(subset_exp['Strike'].unique().tolist()) if not subset_exp.empty else [float(leg['Strike'])]
                 stk_idx = avail_stk.index(float(leg['Strike'])) if float(leg['Strike']) in avail_stk else 0
                 
-                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=f"p_stk_{strat['id']}_{leg['id']}", label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
+                new_stk = c[4].selectbox("Strike", options=avail_stk, index=stk_idx, key=_pkey('p_stk_', strat['id'], leg['id']), label_visibility="collapsed", format_func=lambda x: f"{x:.2f}", on_change=set_active_strat, args=(strat['id'],))
                 # A strike/expiry change is not applied straight away: the user is asked how to treat the entry price first.
                 chg_exp, chg_stk = (new_exp != leg['ExpDateStr']), (new_stk != float(leg['Strike']))
                 if chg_exp or chg_stk:
@@ -1973,10 +1982,10 @@ elif current_view == "💼 Portfolio Tracker":
                     _pending_edits[leg['id']] = {'leg_id': leg['id'], 'new_exp': new_exp if chg_exp else None, 'new_stk': new_stk if chg_stk else None}
                     st.session_state.open_strat_id = strat['id']
 
-                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.2f", key=f"p_vol_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.2f", key=_pkey('p_vol_', strat['id'], leg['id']), label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_vol != leg['Vol']: strat['legs'][j]['Vol'] = new_vol; strat['legs'][j].pop('Current_Vol', None); st.session_state.trigger_db_save = True; port_needs_rerun = True
                     
-                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
+                new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=_pkey('p_ent_', strat['id'], leg['id']), label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_entry != leg['Entry']: strat['legs'][j]['Entry'] = new_entry; st.session_state.trigger_db_save = True; port_needs_rerun = True
 
                 _is_pend = leg['id'] in _mismatch_ids
