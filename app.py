@@ -1,6 +1,6 @@
 # ==========================================
 # TradersCircle Options Calculator
-# VERSION: 1.8.10 (Open-Window Warning False-Positive Fix)
+# VERSION: 1.8.11 (Expiry/Contract Consistency Guard)
 # ==========================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ import time as _time   # (the name `time` is already taken by datetime.time)
 
 # Single source of truth for the on-screen version label.
 # (Also update the VERSION line in the header comment at the top of this file.)
-APP_VERSION = "1.8.10"
+APP_VERSION = "1.8.11"
 
 # --- 1. CONFIGURATION & THEME ---
 st.set_page_config(layout="wide", page_title="TradersCircle Options")
@@ -1011,26 +1011,72 @@ def _resolve_target_contract(strat, leg, target_exp, stk_pref):
     return out
 
 def resolve_leg_edit(choice):
-    """Button callback for the portfolio 'you changed a strike/expiry' prompt: 'roll', 'keep' or 'cancel'."""
+    """Button callback for the portfolio 'you changed a strike/expiry' prompt: 'roll', 'keep' or 'cancel'. Applies to EVERY leg that was
+    changed in the strategy, so no leg is ever left showing one contract while it is priced as another."""
     p = st.session_state.get('pending_leg_edit')
     st.session_state.pending_leg_edit = None
     if not p: return
     strat = next((x for x in st.session_state.portfolio if x['id'] == p['sid']), None)
-    leg = next((l for l in strat['legs'] if l['id'] == p['leg_id']), None) if strat else None
-    if leg is None: return
+    if strat is None: return
     st.session_state.open_strat_id = p['sid']
-    # forget the widget values so every box is rebuilt from the leg's real data on the next run
-    for pre in ('p_exp_', 'p_stk_', 'p_vol_', 'p_ent_'):
-        st.session_state.pop(f"{pre}{p['sid']}_{leg['id']}", None)
-    if choice == 'cancel': return
-    target_exp = p['new_exp'] or leg['ExpDateStr']
-    stk_pref = p['new_stk'] if p['new_stk'] is not None else float(leg['Strike'])
-    tgt = _resolve_target_contract(strat, leg, target_exp, stk_pref)
-    leg['ExpDateStr'], leg['Strike'] = target_exp, tgt['strike']
-    leg.pop('Current_Vol', None)  # new contract must not inherit the old contract's refreshed vol
-    if 'code' in tgt: leg['Code'], leg['Vol'], leg['Style'] = tgt['code'], tgt['vol'], tgt['style']
-    if choice == 'roll': leg['_reset_entry'] = True  # entry is set to the new contract's live theo on the next run
-    st.session_state.trigger_db_save = True
+    for e in p.get('edits', []):
+        leg = next((l for l in strat['legs'] if l['id'] == e['leg_id']), None)
+        if leg is None: continue
+        # forget the widget values so every box is rebuilt from the leg's real data on the next run
+        for pre in ('p_exp_', 'p_stk_', 'p_vol_', 'p_ent_'):
+            st.session_state.pop(f"{pre}{p['sid']}_{leg['id']}", None)
+        if choice == 'cancel': continue
+        target_exp = e['new_exp'] or leg['ExpDateStr']
+        stk_pref = e['new_stk'] if e['new_stk'] is not None else float(leg['Strike'])
+        tgt = _resolve_target_contract(strat, leg, target_exp, stk_pref)
+        leg['ExpDateStr'], leg['Strike'] = target_exp, tgt['strike']
+        leg.pop('Current_Vol', None)  # new contract must not inherit the old contract's refreshed vol
+        if 'code' in tgt: leg['Code'], leg['Vol'], leg['Style'] = tgt['code'], tgt['vol'], tgt['style']
+        if choice == 'roll': leg['_reset_entry'] = True  # entry is set to the new contract's live theo on the next run
+    if choice != 'cancel': st.session_state.trigger_db_save = True
+
+def _leg_contract_rows(ticker, leg):
+    """Rows of today's data file for exactly the contract the leg says it is (type, strike, expiry). Empty frame when none / no data."""
+    ref = st.session_state.get('ref_data')
+    if ref is None or ref.empty: return pd.DataFrame()
+    tkr = str(ticker).replace(".AX", "")
+    mask = ref['Ticker'].isin(['XJO', 'XJOW']) if tkr == 'XJO' else ref['Ticker'] == tkr
+    return ref[mask & (ref['Type'] == leg['Type']) & np.isclose(ref['Strike'].astype(float), float(leg['Strike']), atol=0.001)
+               & (ref['Expiry'].dt.strftime("%Y-%m-%d") == leg['ExpDateStr'])]
+
+def check_leg_contracts(ticker, legs, repair=False):
+    """Makes sure every leg's code, style and vol belong to the strike and expiry it displays. A leg whose code is a different contract
+    (for example a Jan contract's code on a leg that says Dec) is re-matched to the contract it displays when repair=True.
+    Returns (fixes, problems): fixes = [(old_code, new_code, leg)], problems = [(leg, message)] for legs with no such contract in the data."""
+    fixes, problems = [], []
+    today = get_sydney_time().replace(hour=0, minute=0, second=0, microsecond=0)
+    for leg in legs:
+        try:
+            m = _leg_contract_rows(ticker, leg)
+            if m.empty:
+                if st.session_state.get('ref_data') is not None and not st.session_state.ref_data.empty and datetime.strptime(leg['ExpDateStr'], "%Y-%m-%d") >= today:
+                    problems.append((leg, f"{leg.get('Code', '?')}: no {leg['Type']} at {float(leg['Strike']):.2f} expiring {format_date_ui(leg['ExpDateStr'])} in today's data file"))
+                continue
+            codes = {str(c).upper().strip() for c in m['Code']}
+            if str(leg.get('Code', '')).upper().strip() in codes: continue
+            row = m.sort_values('Code', ascending=False).iloc[0]
+            old = leg.get('Code', '?')
+            if repair:
+                leg['Code'], leg['Vol'], leg['Style'] = str(row['Code']), float(row['Vol']), row.get('Style', leg.get('Style', 'American'))
+                leg.pop('Current_Vol', None)
+                if 'MarginUnit' in leg and 'UnitMargin' in m.columns: leg['MarginUnit'] = float(row['UnitMargin'])
+                fixes.append((old, leg['Code'], leg))
+            else:
+                problems.append((leg, f"{old} is a different contract from the {leg['Type']} {float(leg['Strike']):.2f} {format_date_ui(leg['ExpDateStr'])} shown"))
+        except Exception:
+            continue
+    return fixes, problems
+
+def _leg_edit_pending(strat_id, leg):
+    """True while a leg's expiry/strike boxes show something other than the leg's real contract (an edit not yet confirmed)."""
+    ek = st.session_state.get(f"p_exp_{strat_id}_{leg['id']}")
+    sk = st.session_state.get(f"p_stk_{strat_id}_{leg['id']}")
+    return (ek is not None and ek != leg['ExpDateStr']) or (sk is not None and abs(float(sk) - float(leg['Strike'])) > 1e-9)
 
 # --- MARGIN SETTINGS ---
 # "exchange": built the way the clearing house does it (premium value + result in the worst of the 16 scenarios).
@@ -1358,6 +1404,12 @@ if current_view == "🧮 Strategy Builder":
         
         st.markdown("<hr style='margin: 0 0 10px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
 
+        _bfix, _bprob = check_leg_contracts(st.session_state.ticker, st.session_state.legs, repair=True)
+        if _bfix:
+            st.info("**Contract check:** " + "; ".join(f"{o} → {n} ({l['Type']} {float(l['Strike']):.2f}, {format_date_ui(l['ExpDateStr'])})" for o, n, l in _bfix)
+                    + " — the code carried by that leg belonged to a different contract from the strike/expiry shown, so it was re-matched to the contract shown.")
+        for _bl, _bm in _bprob:
+            st.warning(f"**Contract check:** {_bm}. This leg can't be priced from today's data, so it uses its saved vol.")
         scen_cols = [c for c in st.session_state.ref_data.columns if 'Scenario' in str(c)] if st.session_state.ref_data is not None else []
         leg_risk_arrays, leg_settles = [], []
         for leg in st.session_state.legs:
@@ -1782,6 +1834,14 @@ elif current_view == "💼 Portfolio Tracker":
         
         _rt = st.session_state.get('fetch_time', get_sydney_time())
         for _lg in strat['legs']: _lg.setdefault('id', str(uuid.uuid4()))   # every leg needs a stable id for its boxes
+        _fixes, _problems = check_leg_contracts(ticker_display, strat['legs'], repair=True)
+        if _fixes:
+            st.session_state.trigger_db_save = True
+            if 'leg_fix_notes' not in st.session_state: st.session_state.leg_fix_notes = {}
+            st.session_state.leg_fix_notes.setdefault(strat['id'], []).extend(
+                f"{o} → {n} ({l['Type']} {float(l['Strike']):.2f}, {format_date_ui(l['ExpDateStr'])})" for o, n, l in _fixes)
+        _prob_ids = {l['id'] for l, _m in _problems}
+        _pend_pre = any(_leg_edit_pending(strat['id'], l) for l in strat['legs'])
         for _k, _lg in enumerate(strat['legs']):
             if _lg.pop('_reset_entry', False):
                 _rd = ((datetime.strptime(_lg['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - _rt).total_seconds() / 86400.0
@@ -1812,6 +1872,7 @@ elif current_view == "💼 Portfolio Tracker":
             
         net_live_theo = net_live_theo_sum / max_qty if max_qty != 0 else 0.0
         pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | {'🟢' if strat_pnl >= 0 else '🔴'} Open P&L: :{'green' if strat_pnl >= 0 else 'red'}[{'+' if strat_pnl >= 0 else '-'}${abs(strat_pnl):,.2f}]"
+        if _pend_pre: pnl_str = f" | Spot: :green[${current_spot_val:.2f}] | ⏸ edit awaiting confirmation"
             
         with st.expander(f"📁 **{strat.get('name', 'Strategy')}** ({ticker_display}){pnl_str}", expanded=(st.session_state.get('open_strat_id') == strat['id'])):
             
@@ -1829,7 +1890,7 @@ elif current_view == "💼 Portfolio Tracker":
                 ui_net_key = f"net_entry_{strat['id']}"
                 st.number_input("Net Entry", value=float(net_entry_theo), step=0.01, format="%.3f", key=ui_net_key, label_visibility="collapsed", on_change=on_net_entry_change, args=(strat['id'], ui_net_key, max_qty, net_entry_theo))
             with c_head3:
-                st.markdown(f"**Net Live Theo:**"); st.markdown(f"{net_live_theo:.3f}")
+                st.markdown(f"**Net Live Theo:**"); st.markdown("⏸ pending" if _pend_pre else f"{net_live_theo:.3f}")
             with c_head4:
                 st.markdown(f"**Spot Price Override:**")
                 st.number_input("Override", value=override_val, step=0.10, key=ui_ovr_key, label_visibility="collapsed", placeholder="Enter price here", on_change=on_spot_override_change, args=(strat['id'], ui_ovr_key))
@@ -1863,9 +1924,16 @@ elif current_view == "💼 Portfolio Tracker":
             mb_p = exchange_margin_breakdown(strat['legs'], leg_risk_arrays_p, leg_settles_p, contract_multiplier) if MARGIN_METHOD == "exchange" else None
             port_total_margin = mb_p['margin'] if mb_p else port_compute_gross_margin(strat['legs'], leg_risk_arrays_p)
 
+            _fix_list = st.session_state.get('leg_fix_notes', {}).get(strat['id'], [])
+            if _fix_list:
+                st.info("**Contract check:** these legs carried the code of a different contract from the strike/expiry shown, so they were re-matched to the contract shown "
+                        "(entry prices untouched): " + "; ".join(_fix_list))
+            for _l, _m in _problems:
+                st.warning(f"**Contract check:** {_m}. This leg can't be priced from today's data, so it uses its saved vol. Check the expiry and strike.")
             # IN-LINE TABLE
             leg_edit_slot = st.container()  # the strike/expiry confirmation prompt is drawn here (above the table)
             _mismatch_ids = set()
+            _pending_edits = {}
             p_h_col_spec = [0.8, 1.2, 0.8, 1.4, 1.3, 0.9, 1.1, 1.0, 1.2, 1.2, 0.4]
             h_cols = st.columns(p_h_col_spec)
             headers = ["Qty", "Code", "Type", "Expiry", "Strike", "Vol", "Entry $", "Live Theo", "Premium", "Margin", ""]
@@ -1879,7 +1947,7 @@ elif current_view == "💼 Portfolio Tracker":
                 new_qty = c[0].number_input("Qty", value=int(leg['Qty']), step=1, key=f"p_qty_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_qty != leg['Qty']: strat['legs'][j]['Qty'] = new_qty; st.session_state.trigger_db_save = True; port_needs_rerun = True
                     
-                c[1].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{leg['Code']}</div>", unsafe_allow_html=True)
+                c[1].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{'⚠ ' if leg['id'] in _prob_ids else ''}{leg['Code']}</div>", unsafe_allow_html=True)
                 c[2].markdown(f"<div class='strategy-text' style='background-color:{row_bg}; font-weight:600;'>{leg['Type']}</div>", unsafe_allow_html=True)
                 
                 tkr = ticker_display.replace(".AX", "")
@@ -1902,9 +1970,7 @@ elif current_view == "💼 Portfolio Tracker":
                 chg_exp, chg_stk = (new_exp != leg['ExpDateStr']), (new_stk != float(leg['Strike']))
                 if chg_exp or chg_stk:
                     _mismatch_ids.add(leg['id'])
-                    _p = st.session_state.get('pending_leg_edit')
-                    if _p is None or (_p['sid'] == strat['id'] and _p['leg_id'] == leg['id']):
-                        st.session_state.pending_leg_edit = {'sid': strat['id'], 'leg_id': leg['id'], 'new_exp': new_exp if chg_exp else None, 'new_stk': new_stk if chg_stk else None}
+                    _pending_edits[leg['id']] = {'leg_id': leg['id'], 'new_exp': new_exp if chg_exp else None, 'new_stk': new_stk if chg_stk else None}
                     st.session_state.open_strat_id = strat['id']
 
                 new_vol = c[5].number_input("Vol", value=float(leg['Vol']), step=0.5, format="%.2f", key=f"p_vol_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
@@ -1913,30 +1979,37 @@ elif current_view == "💼 Portfolio Tracker":
                 new_entry = c[6].number_input("Entry $", value=float(leg['Entry']), step=0.01, format="%.3f", key=f"p_ent_{strat['id']}_{leg['id']}", label_visibility="collapsed", on_change=set_active_strat, args=(strat['id'],))
                 if new_entry != leg['Entry']: strat['legs'][j]['Entry'] = new_entry; st.session_state.trigger_db_save = True; port_needs_rerun = True
 
-                c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{disp_data['Live Theo']}</div>", unsafe_allow_html=True)
-                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='color:{'#4ade80' if disp_data['Raw_Premium']>=0 else '#f87171'}; font-weight:600;'>{disp_data['Premium']}</span></div>", unsafe_allow_html=True)
+                _is_pend = leg['id'] in _mismatch_ids
+                c[7].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>{'⏸ pending' if _is_pend else disp_data['Live Theo']}</div>", unsafe_allow_html=True)
+                c[8].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>" + ("⏸ pending" if _is_pend else f"<span style='color:{'#4ade80' if disp_data['Raw_Premium']>=0 else '#f87171'}; font-weight:600;'>{disp_data['Premium']}</span>") + "</div>", unsafe_allow_html=True)
                 
                 row_margin = mb_p['contrib'][j] if mb_p else port_total_margin - port_compute_gross_margin(strat['legs'][:j] + strat['legs'][j+1:], leg_risk_arrays_p[:j] + leg_risk_arrays_p[j+1:])
-                c[9].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'><span style='font-weight:600;'>{'-' if row_margin < 0 else ''}${abs(row_margin):,.0f}</span></div>", unsafe_allow_html=True)
+                c[9].markdown(f"<div class='strategy-text' style='background-color:{row_bg};'>" + ("⏸ pending" if _is_pend else f"<span style='font-weight:600;'>{'-' if row_margin < 0 else ''}${abs(row_margin):,.0f}</span>") + "</div>", unsafe_allow_html=True)
 
                 with c[10]:
                     if st.button("✕", key=f"p_d_{strat['id']}_{leg['id']}", type="tertiary", width='content'):
                         _gone = strat['legs'].pop(j)
                         for _pre in ('p_qty_', 'p_exp_', 'p_stk_', 'p_vol_', 'p_ent_'): st.session_state.pop(f"{_pre}{strat['id']}_{_gone['id']}", None)
                         _pe = st.session_state.get('pending_leg_edit')
-                        if _pe and _pe.get('leg_id') == _gone['id']: st.session_state.pending_leg_edit = None
+                        if _pe and _pe.get('sid') == strat['id']:
+                            _pe['edits'] = [e for e in _pe.get('edits', []) if e['leg_id'] != _gone['id']]
+                            if not _pe['edits']: st.session_state.pending_leg_edit = None
                         st.session_state.trigger_db_save = True; st.session_state.open_strat_id = strat['id']; port_needs_rerun = True; break 
             
             _pp = st.session_state.get('pending_leg_edit')
-            if _pp and _pp['sid'] == strat['id'] and _pp['leg_id'] not in _mismatch_ids:
-                st.session_state.pending_leg_edit = None  # the user changed it back, nothing to confirm
-            elif _pp and _pp['sid'] == strat['id']:
-                _pl = next((l for l in strat['legs'] if l['id'] == _pp['leg_id']), None)
-                if _pl is not None:
-                    _t_exp = _pp['new_exp'] or _pl['ExpDateStr']
-                    _t_stk = _pp['new_stk'] if _pp['new_stk'] is not None else float(_pl['Strike'])
+            if _pending_edits and (_pp is None or _pp['sid'] == strat['id']):
+                st.session_state.pending_leg_edit = _pp = {'sid': strat['id'], 'edits': list(_pending_edits.values())}
+            elif not _pending_edits and _pp and _pp['sid'] == strat['id']:
+                st.session_state.pending_leg_edit = _pp = None  # the user changed it back, nothing to confirm
+            if _pp and _pp['sid'] == strat['id']:
+                _lines = []
+                for _e in _pp['edits']:
+                    _pl = next((l for l in strat['legs'] if l['id'] == _e['leg_id']), None)
+                    if _pl is None: continue
+                    _t_exp = _e['new_exp'] or _pl['ExpDateStr']
+                    _t_stk = _e['new_stk'] if _e['new_stk'] is not None else float(_pl['Strike'])
                     _tgt = _resolve_target_contract(strat, _pl, _t_exp, _t_stk)
-                    _detail = ""
+                    _line = f"<b>{_pl['Code']}</b> ({_pl['Type']} {float(_pl['Strike']):.2f}, {format_date_ui(_pl['ExpDateStr'])}) &rarr; {_tgt['strike']:.2f}, {format_date_ui(_t_exp)}"
                     if 'vol' in _tgt:
                         _rd_new = ((datetime.strptime(_t_exp, "%Y-%m-%d").replace(hour=16, minute=0)) - ref_time).total_seconds() / 86400.0
                         _rd_old = ((datetime.strptime(_pl['ExpDateStr'], "%Y-%m-%d").replace(hour=16, minute=0)) - ref_time).total_seconds() / 86400.0
@@ -1944,18 +2017,21 @@ elif current_view == "💼 Portfolio Tracker":
                         _old_theo, _ = calculate_price_and_delta(ticker_display, _pl['Style'], _pl['Type'], current_spot_val, _pl['Strike'], _rd_old, _pl.get('Current_Vol', _pl['Vol']), _pl['ExpDateStr'], eval_date=ref_time, div_info=get_div_info_for(ticker_display))
                         _jump = (_new_theo - _old_theo) * _pl['Qty'] * leg_mult(_pl, contract_multiplier)
                         _jump_str = f"+${_jump:,.2f}" if _jump >= 0 else f"-${abs(_jump):,.2f}"
-                        _detail = (f" The new contract ({_tgt.get('code', '?')}, {_tgt['strike']:.2f}, {format_date_ui(_t_exp)}) has a current theo of <b>{_new_theo:.3f}</b>. "
-                                   f"Keeping the original entry of {_pl['Entry']:.3f} would move this leg's Open P&amp;L by about <b>{_jump_str}</b> straight away.")
-                    with leg_edit_slot:
-                        st.markdown(
-                            "<div style='background-color: rgba(128,128,128,0.16); border: 1px solid rgba(128,128,128,0.35); border-radius: 0.5rem; padding: 0.9rem 1rem; margin-bottom: 0.6rem; line-height: 1.5;'>"
-                            f"<b>You changed the strike/expiry of {_pl['Code']}.</b> Choose how to treat its entry price. "
-                            "<b>Roll</b> sets the entry to the new contract's current theo, so Open P&amp;L carries on from here (the old leg's result is not tracked). "
-                            f"<b>Keep</b> leaves the entry price as it is.{_detail}</div>", unsafe_allow_html=True)
-                        _b1, _b2, _b3 = st.columns(3)
-                        _b1.button("🔁 Roll: reset entry to current theo", key=f"le_roll_{_pl['id']}", type="primary", width='stretch', on_click=resolve_leg_edit, args=("roll",))
-                        _b2.button("📌 Keep original entry price", key=f"le_keep_{_pl['id']}", width='stretch', on_click=resolve_leg_edit, args=("keep",))
-                        _b3.button("↩ Cancel change", key=f"le_cancel_{_pl['id']}", width='stretch', on_click=resolve_leg_edit, args=("cancel",))
+                        _line += (f": new contract {_tgt.get('code', '?')} has a current theo of <b>{_new_theo:.3f}</b>; keeping the original entry of {_pl['Entry']:.3f} "
+                                  f"would move this leg's Open P&amp;L by about <b>{_jump_str}</b> straight away")
+                    _lines.append(_line)
+                _n = len(_lines)
+                _all = " all" if _n > 1 else ""
+                with leg_edit_slot:
+                    st.markdown(
+                        "<div style='background-color: rgba(128,128,128,0.16); border: 1px solid rgba(128,128,128,0.35); border-radius: 0.5rem; padding: 0.9rem 1rem; margin-bottom: 0.6rem; line-height: 1.5;'>"
+                        f"<b>You changed the strike/expiry of {_n} leg{'s' if _n != 1 else ''}.</b> Nothing is applied or saved, and those legs show no price, until you choose how to treat the entry price"
+                        f"{'s' if _n != 1 else ''}. <b>Roll</b> sets the entry to the new contract's current theo, so Open P&amp;L carries on from here (the old leg's result is not tracked). "
+                        "<b>Keep</b> leaves the entry price as it is.<br>" + "<br>".join(_lines) + "</div>", unsafe_allow_html=True)
+                    _b1, _b2, _b3 = st.columns(3)
+                    _b1.button(f"🔁 Roll{_all}: reset entry to current theo", key=f"le_roll_{strat['id']}", type="primary", width='stretch', on_click=resolve_leg_edit, args=("roll",))
+                    _b2.button(f"📌 Keep{_all} original entry price", key=f"le_keep_{strat['id']}", width='stretch', on_click=resolve_leg_edit, args=("keep",))
+                    _b3.button(f"↩ Cancel{_all} change", key=f"le_cancel_{strat['id']}", width='stretch', on_click=resolve_leg_edit, args=("cancel",))
 
             st.markdown("<hr style='margin: -12px 0 8px 0; border-top: 1px solid #334155;'>", unsafe_allow_html=True)
             
@@ -1967,9 +2043,9 @@ elif current_view == "💼 Portfolio Tracker":
             with st.container():
                 f = st.columns(p_h_col_spec)
                 with f[1]: st.markdown("<div class='strategy-text' style='font-weight:bold;'>TOTAL STRATEGY</div>", unsafe_allow_html=True)
-                with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{net_live_theo:.3f}</div>", unsafe_allow_html=True)
-                with f[8]: st.markdown(f"<div class='strategy-text'><span style='color:{'#4ade80' if port_tot_prem>=0 else '#f87171'}; font-weight:bold;'>{tot_prem_str}</span></div>", unsafe_allow_html=True)
-                with f[9]: st.markdown(f"<div class='strategy-text'><span style='font-weight:bold;'>{tot_mar_str}</span></div>", unsafe_allow_html=True)
+                with f[7]: st.markdown(f"<div class='strategy-text' style='font-weight:bold;'>{'⏸' if _mismatch_ids else f'{net_live_theo:.3f}'}</div>", unsafe_allow_html=True)
+                with f[8]: st.markdown(f"<div class='strategy-text'>" + ("⏸ confirm change above" if _mismatch_ids else f"<span style='color:{'#4ade80' if port_tot_prem>=0 else '#f87171'}; font-weight:bold;'>{tot_prem_str}</span>") + "</div>", unsafe_allow_html=True)
+                with f[9]: st.markdown(f"<div class='strategy-text'>" + ("⏸" if _mismatch_ids else f"<span style='font-weight:bold;'>{tot_mar_str}</span>") + "</div>", unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
             
